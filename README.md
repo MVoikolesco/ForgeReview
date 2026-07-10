@@ -174,7 +174,9 @@ config/
   review-prompts.yaml
 ```
 
-O YAML mapeia projetos por `owner` e `repo`, define stacks permitidas e controla `include_docs`. Quando um projeto nao esta mapeado, o bot usa `default`.
+O YAML mapeia projetos por `owner` e `repo`, define prompts base, stacks permitidas e controla quais arquivos entram nos blocos. Quando um projeto nao esta mapeado, o bot usa `default`.
+
+O formato de resposta que o modelo deve devolver continua fixo no codigo (`STATUS`, `ACHADOS_CONCRETOS`, `COMENTARIOS_INLINE`, `REVISAO_FINAL`, `EVENTO_GITEA` etc.). Isso e intencional: o parser usa esse contrato para gerar comentarios inline e escolher o evento do review. Personalize os arquivos `.md`, stacks e filtros no YAML, mas mantenha esse contrato rigido.
 
 Exemplo Go:
 
@@ -206,11 +208,32 @@ projects:
     include_docs: false
 ```
 
+Voce tambem pode trocar prompts base e filtros por projeto:
+
+```yaml
+projects:
+  meu-projeto:
+    owner: MinhaOrg
+    repo: api
+    partial_prompt: prompts/base/review_partial_api.md
+    final_prompt: prompts/base/review_final_api.md
+    stacks:
+      - go
+      - docker
+    include_docs: false
+    ignore_file_patterns:
+      - "*.lock"
+      - "vendor/**"
+      - "**/vendor/**"
+    force_include_file_patterns:
+      - ".gitea/workflows/*.yml"
+```
+
 Para cada bloco, o resolver carrega sempre o prompt base parcial e acrescenta apenas as stacks que casam com os arquivos do bloco. Alem disso, cada stack pode ter categorias por pasta/tipo de arquivo. Por exemplo, `app/Services/OrderService.php` carrega `prompts/stacks/laravel.md` e `prompts/stacks/laravel/services.md`; `app/Models/Order.php` carrega `laravel.md` e `laravel/models.md`.
 
 Use `ci` para projetos CodeIgniter 4, `solid` para SolidJS e `web` para HTML/CSS/JS sem framework. Para pipelines de build/deploy, use a stack `cicd` apenas se arquivos YAML voltarem a ser revisaveis.
 
-Quando `include_docs: false`, docs como `README.md`, `CHANGELOG.md`, `docs/**` e `*.md` ficam fora dos blocos de review. Arquivos `.yaml` e `.yml` tambem sao ignorados para evitar comentarios fracos em configuracoes extensas. Arquivos como `.env.example`, `.gitignore` e Dockerfile continuam revisaveis para riscos reais.
+Quando `include_docs: false`, docs definidos em `doc_file_patterns` ficam fora dos blocos de review. Arquivos definidos em `ignore_file_patterns` tambem ficam fora dos blocos, por exemplo lockfiles, `.yaml`, `.yml`, `vendor/**`, `node_modules/**`, `dist/**`, `build/**`, `.map` e `.min.js`. Use `force_include_file_patterns` para abrir excecoes pontuais, como revisar workflows YAML em um projeto especifico.
 
 ## Endpoints
 

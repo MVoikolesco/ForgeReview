@@ -108,6 +108,60 @@ func TestPromptResolverShouldIncludeDocs(t *testing.T) {
 	}
 }
 
+func TestPromptResolverUsesProjectBasePromptOverrides(t *testing.T) {
+	configPath := writePromptFixture(t, validConfigYAML())
+	resolver := NewPromptResolver(configPath)
+
+	partial, err := resolver.ResolvePartialPrompt(context.Background(), "Acme", "custom", []string{"src/app.go"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !strings.Contains(partial.Content, "CUSTOM PARTIAL") || strings.Contains(partial.Content, "BASE PARTIAL") {
+		t.Fatalf("expected custom partial prompt override, got %q", partial.Content)
+	}
+
+	final, err := resolver.ResolveFinalPrompt(context.Background(), "Acme", "custom")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if final.Content != "CUSTOM FINAL" {
+		t.Fatalf("expected custom final prompt override, got %q", final.Content)
+	}
+}
+
+func TestPromptResolverResolvesBlockFilter(t *testing.T) {
+	configPath := writePromptFixture(t, validConfigYAML())
+	resolver := NewPromptResolver(configPath)
+
+	filter, err := resolver.ResolveBlockFilter(context.Background(), "unknown", "repo")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if filter.IncludeDocs {
+		t.Fatal("expected default include_docs false")
+	}
+	if strings.Join(filter.IgnoreFilePatterns, ",") != "*.lock,dist/**" {
+		t.Fatalf("unexpected default ignore patterns %#v", filter.IgnoreFilePatterns)
+	}
+	if strings.Join(filter.DocFilePatterns, ",") != "*.md,docs/**" {
+		t.Fatalf("unexpected default doc patterns %#v", filter.DocFilePatterns)
+	}
+
+	filter, err = resolver.ResolveBlockFilter(context.Background(), "Acme", "custom")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !filter.IncludeDocs {
+		t.Fatal("expected custom include_docs true")
+	}
+	if len(filter.IgnoreFilePatterns) != 0 {
+		t.Fatalf("expected custom project to clear ignore patterns, got %#v", filter.IgnoreFilePatterns)
+	}
+	if strings.Join(filter.ForceIncludeFilePatterns, ",") != ".gitea/workflows/*.yml" {
+		t.Fatalf("unexpected force include patterns %#v", filter.ForceIncludeFilePatterns)
+	}
+}
+
 func TestPromptResolverReturnsInvalidYAMLError(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "review-prompts.yaml")
@@ -157,6 +211,8 @@ func writePromptFixture(t *testing.T, configContent string) string {
 		"config/review-prompts.yaml":         configContent,
 		"prompts/base/review_partial.md":     "BASE PARTIAL",
 		"prompts/base/review_final.md":       "BASE FINAL",
+		"prompts/base/custom_partial.md":     "CUSTOM PARTIAL",
+		"prompts/base/custom_final.md":       "CUSTOM FINAL",
 		"prompts/stacks/go.md":               "GO STACK",
 		"prompts/stacks/laravel.md":          "LARAVEL STACK",
 		"prompts/stacks/laravel/services.md": "LARAVEL SERVICES",
@@ -187,6 +243,12 @@ func validConfigYAML() string {
   stacks:
     - go
   include_docs: false
+  doc_file_patterns:
+    - "*.md"
+    - "docs/**"
+  ignore_file_patterns:
+    - "*.lock"
+    - "dist/**"
 
 projects:
   teste-bot:
@@ -211,6 +273,18 @@ projects:
     stacks:
       - ci
     include_docs: false
+
+  custom:
+    owner: Acme
+    repo: custom
+    partial_prompt: ../prompts/base/custom_partial.md
+    final_prompt: ../prompts/base/custom_final.md
+    stacks:
+      - go
+    include_docs: true
+    ignore_file_patterns: []
+    force_include_file_patterns:
+      - ".gitea/workflows/*.yml"
 
 stacks:
   go:

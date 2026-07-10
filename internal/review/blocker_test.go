@@ -171,6 +171,39 @@ func TestBuildReviewBlocksKeepsConfigFilesWhenDocsAreIgnored(t *testing.T) {
 	}
 }
 
+func TestBuildReviewBlocksUsesConfigurableFilter(t *testing.T) {
+	files := []diff.ChangedFile{
+		{Path: "README.md", Patch: patch("README.md", 10)},
+		{Path: ".gitea/workflows/deploy.yml", Patch: patch(".gitea/workflows/deploy.yml", 10)},
+		{Path: "src/app.go", Patch: patch("src/app.go", 10)},
+		{Path: "frontend/dist/app.js", Patch: patch("frontend/dist/app.js", 10)},
+	}
+
+	filter := ReviewFileFilter{
+		IncludeDocs:              false,
+		DocFilePatterns:          []string{"*.md"},
+		IgnoreFilePatterns:       []string{"*.yml", "**/dist/**"},
+		ForceIncludeFilePatterns: []string{".gitea/workflows/*.yml"},
+	}
+
+	blocks := BuildReviewBlocksWithFilter(files, 10000, 10, filter)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(blocks))
+	}
+
+	got := strings.Join(blocks[0].Files, ",")
+	for _, expected := range []string{".gitea/workflows/deploy.yml", "src/app.go"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("expected %s to stay reviewable, got %#v", expected, blocks[0].Files)
+		}
+	}
+	for _, ignored := range []string{"README.md", "frontend/dist/app.js"} {
+		if strings.Contains(got, ignored) {
+			t.Fatalf("expected %s to be ignored, got %#v", ignored, blocks[0].Files)
+		}
+	}
+}
+
 func TestBuildReviewBlocksKeepsFileDelimiters(t *testing.T) {
 	files := []diff.ChangedFile{
 		{Path: "src/app.go", Patch: patch("src/app.go", 10)},

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"gitea-agents/internal/diff"
+	"gitea-agents/internal/filematch"
 )
 
 type ReviewBlock struct {
@@ -14,11 +15,24 @@ type ReviewBlock struct {
 	Content string
 }
 
+type ReviewFileFilter struct {
+	IncludeDocs              bool
+	DocFilePatterns          []string
+	IgnoreFilePatterns       []string
+	ForceIncludeFilePatterns []string
+}
+
 func BuildReviewBlocks(files []diff.ChangedFile, maxChars int, maxFilesPerBlock int) []ReviewBlock {
 	return BuildReviewBlocksWithOptions(files, maxChars, maxFilesPerBlock, false)
 }
 
 func BuildReviewBlocksWithOptions(files []diff.ChangedFile, maxChars int, maxFilesPerBlock int, includeDocs bool) []ReviewBlock {
+	filter := DefaultReviewFileFilter()
+	filter.IncludeDocs = includeDocs
+	return BuildReviewBlocksWithFilter(files, maxChars, maxFilesPerBlock, filter)
+}
+
+func BuildReviewBlocksWithFilter(files []diff.ChangedFile, maxChars int, maxFilesPerBlock int, filter ReviewFileFilter) []ReviewBlock {
 	if maxChars <= 0 {
 		maxChars = 4000
 	}
@@ -26,6 +40,8 @@ func BuildReviewBlocksWithOptions(files []diff.ChangedFile, maxChars int, maxFil
 	if maxFilesPerBlock <= 0 {
 		maxFilesPerBlock = 2
 	}
+
+	filter = NormalizeReviewFileFilter(filter)
 
 	var blocks []ReviewBlock
 	var currentFiles []string
@@ -45,7 +61,7 @@ func BuildReviewBlocksWithOptions(files []diff.ChangedFile, maxChars int, maxFil
 	}
 
 	for _, file := range files {
-		if ShouldIgnoreReviewFile(file.Path, includeDocs) {
+		if ShouldIgnoreReviewFileWithFilter(file.Path, filter) {
 			continue
 		}
 
@@ -70,80 +86,57 @@ func BuildReviewBlocksWithOptions(files []diff.ChangedFile, maxChars int, maxFil
 	return blocks
 }
 
+func DefaultReviewFileFilter() ReviewFileFilter {
+	return ReviewFileFilter{
+		IncludeDocs:              false,
+		DocFilePatterns:          defaultDocFilePatterns(),
+		IgnoreFilePatterns:       defaultIgnoreFilePatterns(),
+		ForceIncludeFilePatterns: nil,
+	}
+}
+
+func NormalizeReviewFileFilter(filter ReviewFileFilter) ReviewFileFilter {
+	if filter.DocFilePatterns == nil {
+		filter.DocFilePatterns = defaultDocFilePatterns()
+	}
+	if filter.IgnoreFilePatterns == nil {
+		filter.IgnoreFilePatterns = defaultIgnoreFilePatterns()
+	}
+	if filter.ForceIncludeFilePatterns == nil {
+		filter.ForceIncludeFilePatterns = []string{}
+	}
+
+	filter.DocFilePatterns = compactPatternList(filter.DocFilePatterns)
+	filter.IgnoreFilePatterns = compactPatternList(filter.IgnoreFilePatterns)
+	filter.ForceIncludeFilePatterns = compactPatternList(filter.ForceIncludeFilePatterns)
+	return filter
+}
+
 func ShouldIgnoreReviewFile(path string, includeDocs bool) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(path, "\\", "/"))
-	baseName := normalized
-	if slashIndex := strings.LastIndex(baseName, "/"); slashIndex >= 0 {
-		baseName = baseName[slashIndex+1:]
-	}
+	filter := DefaultReviewFileFilter()
+	filter.IncludeDocs = includeDocs
+	return ShouldIgnoreReviewFileWithFilter(path, filter)
+}
 
-	if !includeDocs && (baseName == "readme" || strings.HasPrefix(baseName, "readme.") || strings.HasPrefix(baseName, "readme-")) {
+func ShouldIgnoreReviewFileWithFilter(path string, filter ReviewFileFilter) bool {
+	filter = NormalizeReviewFileFilter(filter)
+	if filematch.MatchesPath(filter.ForceIncludeFilePatterns, path) {
+		return false
+	}
+	if !filter.IncludeDocs && IsDocumentationFileWithFilter(path, filter) {
 		return true
 	}
 
-	if !includeDocs && isDocumentationFile(normalized, baseName) {
-		return true
-	}
-
-	if strings.HasSuffix(baseName, ".yaml") || strings.HasSuffix(baseName, ".yml") {
-		return true
-	}
-
-	if normalized == "package-lock.json" ||
-		strings.HasSuffix(normalized, "/package-lock.json") ||
-		normalized == "pnpm-lock.yaml" ||
-		strings.HasSuffix(normalized, "/pnpm-lock.yaml") ||
-		normalized == "yarn.lock" ||
-		strings.HasSuffix(normalized, "/yarn.lock") ||
-		normalized == "go.sum" ||
-		strings.HasSuffix(normalized, "/go.sum") ||
-		normalized == "composer.lock" ||
-		strings.HasSuffix(normalized, "/composer.lock") {
-		return true
-	}
-
-	if strings.Contains(normalized, "/vendor/") ||
-		strings.HasPrefix(normalized, "vendor/") ||
-		strings.Contains(normalized, "/node_modules/") ||
-		strings.HasPrefix(normalized, "node_modules/") ||
-		strings.Contains(normalized, "/dist/") ||
-		strings.HasPrefix(normalized, "dist/") ||
-		strings.Contains(normalized, "/build/") ||
-		strings.HasPrefix(normalized, "build/") {
-		return true
-	}
-
-	return strings.HasSuffix(normalized, ".map") || strings.HasSuffix(normalized, ".min.js")
+	return filematch.MatchesPath(filter.IgnoreFilePatterns, path)
 }
 
 func IsDocumentationFile(path string) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(path, "\\", "/"))
-	baseName := normalized
-	if slashIndex := strings.LastIndex(baseName, "/"); slashIndex >= 0 {
-		baseName = baseName[slashIndex+1:]
-	}
-
-	return baseName == "readme" ||
-		strings.HasPrefix(baseName, "readme.") ||
-		strings.HasPrefix(baseName, "readme-") ||
-		isDocumentationFile(normalized, baseName)
+	return IsDocumentationFileWithFilter(path, DefaultReviewFileFilter())
 }
 
-func isDocumentationFile(path string, baseName string) bool {
-	if strings.HasPrefix(path, "docs/") || strings.Contains(path, "/docs/") {
-		return true
-	}
-
-	if strings.HasSuffix(baseName, ".md") || strings.HasSuffix(baseName, ".mdx") ||
-		strings.HasSuffix(baseName, ".rst") || strings.HasSuffix(baseName, ".adoc") {
-		return true
-	}
-
-	return baseName == "license" ||
-		strings.HasPrefix(baseName, "license.") ||
-		strings.HasPrefix(baseName, "changelog.") ||
-		strings.HasPrefix(baseName, "contributing.") ||
-		strings.HasPrefix(baseName, "code_of_conduct.")
+func IsDocumentationFileWithFilter(path string, filter ReviewFileFilter) bool {
+	filter = NormalizeReviewFileFilter(filter)
+	return filematch.MatchesPath(filter.DocFilePatterns, path)
 }
 
 func formatReviewFile(file diff.ChangedFile) string {
@@ -155,4 +148,67 @@ func formatReviewFile(file diff.ChangedFile) string {
 	}
 	builder.WriteString(fmt.Sprintf("===== FIM ARQUIVO path=%s =====\n", file.Path))
 	return builder.String()
+}
+
+func defaultDocFilePatterns() []string {
+	return []string{
+		"readme",
+		"readme.*",
+		"readme-*",
+		"docs/**",
+		"**/docs/**",
+		"*.md",
+		"*.mdx",
+		"*.rst",
+		"*.adoc",
+		"license",
+		"license.*",
+		"changelog.*",
+		"contributing.*",
+		"code_of_conduct.*",
+	}
+}
+
+func defaultIgnoreFilePatterns() []string {
+	return []string{
+		"*.yaml",
+		"*.yml",
+		"package-lock.json",
+		"pnpm-lock.yaml",
+		"yarn.lock",
+		"go.sum",
+		"composer.lock",
+		"vendor/**",
+		"**/vendor/**",
+		"node_modules/**",
+		"**/node_modules/**",
+		"dist/**",
+		"**/dist/**",
+		"build/**",
+		"**/build/**",
+		"*.map",
+		"*.min.js",
+	}
+}
+
+func compactPatternList(patterns []string) []string {
+	if patterns == nil {
+		return nil
+	}
+
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		if _, exists := seen[pattern]; exists {
+			continue
+		}
+		seen[pattern] = struct{}{}
+		result = append(result, pattern)
+	}
+
+	return result
 }

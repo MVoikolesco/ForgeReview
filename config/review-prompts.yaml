@@ -4,6 +4,43 @@ default:
   stacks:
     - go
   include_docs: false
+  doc_file_patterns:
+    - "readme"
+    - "readme.*"
+    - "readme-*"
+    - "docs/**"
+    - "**/docs/**"
+    - "*.md"
+    - "*.mdx"
+    - "*.rst"
+    - "*.adoc"
+    - "license"
+    - "license.*"
+    - "changelog.*"
+    - "contributing.*"
+    - "code_of_conduct.*"
+  ignore_file_patterns:
+    - "*.yaml"
+    - "*.yml"
+    - "package-lock.json"
+    - "pnpm-lock.yaml"
+    - "yarn.lock"
+    - "go.sum"
+    - "composer.lock"
+    - "vendor/**"
+    - "**/vendor/**"
+    - "node_modules/**"
+    - "**/node_modules/**"
+    - "dist/**"
+    - "**/dist/**"
+    - "build/**"
+    - "**/build/**"
+    - "*.map"
+    - "*.min.js"
+  force_include_file_patterns:
+    - ".env.example"
+    - ".gitignore"
+    - "Dockerfile"
 
 projects:
   teste-bot:

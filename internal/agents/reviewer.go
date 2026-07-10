@@ -123,14 +123,23 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 		return err
 	}
 
-	includeDocs, err := promptResolver.ShouldIncludeDocs(ctx, job.Owner, job.Repo)
+	resolvedBlockFilter, err := promptResolver.ResolveBlockFilter(ctx, job.Owner, job.Repo)
 	if err != nil {
 		return err
 	}
-	ignoredDocs := countIgnoredDocs(files, includeDocs)
+	blockFilter := reviewFileFilterFromConfig(resolvedBlockFilter)
+	includeDocs := blockFilter.IncludeDocs
+	ignoredDocs := countIgnoredDocs(files, blockFilter)
 	if ignoredDocs > 0 {
 		a.logger.Printf("docs ignorados owner=%s repo=%s pr=%d files=%d include_docs=%t", job.Owner, job.Repo, job.PRNumber, ignoredDocs, includeDocs)
 		if err := runLog.AppendProcess("docs ignorados files=%d include_docs=%t", ignoredDocs, includeDocs); err != nil {
+			return err
+		}
+	}
+	ignoredFiles := countIgnoredReviewFiles(files, blockFilter)
+	if ignoredFiles > 0 {
+		a.logger.Printf("arquivos ignorados por filtro owner=%s repo=%s pr=%d files=%d include_docs=%t ignore_patterns=%d force_include_patterns=%d", job.Owner, job.Repo, job.PRNumber, ignoredFiles, includeDocs, len(blockFilter.IgnoreFilePatterns), len(blockFilter.ForceIncludeFilePatterns))
+		if err := runLog.AppendProcess("arquivos ignorados por filtro files=%d include_docs=%t ignore_patterns=%d force_include_patterns=%d", ignoredFiles, includeDocs, len(blockFilter.IgnoreFilePatterns), len(blockFilter.ForceIncludeFilePatterns)); err != nil {
 			return err
 		}
 	}
@@ -148,7 +157,7 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 		return err
 	}
 
-	blocks := review.BuildReviewBlocksWithOptions(files, a.options.MaxBlockChars, a.options.MaxFilesPerBlock, includeDocs)
+	blocks := review.BuildReviewBlocksWithFilter(files, a.options.MaxBlockChars, a.options.MaxFilesPerBlock, blockFilter)
 	reviewableFiles := countReviewableFiles(blocks)
 	a.logger.Printf("arquivos revisaveis owner=%s repo=%s pr=%d files=%d", job.Owner, job.Repo, job.PRNumber, reviewableFiles)
 	a.logger.Printf("blocos de review gerados owner=%s repo=%s pr=%d blocks=%d max_chars=%d max_files_per_block=%d", job.Owner, job.Repo, job.PRNumber, len(blocks), a.options.MaxBlockChars, a.options.MaxFilesPerBlock)
@@ -371,12 +380,22 @@ func hasBlockingComment(comments []review.InlineComment) bool {
 			return true
 		}
 		lowerReason := strings.ToLower(comment.DecisionReason)
+		if isExplicitlyNonBlockingReason(lowerReason) {
+			continue
+		}
 		if strings.Contains(lowerReason, "bloque") || strings.Contains(lowerReason, "request_changes") {
 			return true
 		}
 	}
 
 	return false
+}
+
+func isExplicitlyNonBlockingReason(reason string) bool {
+	reason = strings.ReplaceAll(reason, "\u00e3", "a")
+	return strings.Contains(reason, "nao bloque") ||
+		strings.Contains(reason, "nao-bloque") ||
+		strings.Contains(reason, "non-block")
 }
 
 func formatFullDiffLog(rawDiff string, files []diff.ChangedFile) string {
@@ -449,14 +468,34 @@ func countReviewableFiles(blocks []review.ReviewBlock) int {
 	return total
 }
 
-func countIgnoredDocs(files []diff.ChangedFile, includeDocs bool) int {
-	if includeDocs {
+func reviewFileFilterFromConfig(filter promptconfig.ResolvedBlockFilter) review.ReviewFileFilter {
+	return review.NormalizeReviewFileFilter(review.ReviewFileFilter{
+		IncludeDocs:              filter.IncludeDocs,
+		DocFilePatterns:          filter.DocFilePatterns,
+		IgnoreFilePatterns:       filter.IgnoreFilePatterns,
+		ForceIncludeFilePatterns: filter.ForceIncludeFilePatterns,
+	})
+}
+
+func countIgnoredReviewFiles(files []diff.ChangedFile, filter review.ReviewFileFilter) int {
+	total := 0
+	for _, file := range files {
+		if review.ShouldIgnoreReviewFileWithFilter(file.Path, filter) {
+			total++
+		}
+	}
+
+	return total
+}
+
+func countIgnoredDocs(files []diff.ChangedFile, filter review.ReviewFileFilter) int {
+	if filter.IncludeDocs {
 		return 0
 	}
 
 	total := 0
 	for _, file := range files {
-		if review.IsDocumentationFile(file.Path) {
+		if review.IsDocumentationFileWithFilter(file.Path, filter) && review.ShouldIgnoreReviewFileWithFilter(file.Path, filter) {
 			total++
 		}
 	}

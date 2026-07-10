@@ -18,17 +18,25 @@ type ReviewPromptConfig struct {
 }
 
 type DefaultPromptConfig struct {
-	PartialPrompt string   `yaml:"partial_prompt"`
-	FinalPrompt   string   `yaml:"final_prompt"`
-	Stacks        []string `yaml:"stacks"`
-	IncludeDocs   bool     `yaml:"include_docs"`
+	PartialPrompt            string   `yaml:"partial_prompt"`
+	FinalPrompt              string   `yaml:"final_prompt"`
+	Stacks                   []string `yaml:"stacks"`
+	IncludeDocs              bool     `yaml:"include_docs"`
+	DocFilePatterns          []string `yaml:"doc_file_patterns"`
+	IgnoreFilePatterns       []string `yaml:"ignore_file_patterns"`
+	ForceIncludeFilePatterns []string `yaml:"force_include_file_patterns"`
 }
 
 type ProjectConfig struct {
-	Owner       string   `yaml:"owner"`
-	Repo        string   `yaml:"repo"`
-	Stacks      []string `yaml:"stacks"`
-	IncludeDocs *bool    `yaml:"include_docs"`
+	Owner                    string   `yaml:"owner"`
+	Repo                     string   `yaml:"repo"`
+	PartialPrompt            string   `yaml:"partial_prompt"`
+	FinalPrompt              string   `yaml:"final_prompt"`
+	Stacks                   []string `yaml:"stacks"`
+	IncludeDocs              *bool    `yaml:"include_docs"`
+	DocFilePatterns          []string `yaml:"doc_file_patterns"`
+	IgnoreFilePatterns       []string `yaml:"ignore_file_patterns"`
+	ForceIncludeFilePatterns []string `yaml:"force_include_file_patterns"`
 }
 
 type StackConfig struct {
@@ -63,7 +71,7 @@ func (r PromptResolver) ResolvePartialPrompt(ctx context.Context, owner, repo st
 	}
 
 	project := cfg.ProjectFor(owner, repo)
-	basePrompt, err := readPromptFile(baseDir, cfg.Default.PartialPrompt)
+	basePrompt, err := readPromptFile(baseDir, project.PartialPrompt)
 	if err != nil {
 		return ResolvedPrompt{}, err
 	}
@@ -111,7 +119,8 @@ func (r PromptResolver) ResolveFinalPrompt(ctx context.Context, owner, repo stri
 		return ResolvedPrompt{}, err
 	}
 
-	prompt, err := readPromptFile(baseDir, cfg.Default.FinalPrompt)
+	project := cfg.ProjectFor(owner, repo)
+	prompt, err := readPromptFile(baseDir, project.FinalPrompt)
 	if err != nil {
 		return ResolvedPrompt{}, err
 	}
@@ -127,6 +136,21 @@ func (r PromptResolver) ShouldIncludeDocs(ctx context.Context, owner, repo strin
 
 	project := cfg.ProjectFor(owner, repo)
 	return project.IncludeDocs, nil
+}
+
+func (r PromptResolver) ResolveBlockFilter(ctx context.Context, owner, repo string) (ResolvedBlockFilter, error) {
+	cfg, _, err := r.load(ctx)
+	if err != nil {
+		return ResolvedBlockFilter{}, err
+	}
+
+	project := cfg.ProjectFor(owner, repo)
+	return ResolvedBlockFilter{
+		IncludeDocs:              project.IncludeDocs,
+		DocFilePatterns:          cloneStrings(project.DocFilePatterns),
+		IgnoreFilePatterns:       cloneStrings(project.IgnoreFilePatterns),
+		ForceIncludeFilePatterns: cloneStrings(project.ForceIncludeFilePatterns),
+	}, nil
 }
 
 func (r PromptResolver) Load(ctx context.Context) (ReviewPromptConfig, error) {
@@ -161,28 +185,40 @@ func (r PromptResolver) load(ctx context.Context) (ReviewPromptConfig, string, e
 }
 
 func (cfg ReviewPromptConfig) ProjectFor(owner string, repo string) ResolvedProject {
+	base := ResolvedProject{
+		PartialPrompt:            cfg.Default.PartialPrompt,
+		FinalPrompt:              cfg.Default.FinalPrompt,
+		Stacks:                   uniqueStrings(cfg.Default.Stacks),
+		IncludeDocs:              cfg.Default.IncludeDocs,
+		DocFilePatterns:          uniqueStrings(cfg.Default.DocFilePatterns),
+		IgnoreFilePatterns:       uniqueStrings(cfg.Default.IgnoreFilePatterns),
+		ForceIncludeFilePatterns: uniqueStrings(cfg.Default.ForceIncludeFilePatterns),
+	}
+
 	for _, project := range cfg.Projects {
 		if strings.EqualFold(project.Owner, owner) && strings.EqualFold(project.Repo, repo) {
-			includeDocs := cfg.Default.IncludeDocs
-			if project.IncludeDocs != nil {
-				includeDocs = *project.IncludeDocs
-			}
-
-			stacks := project.Stacks
-			if len(stacks) == 0 {
-				stacks = cfg.Default.Stacks
-			}
-
-			return ResolvedProject{Stacks: uniqueStrings(stacks), IncludeDocs: includeDocs}
+			return resolveProject(base, project)
 		}
 	}
 
-	return ResolvedProject{Stacks: uniqueStrings(cfg.Default.Stacks), IncludeDocs: cfg.Default.IncludeDocs}
+	return base
 }
 
 type ResolvedProject struct {
-	Stacks      []string
-	IncludeDocs bool
+	PartialPrompt            string
+	FinalPrompt              string
+	Stacks                   []string
+	IncludeDocs              bool
+	DocFilePatterns          []string
+	IgnoreFilePatterns       []string
+	ForceIncludeFilePatterns []string
+}
+
+type ResolvedBlockFilter struct {
+	IncludeDocs              bool
+	DocFilePatterns          []string
+	IgnoreFilePatterns       []string
+	ForceIncludeFilePatterns []string
 }
 
 func (cfg ReviewPromptConfig) Validate() error {
@@ -195,11 +231,35 @@ func (cfg ReviewPromptConfig) Validate() error {
 	if cfg.Projects == nil {
 		cfg.Projects = map[string]ProjectConfig{}
 	}
-	if len(cfg.Stacks) == 0 {
-		return fmt.Errorf("stacks nao pode estar vazio")
-	}
 
 	return nil
+}
+
+func resolveProject(base ResolvedProject, project ProjectConfig) ResolvedProject {
+	resolved := base
+	if strings.TrimSpace(project.PartialPrompt) != "" {
+		resolved.PartialPrompt = project.PartialPrompt
+	}
+	if strings.TrimSpace(project.FinalPrompt) != "" {
+		resolved.FinalPrompt = project.FinalPrompt
+	}
+	if project.Stacks != nil {
+		resolved.Stacks = uniqueStrings(project.Stacks)
+	}
+	if project.IncludeDocs != nil {
+		resolved.IncludeDocs = *project.IncludeDocs
+	}
+	if project.DocFilePatterns != nil {
+		resolved.DocFilePatterns = uniqueStrings(project.DocFilePatterns)
+	}
+	if project.IgnoreFilePatterns != nil {
+		resolved.IgnoreFilePatterns = uniqueStrings(project.IgnoreFilePatterns)
+	}
+	if project.ForceIncludeFilePatterns != nil {
+		resolved.ForceIncludeFilePatterns = uniqueStrings(project.ForceIncludeFilePatterns)
+	}
+
+	return resolved
 }
 
 type namedPrompt struct {
@@ -300,8 +360,12 @@ func promptNames(prompts []namedPrompt) []string {
 }
 
 func uniqueStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+
 	seen := map[string]struct{}{}
-	var result []string
+	result := make([]string, 0, len(values))
 	for _, value := range values {
 		value = strings.TrimSpace(value)
 		if value == "" {
@@ -314,4 +378,12 @@ func uniqueStrings(values []string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+
+	return append([]string{}, values...)
 }
