@@ -1,0 +1,220 @@
+default:
+  partial_prompt: prompts/base/review_partial.md
+  final_prompt: prompts/base/review_final.md
+  stacks:
+    - go
+  include_docs: false
+
+projects:
+  teste-bot:
+    owner: mvoikolesco
+    repo: teste-bot
+    stacks:
+      - go
+      - docker
+      - cicd
+    include_docs: false
+
+  portal:
+    owner: Qualyagro
+    repo: portal
+    stacks:
+      - laravel
+      - react
+      - sql
+      - docker
+      - cicd
+    include_docs: false
+
+  apicloud:
+    owner: Qualyagro
+    repo: apicloud
+    stacks:
+      - laravel
+      - sql
+      - docker
+      - cicd
+    include_docs: false
+
+stacks:
+  go:
+    prompt: prompts/stacks/go.md
+    file_patterns:
+      - "*.go"
+      - "go.mod"
+    categories:
+      services:
+        prompt: prompts/stacks/go/services.md
+        file_patterns:
+          - "internal/services/*.go"
+          - "internal/service/*.go"
+          - "internal/*/service*.go"
+      handlers:
+        prompt: prompts/stacks/go/handlers.md
+        file_patterns:
+          - "internal/handlers/*.go"
+          - "internal/webhook/*.go"
+          - "cmd/server/*.go"
+
+  laravel:
+    prompt: prompts/stacks/laravel.md
+    file_patterns:
+      - "*.php"
+      - "composer.json"
+      - "routes/*.php"
+      - "database/migrations/*.php"
+    categories:
+      models:
+        prompt: prompts/stacks/laravel/models.md
+        file_patterns:
+          - "app/Models/*.php"
+      services:
+        prompt: prompts/stacks/laravel/services.md
+        file_patterns:
+          - "app/Services/*.php"
+          - "app/*/Services/*.php"
+      controllers:
+        prompt: prompts/stacks/laravel/controllers.md
+        file_patterns:
+          - "app/Http/Controllers/*.php"
+          - "app/Http/Controllers/*/*.php"
+      views:
+        prompt: prompts/stacks/laravel/views.md
+        file_patterns:
+          - "resources/views/*.php"
+          - "resources/views/*/*.php"
+          - "*.blade.php"
+      dtos:
+        prompt: prompts/stacks/laravel/dtos.md
+        file_patterns:
+          - "app/DTOs/*.php"
+          - "app/Data/*.php"
+      entities:
+        prompt: prompts/stacks/laravel/entities.md
+        file_patterns:
+          - "app/Entities/*.php"
+
+  react:
+    prompt: prompts/stacks/react.md
+    file_patterns:
+      - "*.ts"
+      - "*.tsx"
+      - "*.js"
+      - "*.jsx"
+      - "package.json"
+    categories:
+      components:
+        prompt: prompts/stacks/react/components.md
+        file_patterns:
+          - "src/components/*.tsx"
+          - "src/components/*/*.tsx"
+      services:
+        prompt: prompts/stacks/react/services.md
+        file_patterns:
+          - "src/services/*.ts"
+          - "src/api/*.ts"
+      hooks:
+        prompt: prompts/stacks/react/hooks.md
+        file_patterns:
+          - "src/hooks/*.ts"
+          - "src/hooks/*.tsx"
+
+  solid:
+    prompt: prompts/stacks/solid.md
+    file_patterns:
+      - "*.ts"
+      - "*.tsx"
+      - "*.js"
+      - "*.jsx"
+    categories:
+      components:
+        prompt: prompts/stacks/solid/components.md
+        file_patterns:
+          - "src/components/*.tsx"
+          - "src/components/*/*.tsx"
+      services:
+        prompt: prompts/stacks/react/services.md
+        file_patterns:
+          - "src/services/*.ts"
+          - "src/api/*.ts"
+
+  web:
+    prompt: prompts/stacks/web.md
+    file_patterns:
+      - "*.html"
+      - "*.css"
+      - "*.scss"
+      - "*.sass"
+      - "*.js"
+      - "*.mjs"
+
+  sql:
+    prompt: prompts/stacks/sql.md
+    file_patterns:
+      - "*.sql"
+      - "database/migrations/*.php"
+
+  docker:
+    prompt: prompts/stacks/docker.md
+    file_patterns:
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "docker-compose.yaml"
+      - "compose.yaml"
+      - "*.dockerfile"
+
+  ci:
+    prompt: prompts/stacks/ci.md
+    file_patterns:
+      - "*.php"
+      - "composer.json"
+      - "app/Config/*.php"
+      - "app/Controllers/*.php"
+      - "app/Models/*.php"
+      - "app/Database/Migrations/*.php"
+      - "app/Views/*.php"
+    categories:
+      models:
+        prompt: prompts/stacks/ci/models.md
+        file_patterns:
+          - "app/Models/*.php"
+      services:
+        prompt: prompts/stacks/ci/services.md
+        file_patterns:
+          - "app/Services/*.php"
+          - "app/Libraries/*.php"
+      controllers:
+        prompt: prompts/stacks/ci/controllers.md
+        file_patterns:
+          - "app/Controllers/*.php"
+          - "app/Controllers/*/*.php"
+      views:
+        prompt: prompts/stacks/ci/views.md
+        file_patterns:
+          - "app/Views/*.php"
+          - "app/Views/*/*.php"
+      dtos:
+        prompt: prompts/stacks/ci/dtos.md
+        file_patterns:
+          - "app/DTOs/*.php"
+          - "app/Data/*.php"
+      entities:
+        prompt: prompts/stacks/ci/entities.md
+        file_patterns:
+          - "app/Entities/*.php"
+
+  cicd:
+    prompt: prompts/stacks/cicd.md
+    file_patterns:
+      - ".gitea/workflows/*.yml"
+      - ".gitea/workflows/*.yaml"
+      - ".github/workflows/*.yml"
+      - ".github/workflows/*.yaml"
+    categories:
+      workflows:
+        prompt: prompts/stacks/cicd/workflows.md
+        file_patterns:
+          - ".gitea/workflows/*.yml"
+          - ".gitea/workflows/*.yaml"
+          - ".github/workflows/*.yml"
+          - ".github/workflows/*.yaml"

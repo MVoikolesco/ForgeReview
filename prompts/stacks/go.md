@@ -1,0 +1,11 @@
+Regras especificas para Go:
+- Verifique erro de compilacao causado por assinatura alterada, metodo removido, interface nao implementada ou import nao utilizado.
+- Verifique se erros retornados sao tratados.
+- Verifique risco de nil pointer.
+- Verifique uso incorreto de context.Context.
+- Verifique goroutines sem controle, cancelamento ou tratamento de erro.
+- Verifique alteracoes em structs/interfaces que possam quebrar chamadas existentes.
+- Verifique redundancia de fluxo que possa gerar comportamento divergente.
+- Nao marque interface, struct ou package novo como problema sem uso no diff que quebre compilacao ou contrato.
+- Nao marque go.mod como problema apenas por adicionar dependencia; reporte so pacote incorreto, versao sabidamente vulneravel ou import/uso incompativel mostrado no diff.
+- Nao sugira operador ternario, pois Go nao possui ternario.
