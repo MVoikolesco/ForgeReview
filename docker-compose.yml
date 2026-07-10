@@ -1,0 +1,47 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: gitea-ai-reviewer-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    container_name: gitea-ai-reviewer-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_MODE: api
+      PORT: 8080
+      REDIS_ADDR: redis:6379
+    ports:
+      - "8088:8080"
+    depends_on:
+      - redis
+
+  worker:
+    build: .
+    container_name: gitea-ai-reviewer-worker
+    restart: unless-stopped
+    user: "0:0"
+    env_file:
+      - .env
+    environment:
+      APP_MODE: worker
+      REDIS_ADDR: redis:6379
+      REDIS_CONSUMER: worker-1
+      DIFF_LOG_DIR: /logs/diffs
+    volumes:
+      - ./logs:/logs
+      - ./prompts:/app/prompts:ro
+      - ./config:/app/config:ro
+    depends_on:
+      - redis
+
+volumes:
+  redis_data:
