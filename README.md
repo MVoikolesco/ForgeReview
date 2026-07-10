@@ -153,87 +153,91 @@ prompts/
     review_partial.md
     review_final.md
   stacks/
+    angular.md
+    codeigniter.md
     go.md
     laravel.md
+    php.md
     react.md
-    solid.md
-    web.md      # HTML/CSS/JS padrao
+    solidjs.md
+    vue.md
     sql.md
     docker.md
-    ci.md      # CodeIgniter 4
     cicd.md    # pipelines/workflows
-    laravel/
-      models.md
-      services.md
-      controllers.md
-      views.md
-      dtos.md
-      entities.md
 
 config/
   review-prompts.yaml
 ```
 
-O YAML mapeia projetos por `owner` e `repo`, define prompts base, stacks permitidas e controla quais arquivos entram nos blocos. Quando um projeto nao esta mapeado, o bot usa `default`.
+O YAML nao precisa mais mapear projetos. Ele define prompts base globais, filtros globais de arquivos e uma lista de stacks autodetectadas por `file_patterns`. Para cada bloco, o resolver carrega sempre `default.partial_prompt` e acrescenta todos os `.md` de `stacks` cujos patterns casarem com os arquivos do bloco.
 
 O formato de resposta que o modelo deve devolver continua fixo no codigo (`STATUS`, `ACHADOS_CONCRETOS`, `COMENTARIOS_INLINE`, `REVISAO_FINAL`, `EVENTO_GITEA` etc.). Isso e intencional: o parser usa esse contrato para gerar comentarios inline e escolher o evento do review. Personalize os arquivos `.md`, stacks e filtros no YAML, mas mantenha esse contrato rigido.
 
-Exemplo Go:
+Exemplo simples:
 
 ```yaml
-projects:
-  teste-bot:
-    owner: mvoikolesco
-    repo: teste-bot
-    stacks:
-      - go
-      - cicd
-      - docker
-    include_docs: false
+default:
+  partial_prompt: prompts/base/review_partial.md
+  final_prompt: prompts/base/review_final.md
+  include_docs: false
+  ignore_file_patterns:
+    - "node_modules/**"
+    - "**/node_modules/**"
+    - "dist/**"
+    - "**/dist/**"
+
+stacks:
+  go:
+    prompt: prompts/stacks/go.md
+    file_patterns:
+      - "*.go"
+      - "go.mod"
 ```
 
-Exemplo Laravel + React:
+Exemplo Laravel + PHP:
 
 ```yaml
-projects:
-  portal:
-    owner: Qualyagro
-    repo: portal
-    stacks:
-      - laravel
-      - react
-      - sql
-      - docker
-      - cicd
-    include_docs: false
+stacks:
+  laravel:
+    prompt: prompts/stacks/laravel.md
+    file_patterns:
+      - "artisan"
+      - "app/**/*.php"
+      - "routes/**/*.php"
+      - "resources/views/**/*.blade.php"
+  php:
+    prompt: prompts/stacks/php.md
+    file_patterns:
+      - "*.php"
+      - "composer.json"
 ```
 
-Voce tambem pode trocar prompts base e filtros por projeto:
+Exemplo frontend:
 
 ```yaml
-projects:
-  meu-projeto:
-    owner: MinhaOrg
-    repo: api
-    partial_prompt: prompts/base/review_partial_api.md
-    final_prompt: prompts/base/review_final_api.md
-    stacks:
-      - go
-      - docker
-    include_docs: false
-    ignore_file_patterns:
-      - "*.lock"
-      - "vendor/**"
-      - "**/vendor/**"
-    force_include_file_patterns:
-      - ".gitea/workflows/*.yml"
+stacks:
+  react:
+    prompt: prompts/stacks/react.md
+    file_patterns:
+      - "*.jsx"
+      - "*.tsx"
+      - "src/**/*.jsx"
+      - "src/**/*.tsx"
+  vue:
+    prompt: prompts/stacks/vue.md
+    file_patterns:
+      - "*.vue"
+      - "src/**/*.vue"
+  angular:
+    prompt: prompts/stacks/angular.md
+    file_patterns:
+      - "angular.json"
+      - "src/app/**/*.ts"
 ```
 
-Para cada bloco, o resolver carrega sempre o prompt base parcial e acrescenta apenas as stacks que casam com os arquivos do bloco. Alem disso, cada stack pode ter categorias por pasta/tipo de arquivo. Por exemplo, `app/Services/OrderService.php` carrega `prompts/stacks/laravel.md` e `prompts/stacks/laravel/services.md`; `app/Models/Order.php` carrega `laravel.md` e `laravel/models.md`.
+Para adicionar uma stack nova, crie um `.md` em `prompts/stacks/` e cadastre uma chave em `stacks` com `prompt` e `file_patterns`. Os patterns aceitam `*` e `**`, por exemplo `app/**/*.php`, `src/**/*.tsx` e `.github/workflows/**/*.yml`.
 
-Use `ci` para projetos CodeIgniter 4, `solid` para SolidJS e `web` para HTML/CSS/JS sem framework. Para pipelines de build/deploy, use a stack `cicd` apenas se arquivos YAML voltarem a ser revisaveis.
-
-Quando `include_docs: false`, docs definidos em `doc_file_patterns` ficam fora dos blocos de review. Arquivos definidos em `ignore_file_patterns` tambem ficam fora dos blocos, por exemplo lockfiles, `.yaml`, `.yml`, `vendor/**`, `node_modules/**`, `dist/**`, `build/**`, `.map` e `.min.js`. Use `force_include_file_patterns` para abrir excecoes pontuais, como revisar workflows YAML em um projeto especifico.
+Quando `include_docs: false`, docs definidos em `doc_file_patterns` ficam fora dos blocos de review. Arquivos definidos em `ignore_file_patterns` tambem ficam fora dos blocos, por exemplo lockfiles, `vendor/**`, `node_modules/**`, `dist/**`, `build/**`, `coverage/**`, `.map` e `.min.js`. Use `force_include_file_patterns` para abrir excecoes pontuais.
 
 ## Endpoints
 
@@ -379,7 +383,7 @@ prompt config carregado path=./config/review-prompts.yaml
 docs ignorados owner=Qualyagro repo=wiki pr=12 files=1 include_docs=false
 arquivos revisaveis owner=Qualyagro repo=wiki pr=12 files=2
 blocos de review gerados owner=Qualyagro repo=wiki pr=12 blocks=2 max_chars=4000 max_files_per_block=2
-prompt parcial resolvido owner=Qualyagro repo=wiki stacks=go categories=go/handlers files=2 prompt_chars=4200
+prompt parcial resolvido owner=Qualyagro repo=wiki stacks=go files=2 prompt_chars=4200
 enviando bloco para ollama block=1 total=2 files=2 chars=3900 model=deepseek-coder:6.7b timeout=900s
 resposta ollama recebida block=1 chars=900 duration=1m12s total_elapsed=1m12s
 erro ao revisar bloco com ollama block=2 total=2 files=1 chars=4100 prompt_chars=6200 timeout=900s duration=15m0s total_elapsed=16m12s err=context deadline exceeded

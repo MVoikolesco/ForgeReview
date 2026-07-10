@@ -38,7 +38,7 @@ func Match(pattern string, filePath string) bool {
 
 	baseName := path.Base(normalizedPath)
 
-	if matchDoubleStarPattern(normalizedPattern, normalizedPath) {
+	if strings.Contains(normalizedPattern, "**") && matchSegments(strings.Split(normalizedPattern, "/"), strings.Split(normalizedPath, "/")) {
 		return true
 	}
 
@@ -58,23 +58,31 @@ func Normalize(value string) string {
 	return strings.TrimPrefix(strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")), "./")
 }
 
-func matchDoubleStarPattern(pattern string, filePath string) bool {
-	if strings.HasSuffix(pattern, "/**") {
-		prefix := strings.TrimSuffix(pattern, "/**")
-		if strings.HasPrefix(prefix, "**/") {
-			dir := strings.TrimPrefix(prefix, "**/")
-			return filePath == dir ||
-				strings.HasPrefix(filePath, dir+"/") ||
-				strings.Contains(filePath, "/"+dir+"/")
+func matchSegments(patternSegments []string, pathSegments []string) bool {
+	if len(patternSegments) == 0 {
+		return len(pathSegments) == 0
+	}
+
+	if patternSegments[0] == "**" {
+		if matchSegments(patternSegments[1:], pathSegments) {
+			return true
 		}
-
-		return filePath == prefix || strings.HasPrefix(filePath, prefix+"/")
+		for index := range pathSegments {
+			if matchSegments(patternSegments[1:], pathSegments[index+1:]) {
+				return true
+			}
+		}
+		return false
 	}
 
-	if strings.HasPrefix(pattern, "**/") {
-		suffix := strings.TrimPrefix(pattern, "**/")
-		return filePath == suffix || strings.HasSuffix(filePath, "/"+suffix)
+	if len(pathSegments) == 0 {
+		return false
 	}
 
-	return false
+	matched, err := path.Match(patternSegments[0], pathSegments[0])
+	if err != nil || !matched {
+		return false
+	}
+
+	return matchSegments(patternSegments[1:], pathSegments[1:])
 }

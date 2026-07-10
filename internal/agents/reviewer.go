@@ -196,8 +196,8 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 		if err != nil {
 			return err
 		}
-		a.logger.Printf("prompt parcial resolvido owner=%s repo=%s stacks=%s categories=%s files=%d prompt_chars=%d", job.Owner, job.Repo, strings.Join(resolvedPrompt.Stacks, ","), strings.Join(resolvedPrompt.Categories, ","), len(block.Files), len(resolvedPrompt.Content))
-		if err := runLog.AppendProcess("prompt parcial resolvido block=%d stacks=%s categories=%s files=%d prompt_chars=%d", block.Index, strings.Join(resolvedPrompt.Stacks, ","), strings.Join(resolvedPrompt.Categories, ","), len(block.Files), len(resolvedPrompt.Content)); err != nil {
+		a.logger.Printf("prompt parcial resolvido owner=%s repo=%s stacks=%s files=%d prompt_chars=%d", job.Owner, job.Repo, strings.Join(resolvedPrompt.Stacks, ","), len(block.Files), len(resolvedPrompt.Content))
+		if err := runLog.AppendProcess("prompt parcial resolvido block=%d stacks=%s files=%d prompt_chars=%d", block.Index, strings.Join(resolvedPrompt.Stacks, ","), len(block.Files), len(resolvedPrompt.Content)); err != nil {
 			return err
 		}
 		prompt := review.BuildPartialReviewPromptWithMemory(block, resolvedPrompt.Content, partialReviews)

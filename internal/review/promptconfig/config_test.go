@@ -8,41 +8,23 @@ import (
 	"testing"
 )
 
-func TestPromptResolverLoadsBaseStackAndCategoryPrompts(t *testing.T) {
+func TestPromptResolverLoadsMatchingStackPromptsAutomatically(t *testing.T) {
 	configPath := writePromptFixture(t, validConfigYAML())
 	resolver := NewPromptResolver(configPath)
 
-	resolved, err := resolver.ResolvePartialPrompt(context.Background(), "Qualyagro", "portal", []string{"app/Services/OrderService.php"})
+	resolved, err := resolver.ResolvePartialPrompt(context.Background(), "AnyOwner", "any-repo", []string{"app/Services/OrderService.php"})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if !strings.Contains(resolved.Content, "BASE PARTIAL") ||
-		!strings.Contains(resolved.Content, "LARAVEL STACK") ||
-		!strings.Contains(resolved.Content, "LARAVEL SERVICES") {
-		t.Fatalf("expected base, stack and category prompts, got %q", resolved.Content)
+	for _, expected := range []string{"BASE PARTIAL", "LARAVEL STACK", "PHP STACK"} {
+		if !strings.Contains(resolved.Content, expected) {
+			t.Fatalf("expected resolved prompt to contain %q, got %q", expected, resolved.Content)
+		}
 	}
 
-	if strings.Join(resolved.Stacks, ",") != "laravel" {
-		t.Fatalf("expected laravel stack, got %#v", resolved.Stacks)
-	}
-
-	if strings.Join(resolved.Categories, ",") != "laravel/services" {
-		t.Fatalf("expected laravel services category, got %#v", resolved.Categories)
-	}
-}
-
-func TestPromptResolverUsesDefaultProjectConfig(t *testing.T) {
-	configPath := writePromptFixture(t, validConfigYAML())
-	resolver := NewPromptResolver(configPath)
-
-	resolved, err := resolver.ResolvePartialPrompt(context.Background(), "unknown", "repo", []string{"internal/app.go"})
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if !strings.Contains(resolved.Content, "GO STACK") {
-		t.Fatalf("expected default go stack, got %q", resolved.Content)
+	if strings.Join(resolved.Stacks, ",") != "laravel,php" {
+		t.Fatalf("expected laravel and php stacks, got %#v", resolved.Stacks)
 	}
 }
 
@@ -50,90 +32,66 @@ func TestPromptResolverDoesNotLoadUnmatchedStack(t *testing.T) {
 	configPath := writePromptFixture(t, validConfigYAML())
 	resolver := NewPromptResolver(configPath)
 
-	resolved, err := resolver.ResolvePartialPrompt(context.Background(), "Qualyagro", "portal", []string{"resources/views/index.blade.php"})
+	resolved, err := resolver.ResolvePartialPrompt(context.Background(), "AnyOwner", "any-repo", []string{"resources/views/index.blade.php"})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if strings.Contains(resolved.Content, "REACT STACK") {
-		t.Fatalf("did not expect react stack for blade file, got %q", resolved.Content)
+	if strings.Contains(resolved.Content, "REACT STACK") || strings.Contains(resolved.Content, "GO STACK") {
+		t.Fatalf("did not expect unmatched stack prompts, got %q", resolved.Content)
 	}
 }
 
-func TestPromptResolverUsesCIForCodeIgniterAndCICDForWorkflows(t *testing.T) {
+func TestPromptResolverLoadsFrameworkSpecificStacks(t *testing.T) {
 	configPath := writePromptFixture(t, validConfigYAML())
 	resolver := NewPromptResolver(configPath)
 
-	codeIgniterPrompt, err := resolver.ResolvePartialPrompt(context.Background(), "Qualyagro", "legacy", []string{"app/Models/UserModel.php"})
+	codeIgniterPrompt, err := resolver.ResolvePartialPrompt(context.Background(), "AnyOwner", "legacy", []string{"app/Models/UserModel.php"})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-
 	if !strings.Contains(codeIgniterPrompt.Content, "CODEIGNITER STACK") ||
-		!strings.Contains(codeIgniterPrompt.Content, "CODEIGNITER MODELS") ||
+		!strings.Contains(codeIgniterPrompt.Content, "PHP STACK") ||
 		strings.Contains(codeIgniterPrompt.Content, "CICD STACK") {
-		t.Fatalf("expected CodeIgniter prompts only, got %q", codeIgniterPrompt.Content)
+		t.Fatalf("expected CodeIgniter and PHP prompts only, got %q", codeIgniterPrompt.Content)
 	}
 
-	workflowPrompt, err := resolver.ResolvePartialPrompt(context.Background(), "mvoikolesco", "teste-bot", []string{".gitea/workflows/deploy.yml"})
+	workflowPrompt, err := resolver.ResolvePartialPrompt(context.Background(), "AnyOwner", "any-repo", []string{".gitea/workflows/deploy.yml"})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-
 	if !strings.Contains(workflowPrompt.Content, "CICD STACK") ||
-		!strings.Contains(workflowPrompt.Content, "CICD WORKFLOWS") ||
 		strings.Contains(workflowPrompt.Content, "CODEIGNITER STACK") {
-		t.Fatalf("expected CICD prompts only, got %q", workflowPrompt.Content)
+		t.Fatalf("expected CICD prompt only, got %q", workflowPrompt.Content)
 	}
 }
 
-func TestPromptResolverShouldIncludeDocs(t *testing.T) {
+func TestPromptResolverUsesDefaultBasePromptsForAnyRepo(t *testing.T) {
 	configPath := writePromptFixture(t, validConfigYAML())
 	resolver := NewPromptResolver(configPath)
 
-	includeDocs, err := resolver.ShouldIncludeDocs(context.Background(), "Qualyagro", "portal")
+	partial, err := resolver.ResolvePartialPrompt(context.Background(), "Unknown", "repo", []string{"internal/app.go"})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if !includeDocs {
-		t.Fatal("expected project include_docs override")
+	if !strings.Contains(partial.Content, "BASE PARTIAL") || !strings.Contains(partial.Content, "GO STACK") {
+		t.Fatalf("expected base and Go prompts, got %q", partial.Content)
 	}
 
-	includeDocs, err = resolver.ShouldIncludeDocs(context.Background(), "unknown", "repo")
+	final, err := resolver.ResolveFinalPrompt(context.Background(), "Unknown", "repo")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if includeDocs {
-		t.Fatal("expected default include_docs false")
+	if final.Content != "BASE FINAL" {
+		t.Fatalf("expected base final prompt, got %q", final.Content)
 	}
 }
 
-func TestPromptResolverUsesProjectBasePromptOverrides(t *testing.T) {
+func TestPromptResolverResolvesGlobalBlockFilter(t *testing.T) {
 	configPath := writePromptFixture(t, validConfigYAML())
 	resolver := NewPromptResolver(configPath)
 
-	partial, err := resolver.ResolvePartialPrompt(context.Background(), "Acme", "custom", []string{"src/app.go"})
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if !strings.Contains(partial.Content, "CUSTOM PARTIAL") || strings.Contains(partial.Content, "BASE PARTIAL") {
-		t.Fatalf("expected custom partial prompt override, got %q", partial.Content)
-	}
-
-	final, err := resolver.ResolveFinalPrompt(context.Background(), "Acme", "custom")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if final.Content != "CUSTOM FINAL" {
-		t.Fatalf("expected custom final prompt override, got %q", final.Content)
-	}
-}
-
-func TestPromptResolverResolvesBlockFilter(t *testing.T) {
-	configPath := writePromptFixture(t, validConfigYAML())
-	resolver := NewPromptResolver(configPath)
-
-	filter, err := resolver.ResolveBlockFilter(context.Background(), "unknown", "repo")
+	filter, err := resolver.ResolveBlockFilter(context.Background(), "AnyOwner", "any-repo")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -141,23 +99,12 @@ func TestPromptResolverResolvesBlockFilter(t *testing.T) {
 		t.Fatal("expected default include_docs false")
 	}
 	if strings.Join(filter.IgnoreFilePatterns, ",") != "*.lock,dist/**" {
-		t.Fatalf("unexpected default ignore patterns %#v", filter.IgnoreFilePatterns)
+		t.Fatalf("unexpected ignore patterns %#v", filter.IgnoreFilePatterns)
 	}
 	if strings.Join(filter.DocFilePatterns, ",") != "*.md,docs/**" {
-		t.Fatalf("unexpected default doc patterns %#v", filter.DocFilePatterns)
+		t.Fatalf("unexpected doc patterns %#v", filter.DocFilePatterns)
 	}
-
-	filter, err = resolver.ResolveBlockFilter(context.Background(), "Acme", "custom")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if !filter.IncludeDocs {
-		t.Fatal("expected custom include_docs true")
-	}
-	if len(filter.IgnoreFilePatterns) != 0 {
-		t.Fatalf("expected custom project to clear ignore patterns, got %#v", filter.IgnoreFilePatterns)
-	}
-	if strings.Join(filter.ForceIncludeFilePatterns, ",") != ".gitea/workflows/*.yml" {
+	if strings.Join(filter.ForceIncludeFilePatterns, ",") != ".env.example" {
 		t.Fatalf("unexpected force include patterns %#v", filter.ForceIncludeFilePatterns)
 	}
 }
@@ -178,9 +125,18 @@ func TestPromptResolverReturnsInvalidYAMLError(t *testing.T) {
 func TestPromptResolverReturnsMissingPromptError(t *testing.T) {
 	configPath := writePromptFixture(t, strings.ReplaceAll(validConfigYAML(), "../prompts/base/review_partial.md", "../prompts/base/missing.md"))
 
-	_, err := NewPromptResolver(configPath).ResolvePartialPrompt(context.Background(), "unknown", "repo", []string{"internal/app.go"})
+	_, err := NewPromptResolver(configPath).ResolvePartialPrompt(context.Background(), "AnyOwner", "any-repo", []string{"internal/app.go"})
 	if err == nil || !strings.Contains(err.Error(), "erro ao ler prompt") {
 		t.Fatalf("expected missing prompt error, got %v", err)
+	}
+}
+
+func TestPromptResolverValidatesStackConfig(t *testing.T) {
+	configPath := writePromptFixture(t, strings.ReplaceAll(validConfigYAML(), "prompt: ../prompts/stacks/go.md", "prompt: "))
+
+	_, err := NewPromptResolver(configPath).Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "stacks.go.prompt nao pode estar vazio") {
+		t.Fatalf("expected invalid stack prompt error, got %v", err)
 	}
 }
 
@@ -192,8 +148,11 @@ func TestMatchFilePattern(t *testing.T) {
 		{"*.go", "internal/app.go"},
 		{"go.mod", "go.mod"},
 		{"database/migrations/*.php", "database/migrations/2026_01_01_create_users.php"},
+		{"app/**/*.php", "app/Services/OrderService.php"},
+		{"src/**/*.tsx", "src/components/Button.tsx"},
+		{"**/dist/**", "frontend/dist/app.js"},
 		{"Dockerfile", "Dockerfile"},
-		{".gitea/workflows/*.yml", ".gitea/workflows/deploy.yml"},
+		{".gitea/workflows/**/*.yml", ".gitea/workflows/deploy.yml"},
 	}
 
 	for _, tt := range tests {
@@ -208,19 +167,16 @@ func writePromptFixture(t *testing.T, configContent string) string {
 
 	dir := t.TempDir()
 	files := map[string]string{
-		"config/review-prompts.yaml":         configContent,
-		"prompts/base/review_partial.md":     "BASE PARTIAL",
-		"prompts/base/review_final.md":       "BASE FINAL",
-		"prompts/base/custom_partial.md":     "CUSTOM PARTIAL",
-		"prompts/base/custom_final.md":       "CUSTOM FINAL",
-		"prompts/stacks/go.md":               "GO STACK",
-		"prompts/stacks/laravel.md":          "LARAVEL STACK",
-		"prompts/stacks/laravel/services.md": "LARAVEL SERVICES",
-		"prompts/stacks/react.md":            "REACT STACK",
-		"prompts/stacks/ci.md":               "CODEIGNITER STACK",
-		"prompts/stacks/ci/models.md":        "CODEIGNITER MODELS",
-		"prompts/stacks/cicd.md":             "CICD STACK",
-		"prompts/stacks/cicd/workflows.md":   "CICD WORKFLOWS",
+		"config/review-prompts.yaml":       configContent,
+		"prompts/base/review_partial.md":   "BASE PARTIAL",
+		"prompts/base/review_final.md":     "BASE FINAL",
+		"prompts/stacks/go.md":             "GO STACK",
+		"prompts/stacks/laravel.md":        "LARAVEL STACK",
+		"prompts/stacks/php.md":            "PHP STACK",
+		"prompts/stacks/react.md":          "REACT STACK",
+		"prompts/stacks/codeigniter.md":    "CODEIGNITER STACK",
+		"prompts/stacks/cicd.md":           "CICD STACK",
+		"prompts/stacks/empty-patterns.md": "EMPTY PATTERNS",
 	}
 
 	for file, content := range files {
@@ -240,8 +196,6 @@ func validConfigYAML() string {
 	return `default:
   partial_prompt: ../prompts/base/review_partial.md
   final_prompt: ../prompts/base/review_final.md
-  stacks:
-    - go
   include_docs: false
   doc_file_patterns:
     - "*.md"
@@ -249,78 +203,40 @@ func validConfigYAML() string {
   ignore_file_patterns:
     - "*.lock"
     - "dist/**"
-
-projects:
-  teste-bot:
-    owner: mvoikolesco
-    repo: teste-bot
-    stacks:
-      - go
-      - cicd
-    include_docs: false
-
-  portal:
-    owner: Qualyagro
-    repo: portal
-    stacks:
-      - laravel
-      - react
-    include_docs: true
-
-  legacy:
-    owner: Qualyagro
-    repo: legacy
-    stacks:
-      - ci
-    include_docs: false
-
-  custom:
-    owner: Acme
-    repo: custom
-    partial_prompt: ../prompts/base/custom_partial.md
-    final_prompt: ../prompts/base/custom_final.md
-    stacks:
-      - go
-    include_docs: true
-    ignore_file_patterns: []
-    force_include_file_patterns:
-      - ".gitea/workflows/*.yml"
+  force_include_file_patterns:
+    - ".env.example"
 
 stacks:
+  codeigniter:
+    prompt: ../prompts/stacks/codeigniter.md
+    file_patterns:
+      - "app/Config/**/*.php"
+      - "app/Controllers/**/*.php"
+      - "app/Models/**/*.php"
   go:
     prompt: ../prompts/stacks/go.md
     file_patterns:
       - "*.go"
+      - "go.mod"
   laravel:
     prompt: ../prompts/stacks/laravel.md
     file_patterns:
+      - "artisan"
+      - "app/**/*.php"
+      - "routes/**/*.php"
+  php:
+    prompt: ../prompts/stacks/php.md
+    file_patterns:
       - "*.php"
-    categories:
-      services:
-        prompt: ../prompts/stacks/laravel/services.md
-        file_patterns:
-          - "app/Services/*.php"
+      - "composer.json"
   react:
     prompt: ../prompts/stacks/react.md
     file_patterns:
       - "*.tsx"
-  ci:
-    prompt: ../prompts/stacks/ci.md
-    file_patterns:
-      - "*.php"
-    categories:
-      models:
-        prompt: ../prompts/stacks/ci/models.md
-        file_patterns:
-          - "app/Models/*.php"
+      - "*.jsx"
   cicd:
     prompt: ../prompts/stacks/cicd.md
     file_patterns:
-      - ".gitea/workflows/*.yml"
-    categories:
-      workflows:
-        prompt: ../prompts/stacks/cicd/workflows.md
-        file_patterns:
-          - ".gitea/workflows/*.yml"
+      - ".gitea/workflows/**/*.yml"
 `
 }
