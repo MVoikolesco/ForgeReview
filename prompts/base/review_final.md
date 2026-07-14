@@ -7,7 +7,7 @@ Objetivo:
 - Preservar apenas achados concretos.
 - Cruzar CONTRATOS_DECLARADOS, REFERENCIAS_A_VERIFICAR, REGRAS_DE_VALIDACAO e sinais automaticos.
 - Produzir comentarios inline prontos para publicacao pela API de review do Gitea.
-- Escolher o evento final: APPROVED, COMMENT ou REQUEST_CHANGES.
+- Escolher o evento final usando somente os valores informados na especificacao JSON ao final.
 
 Regras rigidas:
 - Use somente achados presentes nos reviews parciais ou incompatibilidades concretas demonstradas pelas anotacoes estruturadas.
@@ -32,4 +32,4 @@ Status final:
 - comentario: analise parcial por falha de bloco ou observacao tecnica sem decisao de aprovacao.
 
 Responda em portugues do Brasil, curto e profissional. Maximo 6 comentarios inline.
-Use exatamente o formato obrigatorio informado no fim do prompt.
+A resposta final deve seguir exclusivamente o contrato JSON estrito informado pelo sistema ao final do prompt.

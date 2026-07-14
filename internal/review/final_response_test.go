@@ -1,10 +1,53 @@
 package review
 
 import (
+	"strings"
 	"testing"
 
 	"gitea-agents/internal/diff"
 )
+
+func TestValidateFinalReviewResponse(t *testing.T) {
+	valid := `{"comments":[{"file":"app/file.go","line":3,"severity":"media","decision_reason":"Regressao","comment":"Corrija o contrato."}],"final_review":{"gitea_event":"REQUEST_CHANGES","status":"reprovado","summary":"Ha um problema.","observations":"Bloco analisado."}}`
+	parsed, err := ValidateFinalReviewResponse(valid)
+	if err != nil || len(parsed.InlineComments) != 1 || parsed.InlineComments[0].NewPosition != 3 {
+		t.Fatalf("expected valid response, got %#v, %v", parsed, err)
+	}
+}
+
+func TestValidateFinalReviewResponseRejectsInvalidContracts(t *testing.T) {
+	base := `{"comments":[],"final_review":{"gitea_event":"COMMENT","status":"comentario","summary":"ok","observations":""}}`
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"invalid json", "{", "JSON invalido"},
+		{"text around json", "antes " + base, "JSON invalido"},
+		{"markdown", "```json\n" + base + "\n```", "JSON invalido"},
+		{"severity", strings.Replace(base, `"comments":[]`, `"comments":[{"file":"a","line":1,"severity":"critica","decision_reason":"x","comment":"x"}]`, 1), "severity nao permitida"},
+		{"status", strings.Replace(base, `"status":"comentario"`, `"status":"invalido"`, 1), "status nao permitido"},
+		{"event", strings.Replace(base, `"gitea_event":"COMMENT"`, `"gitea_event":"MERGE"`, 1), "gitea_event nao permitido"},
+		{"line type", strings.Replace(base, `"comments":[]`, `"comments":[{"file":"a","line":"1","severity":"baixa","decision_reason":"x","comment":"x"}]`, 1), "estrutura JSON invalida"},
+		{"missing field", strings.Replace(base, `,"observations":""`, "", 1), "final_review.observations ausente"},
+		{"unknown field", strings.Replace(base, `"comments":[]`, `"comments":[],"extra":true`, 1), "propriedades de primeiro nivel"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ValidateFinalReviewResponse(test.body)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestValidateFinalReviewResponseAcceptsEmptyComments(t *testing.T) {
+	_, err := ValidateFinalReviewResponse(`{"comments":[],"final_review":{"gitea_event":"APPROVED","status":"aprovado","summary":"Sem problemas.","observations":""}}`)
+	if err != nil {
+		t.Fatalf("expected empty comments to be valid: %v", err)
+	}
+}
 
 func TestParseFinalReviewResponse(t *testing.T) {
 	content := `COMENTARIOS_INLINE:

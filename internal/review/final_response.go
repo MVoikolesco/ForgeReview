@@ -25,13 +25,13 @@ type FinalReview struct {
 }
 
 type InlineComment struct {
-	Severity        string
-	Path            string
-	NewPosition     int
-	Reference       string
-	Title           string
-	Body            string
-	DecisionReason  string
+	Severity       string
+	Path           string
+	NewPosition    int
+	Reference      string
+	Title          string
+	Body           string
+	DecisionReason string
 }
 
 func ParseFinalReviewResponse(content string) FinalReview {
@@ -180,6 +180,9 @@ func ResolveFinalReviewCommentPositions(finalReview FinalReview, files []diff.Ch
 	for index := range finalReview.InlineComments {
 		comment := &finalReview.InlineComments[index]
 		if comment.Path == "" || comment.Reference == "" {
+			if comment.Reference == "" && comment.NewPosition > 0 {
+				continue
+			}
 			comment.NewPosition = 0
 			continue
 		}

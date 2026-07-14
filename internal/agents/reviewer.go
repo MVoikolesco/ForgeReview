@@ -300,24 +300,24 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 	if ollamaStartedAt.IsZero() {
 		ollamaStartedAt = finalStartedAt
 	}
-	finalReview, err := a.ollamaClient.Chat(ctx, finalPrompt)
+	finalResponse, finalReview, err := a.requestValidatedFinalReview(ctx, finalPrompt, runLog)
 	finalDuration := time.Since(finalStartedAt).Round(time.Millisecond)
 	finalTotalElapsed := time.Since(ollamaStartedAt).Round(time.Millisecond)
 	if err != nil {
-		return fmt.Errorf("erro ao consolidar review com ollama: %w", err)
-	}
-
-	if _, err := runLog.Write("final-resposta.log", formatFinalResponseLog(finalReview, finalDuration, finalTotalElapsed, len(partialReviews), failedBlocks)); err != nil {
 		return err
 	}
 
-	a.logger.Printf("review final gerado chars=%d duration=%s total_elapsed=%s", len(finalReview), finalDuration, finalTotalElapsed)
-	if err := runLog.AppendProcess("review final gerado chars=%d duration=%s total_elapsed=%s failed_blocks=%d", len(finalReview), finalDuration, finalTotalElapsed, failedBlocks); err != nil {
+	if _, err := runLog.Write("final-resposta.log", formatFinalResponseLog(finalResponse, finalDuration, finalTotalElapsed, len(partialReviews), failedBlocks)); err != nil {
 		return err
 	}
-	a.logger.Printf("review final:\n%s", finalReview)
 
-	parsedFinalReview := review.ParseFinalReviewResponse(finalReview)
+	a.logger.Printf("review final gerado chars=%d duration=%s total_elapsed=%s", len(finalResponse), finalDuration, finalTotalElapsed)
+	if err := runLog.AppendProcess("review final gerado chars=%d duration=%s total_elapsed=%s failed_blocks=%d", len(finalResponse), finalDuration, finalTotalElapsed, failedBlocks); err != nil {
+		return err
+	}
+	a.logger.Printf("review final:\n%s", finalResponse)
+
+	parsedFinalReview := finalReview
 	parsedFinalReview = review.ResolveFinalReviewCommentPositions(parsedFinalReview, files)
 	createReviewOptions := buildCreatePullReviewOptions(parsedFinalReview)
 	createdReview, err := a.giteaClient.CreatePullRequestReview(ctx, job.Owner, job.Repo, job.PRNumber, createReviewOptions)
@@ -333,6 +333,32 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 	}
 
 	return nil
+}
+
+func (a *ReviewerAgent) requestValidatedFinalReview(ctx context.Context, prompt string, runLog *reviewRunLog) (string, review.FinalReview, error) {
+	currentPrompt := prompt
+	var validationErrors []string
+	for attempt := 1; attempt <= 3; attempt++ {
+		response, err := a.ollamaClient.Chat(ctx, currentPrompt)
+		if err != nil {
+			return "", review.FinalReview{}, fmt.Errorf("erro ao consolidar review com ollama: %w", err)
+		}
+		parsed, validationErr := review.ValidateFinalReviewResponse(response)
+		if validationErr == nil {
+			return response, parsed, nil
+		}
+
+		validationErrors = append(validationErrors, validationErr.Error())
+		if appendErr := runLog.AppendProcess("resposta final invalida tentativa=%d de 3 erros=%s", attempt, validationErr.Error()); appendErr != nil {
+			return "", review.FinalReview{}, appendErr
+		}
+		if attempt == 3 {
+			break
+		}
+		currentPrompt = prompt + "\n\nCORRECAO OBRIGATORIA DA TENTATIVA ANTERIOR:\nA ultima resposta nao veio no padrao obrigatorio. Refaça a resposta completa e retorne exclusivamente um objeto JSON valido, sem Markdown e sem qualquer texto antes ou depois. Preserve exatamente as propriedades comments e final_review, incluindo todos os campos obrigatorios. Utilize somente os valores de severidade, status e evento definidos pelo projeto. Erros detectados: " + validationErr.Error()
+	}
+
+	return "", review.FinalReview{}, fmt.Errorf("review final invalido apos 3 tentativas: %s", strings.Join(validationErrors, " | "))
 }
 
 func buildCreatePullReviewOptions(finalReview review.FinalReview) gitea.CreatePullReviewOptions {
