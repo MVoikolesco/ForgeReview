@@ -398,7 +398,7 @@ func TestReviewerAgentStopsAfterThreeInvalidFinalResponses(t *testing.T) {
 	client := &fakeOllamaClient{responses: []string{"partial", "x", "y", "z"}}
 	giteaClient := &fakeGiteaClient{diff: sampleDiff()}
 	agent := NewReviewerAgent(log.New(&bytes.Buffer{}, "", 0), giteaClient, client, ReviewerOptions{
-		DiffLogDir: t.TempDir(), MaxBlockChars: 4000, MaxFilesPerBlock: 2, ReviewPromptConfigPath: testPromptConfigPath(),
+		DiffLogDir: t.TempDir(), MaxBlockChars: 4000, MaxFilesPerBlock: 2, ReviewFinalRetries: 3, ReviewPromptConfigPath: testPromptConfigPath(),
 	})
 	err := agent.Process(context.Background(), queue.ReviewJob{Owner: "o", Repo: "r", PRNumber: 1})
 	if err == nil || !strings.Contains(err.Error(), "apos 3 tentativas") {

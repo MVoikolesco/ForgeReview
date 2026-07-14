@@ -108,6 +108,23 @@ func TestParseFinalReviewResponseFallsBackForPlainText(t *testing.T) {
 	}
 }
 
+func TestReviewBodyIncludesMetadataHeader(t *testing.T) {
+	review := FinalReview{
+		Summary: "Resumo do review.",
+		Metadata: ReviewMetadata{
+			Model:            "gemma4:31b-cloud",
+			Elapsed:          "14.708s",
+			PromptTokens:     123,
+			CompletionTokens: 45,
+		},
+	}
+
+	expected := "> elapsed time: 14.708s\n> model: gemma4:31b-cloud\n> tokens: 168 (prompt: 123, completion: 45)\n\nResumo do review."
+	if got := review.ReviewBody(); got != expected {
+		t.Fatalf("unexpected body %q", got)
+	}
+}
+
 func TestResolveFinalReviewCommentPositions(t *testing.T) {
 	files := diff.Parse(`diff --git a/app/Controllers/Oracle/OracleAccess.php b/app/Controllers/Oracle/OracleAccess.php
 index 7bc9fb4..bf1b437 100644

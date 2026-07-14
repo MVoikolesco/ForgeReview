@@ -22,6 +22,14 @@ type FinalReview struct {
 	Observations   string
 	Raw            string
 	Structured     bool
+	Metadata       ReviewMetadata
+}
+
+type ReviewMetadata struct {
+	Model            string
+	Elapsed          string
+	PromptTokens     int
+	CompletionTokens int
 }
 
 type InlineComment struct {
@@ -122,6 +130,19 @@ func ParseFinalReviewResponse(content string) FinalReview {
 
 func (r FinalReview) ReviewBody() string {
 	var builder strings.Builder
+	if r.Metadata.Model != "" || r.Metadata.Elapsed != "" {
+		builder.WriteString("> elapsed time: ")
+		builder.WriteString(r.Metadata.Elapsed)
+		builder.WriteString("\n> model: ")
+		builder.WriteString(r.Metadata.Model)
+		builder.WriteString("\n> tokens: ")
+		builder.WriteString(strconv.Itoa(r.Metadata.PromptTokens + r.Metadata.CompletionTokens))
+		builder.WriteString(" (prompt: ")
+		builder.WriteString(strconv.Itoa(r.Metadata.PromptTokens))
+		builder.WriteString(", completion: ")
+		builder.WriteString(strconv.Itoa(r.Metadata.CompletionTokens))
+		builder.WriteString(")\n\n")
+	}
 	if r.Summary != "" {
 		builder.WriteString(r.Summary)
 	}

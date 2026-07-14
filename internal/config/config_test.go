@@ -20,6 +20,7 @@ func TestLoadUsesLightweightDefaults(t *testing.T) {
 	t.Setenv("REVIEW_MAX_BLOCK_CHARS", "")
 	t.Setenv("REVIEW_MAX_DIFF_CHARS", "")
 	t.Setenv("REVIEW_MAX_FILES_PER_BLOCK", "")
+	t.Setenv("REVIEW_FINAL_RETRIES", "")
 	t.Setenv("REVIEW_PROMPT_CONFIG_PATH", "")
 
 	cfg := Load()
@@ -42,6 +43,10 @@ func TestLoadUsesLightweightDefaults(t *testing.T) {
 
 	if cfg.ReviewMaxFilesPerBlock != 2 {
 		t.Fatalf("expected default max files per block 2, got %d", cfg.ReviewMaxFilesPerBlock)
+	}
+
+	if cfg.ReviewFinalRetries != 5 {
+		t.Fatalf("expected default final retries 5, got %d", cfg.ReviewFinalRetries)
 	}
 
 	if cfg.ReviewPromptConfigPath != "./config/review-prompts.yaml" {
@@ -67,6 +72,16 @@ func TestLoadReadsOllamaTimeoutSeconds(t *testing.T) {
 
 	if cfg.OllamaTimeoutSeconds != 321 {
 		t.Fatalf("expected configured timeout, got %d", cfg.OllamaTimeoutSeconds)
+	}
+}
+
+func TestLoadReadsReviewFinalRetries(t *testing.T) {
+	t.Setenv("REVIEW_FINAL_RETRIES", "7")
+
+	cfg := Load()
+
+	if cfg.ReviewFinalRetries != 7 {
+		t.Fatalf("expected configured final retries, got %d", cfg.ReviewFinalRetries)
 	}
 }
 

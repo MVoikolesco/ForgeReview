@@ -38,6 +38,7 @@ type Config struct {
 	ReviewMaxBlockChars    int
 	ReviewMaxFilesPerBlock int
 	ReviewConcurrency      int
+	ReviewFinalRetries     int
 }
 
 func Load() Config {
@@ -75,6 +76,7 @@ func Load() Config {
 		ReviewMaxBlockChars:    reviewMaxBlockChars,
 		ReviewMaxFilesPerBlock: getEnvPositiveInt("REVIEW_MAX_FILES_PER_BLOCK", 2),
 		ReviewConcurrency:      getEnvPositiveInt("REVIEW_CONCURRENCY", 1),
+		ReviewFinalRetries:     getEnvPositiveInt("REVIEW_FINAL_RETRIES", 5),
 	}
 }
 
@@ -97,6 +99,10 @@ func (c Config) Validate() error {
 
 	if c.ReviewConcurrency <= 0 {
 		return fmt.Errorf("REVIEW_CONCURRENCY deve ser maior que 0")
+	}
+
+	if c.ReviewFinalRetries <= 0 {
+		return fmt.Errorf("REVIEW_FINAL_RETRIES deve ser maior que 0")
 	}
 
 	if c.OllamaTimeoutSeconds <= 0 {

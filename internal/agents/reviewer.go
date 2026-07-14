@@ -10,6 +10,7 @@ import (
 
 	"gitea-agents/internal/diff"
 	"gitea-agents/internal/gitea"
+	"gitea-agents/internal/ollama"
 	"gitea-agents/internal/queue"
 	"gitea-agents/internal/review"
 	"gitea-agents/internal/review/promptconfig"
@@ -28,12 +29,17 @@ type OllamaClient interface {
 	Model() string
 }
 
+type ollamaMetadataClient interface {
+	ChatWithMetadata(ctx context.Context, prompt string) (ollama.ChatResult, error)
+}
+
 type ReviewerOptions struct {
 	DiffLogDir             string
 	MaxBlockChars          int
 	MaxFilesPerBlock       int
 	ReviewConcurrency      int
 	OllamaTimeoutSeconds   int
+	ReviewFinalRetries     int
 	ReviewPromptConfigPath string
 }
 
@@ -63,6 +69,9 @@ func NewReviewerAgent(logger *log.Logger, giteaClient GiteaClient, ollamaClient 
 
 	if options.OllamaTimeoutSeconds <= 0 {
 		options.OllamaTimeoutSeconds = 900
+	}
+	if options.ReviewFinalRetries <= 0 {
+		options.ReviewFinalRetries = 5
 	}
 	if options.ReviewPromptConfigPath == "" {
 		options.ReviewPromptConfigPath = "./config/review-prompts.yaml"
@@ -183,6 +192,7 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 	successfulBlocks := 0
 	var blockErrors []error
 	var ollamaStartedAt time.Time
+	var totalUsage ollama.ChatResult
 	for _, block := range blocks {
 		if err := ctx.Err(); err != nil {
 			a.logger.Printf("review cancelado antes de enviar bloco para ollama block=%d total=%d err=%v", block.Index, block.Total, err)
@@ -218,7 +228,7 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 				return err
 			}
 		}
-		result, err := a.ollamaClient.Chat(ctx, prompt)
+		result, usage, err := a.chatWithMetadata(ctx, prompt)
 		duration := time.Since(startedAt).Round(time.Millisecond)
 		totalElapsed := time.Since(ollamaStartedAt).Round(time.Millisecond)
 		if err != nil {
@@ -251,6 +261,8 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 			})
 			continue
 		}
+		totalUsage.PromptTokens += usage.PromptTokens
+		totalUsage.CompletionTokens += usage.CompletionTokens
 
 		if _, err := runLog.Write(fmt.Sprintf("block-%03d-resposta.log", block.Index), formatBlockResponseLog(block, result, duration, totalElapsed)); err != nil {
 			return err
@@ -300,11 +312,19 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 	if ollamaStartedAt.IsZero() {
 		ollamaStartedAt = finalStartedAt
 	}
-	finalResponse, finalReview, err := a.requestValidatedFinalReview(ctx, finalPrompt, runLog)
+	finalResponse, finalReview, finalUsage, err := a.requestValidatedFinalReview(ctx, finalPrompt, runLog)
 	finalDuration := time.Since(finalStartedAt).Round(time.Millisecond)
 	finalTotalElapsed := time.Since(ollamaStartedAt).Round(time.Millisecond)
 	if err != nil {
 		return err
+	}
+	totalUsage.PromptTokens += finalUsage.PromptTokens
+	totalUsage.CompletionTokens += finalUsage.CompletionTokens
+	finalReview.Metadata = review.ReviewMetadata{
+		Model:            a.ollamaClient.Model(),
+		Elapsed:          finalTotalElapsed.String(),
+		PromptTokens:     totalUsage.PromptTokens,
+		CompletionTokens: totalUsage.CompletionTokens,
 	}
 
 	if _, err := runLog.Write("final-resposta.log", formatFinalResponseLog(finalResponse, finalDuration, finalTotalElapsed, len(partialReviews), failedBlocks)); err != nil {
@@ -335,30 +355,39 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 	return nil
 }
 
-func (a *ReviewerAgent) requestValidatedFinalReview(ctx context.Context, prompt string, runLog *reviewRunLog) (string, review.FinalReview, error) {
+func (a *ReviewerAgent) requestValidatedFinalReview(ctx context.Context, prompt string, runLog *reviewRunLog) (string, review.FinalReview, ollama.ChatResult, error) {
 	currentPrompt := prompt
 	var validationErrors []string
-	for attempt := 1; attempt <= 3; attempt++ {
-		response, err := a.ollamaClient.Chat(ctx, currentPrompt)
+	for attempt := 1; attempt <= a.options.ReviewFinalRetries; attempt++ {
+		response, usage, err := a.chatWithMetadata(ctx, currentPrompt)
 		if err != nil {
-			return "", review.FinalReview{}, fmt.Errorf("erro ao consolidar review com ollama: %w", err)
+			return "", review.FinalReview{}, ollama.ChatResult{}, fmt.Errorf("erro ao consolidar review com ollama: %w", err)
 		}
 		parsed, validationErr := review.ValidateFinalReviewResponse(response)
 		if validationErr == nil {
-			return response, parsed, nil
+			return response, parsed, usage, nil
 		}
 
 		validationErrors = append(validationErrors, validationErr.Error())
-		if appendErr := runLog.AppendProcess("resposta final invalida tentativa=%d de 3 erros=%s", attempt, validationErr.Error()); appendErr != nil {
-			return "", review.FinalReview{}, appendErr
+		if appendErr := runLog.AppendProcess("resposta final invalida tentativa=%d de %d erros=%s", attempt, a.options.ReviewFinalRetries, validationErr.Error()); appendErr != nil {
+			return "", review.FinalReview{}, ollama.ChatResult{}, appendErr
 		}
-		if attempt == 3 {
+		if attempt == a.options.ReviewFinalRetries {
 			break
 		}
 		currentPrompt = prompt + "\n\nCORRECAO OBRIGATORIA DA TENTATIVA ANTERIOR:\nA ultima resposta nao veio no padrao obrigatorio. Refaça a resposta completa e retorne exclusivamente um objeto JSON valido, sem Markdown e sem qualquer texto antes ou depois. Preserve exatamente as propriedades comments e final_review, incluindo todos os campos obrigatorios. Utilize somente os valores de severidade, status e evento definidos pelo projeto. Erros detectados: " + validationErr.Error()
 	}
 
-	return "", review.FinalReview{}, fmt.Errorf("review final invalido apos 3 tentativas: %s", strings.Join(validationErrors, " | "))
+	return "", review.FinalReview{}, ollama.ChatResult{}, fmt.Errorf("review final invalido apos %d tentativas: %s", a.options.ReviewFinalRetries, strings.Join(validationErrors, " | "))
+}
+
+func (a *ReviewerAgent) chatWithMetadata(ctx context.Context, prompt string) (string, ollama.ChatResult, error) {
+	if client, ok := a.ollamaClient.(ollamaMetadataClient); ok {
+		result, err := client.ChatWithMetadata(ctx, prompt)
+		return result.Content, result, err
+	}
+	content, err := a.ollamaClient.Chat(ctx, prompt)
+	return content, ollama.ChatResult{Content: content}, err
 }
 
 func buildCreatePullReviewOptions(finalReview review.FinalReview) gitea.CreatePullReviewOptions {
