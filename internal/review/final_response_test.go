@@ -110,6 +110,7 @@ func TestParseFinalReviewResponseFallsBackForPlainText(t *testing.T) {
 
 func TestReviewBodyIncludesMetadataHeader(t *testing.T) {
 	review := FinalReview{
+		Status:  "aprovado",
 		Summary: "Resumo do review.",
 		Metadata: ReviewMetadata{
 			Model:            "gemma4:31b-cloud",
@@ -119,7 +120,7 @@ func TestReviewBodyIncludesMetadataHeader(t *testing.T) {
 		},
 	}
 
-	expected := "> elapsed time: 14.708s\n> model: gemma4:31b-cloud\n> tokens: 168 (prompt: 123, completion: 45)\n\nResumo do review."
+	expected := "> status: aprovado\n> elapsed time: 14.708s\n> model: gemma4:31b-cloud\n> tokens: 168 (prompt: 123, completion: 45)\n\nResumo do review."
 	if got := review.ReviewBody(); got != expected {
 		t.Fatalf("unexpected body %q", got)
 	}

@@ -95,6 +95,36 @@ func TestLoadReadsReviewPromptConfigPath(t *testing.T) {
 	}
 }
 
+func TestLoadReadsReviewPublishManualReviews(t *testing.T) {
+	t.Setenv("REVIEW_PUBLISH_MANUAL_REVIEWS", "true")
+
+	cfg := Load()
+
+	if !cfg.ReviewPublishManual {
+		t.Fatal("expected manual review publishing to be enabled")
+	}
+}
+
+func TestLoadUsesSafeDefaultForInvalidReviewPublishManualReviews(t *testing.T) {
+	t.Setenv("REVIEW_PUBLISH_MANUAL_REVIEWS", "invalid")
+
+	cfg := Load()
+
+	if cfg.ReviewPublishManual {
+		t.Fatal("expected invalid manual review publishing flag to default to false")
+	}
+}
+
+func TestLoadReadsReviewAllowAutonomousRejection(t *testing.T) {
+	t.Setenv("REVIEW_ALLOW_AUTONOMOUS_REJECTION", "true")
+
+	cfg := Load()
+
+	if !cfg.ReviewAllowRejection {
+		t.Fatal("expected autonomous rejection to be enabled")
+	}
+}
+
 func TestLoadUsesDefaultsForInvalidPositiveIntegers(t *testing.T) {
 	t.Setenv("OLLAMA_TIMEOUT_SECONDS", "invalid")
 	t.Setenv("OLLAMA_NUM_PREDICT", "-1")
