@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +42,8 @@ type ReviewerOptions struct {
 	OllamaTimeoutSeconds   int
 	ReviewFinalRetries     int
 	ReviewPromptConfigPath string
+	PublishManualReviews   bool
+	AllowAutonomousReject  bool
 }
 
 type ReviewerAgent struct {
@@ -181,6 +184,11 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 		finalReview := "Nenhum arquivo revisavel encontrado no diff."
 		if _, err := runLog.Write("final-resposta.log", finalReview); err != nil {
 			return err
+		}
+		if job.Manual && !a.options.PublishManualReviews {
+			if _, err := runLog.Write("final-review.md", finalReview); err != nil {
+				return err
+			}
 		}
 		a.logger.Printf("review final gerado chars=%d", len(finalReview))
 		a.logger.Printf("review final:\n%s", finalReview)
@@ -339,7 +347,14 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 
 	parsedFinalReview := finalReview
 	parsedFinalReview = review.ResolveFinalReviewCommentPositions(parsedFinalReview, files)
-	createReviewOptions := buildCreatePullReviewOptions(parsedFinalReview)
+	if job.Manual && !a.options.PublishManualReviews {
+		if _, err := runLog.Write("final-review.md", formatManualReviewMarkdown(parsedFinalReview)); err != nil {
+			return err
+		}
+		a.logger.Printf("review manual salvo sem publicar no gitea dir=%s", runLog.Dir())
+		return nil
+	}
+	createReviewOptions := buildCreatePullReviewOptions(parsedFinalReview, a.options.AllowAutonomousReject)
 	createdReview, err := a.giteaClient.CreatePullRequestReview(ctx, job.Owner, job.Repo, job.PRNumber, createReviewOptions)
 	if err != nil {
 		if appendErr := runLog.AppendProcess("erro ao publicar review no gitea event=%s comments=%d err=%v", createReviewOptions.Event, len(createReviewOptions.Comments), err); appendErr != nil {
@@ -353,6 +368,39 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 	}
 
 	return nil
+}
+
+func formatManualReviewMarkdown(finalReview review.FinalReview) string {
+	var builder strings.Builder
+	builder.WriteString("# Review final\n\n")
+	builder.WriteString("- **Status:** ")
+	builder.WriteString(finalReview.Status)
+	builder.WriteString("\n- **Evento Gitea:** ")
+	builder.WriteString(finalReview.Event)
+	builder.WriteString("\n\n")
+	builder.WriteString(finalReview.ReviewBody())
+
+	if len(finalReview.InlineComments) > 0 {
+		builder.WriteString("\n\n## Comentarios inline\n")
+		for _, comment := range finalReview.InlineComments {
+			builder.WriteString("\n### ")
+			builder.WriteString(comment.Path)
+			if comment.NewPosition > 0 {
+				builder.WriteString(":")
+				builder.WriteString(strconv.Itoa(comment.NewPosition))
+			}
+			builder.WriteString("\n\n")
+			if comment.Severity != "" {
+				builder.WriteString("**Severidade:** ")
+				builder.WriteString(comment.Severity)
+				builder.WriteString("\n\n")
+			}
+			builder.WriteString(comment.Body)
+			builder.WriteString("\n")
+		}
+	}
+
+	return strings.TrimSpace(builder.String()) + "\n"
 }
 
 func (a *ReviewerAgent) requestValidatedFinalReview(ctx context.Context, prompt string, runLog *reviewRunLog) (string, review.FinalReview, ollama.ChatResult, error) {
@@ -390,8 +438,11 @@ func (a *ReviewerAgent) chatWithMetadata(ctx context.Context, prompt string) (st
 	return content, ollama.ChatResult{Content: content}, err
 }
 
-func buildCreatePullReviewOptions(finalReview review.FinalReview) gitea.CreatePullReviewOptions {
+func buildCreatePullReviewOptions(finalReview review.FinalReview, allowAutonomousReject bool) gitea.CreatePullReviewOptions {
 	event := finalReview.Event
+	if !allowAutonomousReject && (event == review.GiteaEventApproved || event == review.GiteaEventRequestChanges) {
+		event = review.GiteaEventComment
+	}
 	if event == review.GiteaEventRequestChanges && !hasBlockingComment(finalReview.InlineComments) {
 		event = review.GiteaEventComment
 	}

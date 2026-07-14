@@ -130,6 +130,11 @@ func ParseFinalReviewResponse(content string) FinalReview {
 
 func (r FinalReview) ReviewBody() string {
 	var builder strings.Builder
+	if r.Status != "" {
+		builder.WriteString("> status: ")
+		builder.WriteString(r.Status)
+		builder.WriteString("\n")
+	}
 	if r.Metadata.Model != "" || r.Metadata.Elapsed != "" {
 		builder.WriteString("> elapsed time: ")
 		builder.WriteString(r.Metadata.Elapsed)
