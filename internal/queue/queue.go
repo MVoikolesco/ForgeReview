@@ -8,6 +8,7 @@ type ReviewJob struct {
 	PRNumber          int
 	RequestedReviewer string
 	Sender            string
+	Manual            bool
 }
 
 type Publisher interface {

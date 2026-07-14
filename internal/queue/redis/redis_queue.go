@@ -64,6 +64,7 @@ func (q *Queue) Publish(ctx context.Context, job queue.ReviewJob) error {
 			"pr_number":          job.PRNumber,
 			"requested_reviewer": job.RequestedReviewer,
 			"sender":             job.Sender,
+			"manual":             job.Manual,
 		},
 	}).Result()
 
@@ -124,6 +125,7 @@ func decodeJob(values map[string]any) (queue.ReviewJob, error) {
 		PRNumber:          prNumber,
 		RequestedReviewer: valueAsString(values["requested_reviewer"]),
 		Sender:            valueAsString(values["sender"]),
+		Manual:            valueAsBool(values["manual"]),
 	}, nil
 }
 
@@ -133,6 +135,11 @@ func valueAsString(value any) string {
 	}
 
 	return fmt.Sprint(value)
+}
+
+func valueAsBool(value any) bool {
+	parsed, err := strconv.ParseBool(valueAsString(value))
+	return err == nil && parsed
 }
 
 func isBusyGroupError(err error) bool {
