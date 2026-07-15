@@ -105,6 +105,18 @@ http://localhost:8088
 
 O worker fica em outro container e consome os jobs da fila Redis. Os logs de diffs, prompts e respostas ficam em `logs/diffs/`.
 
+Para iniciar um review manualmente, envie a URL do Pull Request para a mesma API. O job entra na fila e segue exatamente o mesmo fluxo do webhook:
+
+```sh
+curl -X POST http://localhost:8088/review \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://gitea.example/Qualyagro/Oracle-APP/pulls/283"}'
+```
+
+A API responde `202 Accepted`; o worker busca o diff, executa o review e salva o resultado em `final-review.md`. Por padrao, reviews manuais nao publicam comentarios no Pull Request; para habilitar a publicacao, use `REVIEW_PUBLISH_MANUAL_REVIEWS=true` no `.env`.
+
+Por seguranca, `REVIEW_ALLOW_AUTONOMOUS_REJECTION=false` por padrao. Assim, reviews que indicariam aprovacao ou rejeicao sao publicados como comentario (`COMMENT`), sem alterar o status do Pull Request, preservando o corpo, os comentarios e as marcacoes de linha. O corpo publicado informa o status (`aprovado`, `aprovado_com_observacao` ou `reprovado`), o modelo utilizado, tokens consumidos e o tempo decorrido. Para permitir decisoes automaticas, defina essa flag como `true`.
+
 ## Como Contribuir
 
 Veja as orientacoes em [CONTRIBUTING.md](CONTRIBUTING.md).

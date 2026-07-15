@@ -38,6 +38,9 @@ type Config struct {
 	ReviewMaxBlockChars    int
 	ReviewMaxFilesPerBlock int
 	ReviewConcurrency      int
+	ReviewFinalRetries     int
+	ReviewPublishManual    bool
+	ReviewAllowRejection   bool
 }
 
 func Load() Config {
@@ -75,6 +78,9 @@ func Load() Config {
 		ReviewMaxBlockChars:    reviewMaxBlockChars,
 		ReviewMaxFilesPerBlock: getEnvPositiveInt("REVIEW_MAX_FILES_PER_BLOCK", 2),
 		ReviewConcurrency:      getEnvPositiveInt("REVIEW_CONCURRENCY", 1),
+		ReviewFinalRetries:     getEnvPositiveInt("REVIEW_FINAL_RETRIES", 5),
+		ReviewPublishManual:    getEnvBool("REVIEW_PUBLISH_MANUAL_REVIEWS", false),
+		ReviewAllowRejection:   getEnvBool("REVIEW_ALLOW_AUTONOMOUS_REJECTION", false),
 	}
 }
 
@@ -97,6 +103,10 @@ func (c Config) Validate() error {
 
 	if c.ReviewConcurrency <= 0 {
 		return fmt.Errorf("REVIEW_CONCURRENCY deve ser maior que 0")
+	}
+
+	if c.ReviewFinalRetries <= 0 {
+		return fmt.Errorf("REVIEW_FINAL_RETRIES deve ser maior que 0")
 	}
 
 	if c.OllamaTimeoutSeconds <= 0 {
@@ -156,6 +166,20 @@ func getEnvFloat(key string, fallback float64) float64 {
 	}
 
 	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return fallback
+	}
+
+	return parsed
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseBool(value)
 	if err != nil {
 		return fallback
 	}

@@ -47,14 +47,16 @@ Use REFERENCIAS_A_VERIFICAR para chamadas, imports, props obrigatorias, configs,
 Use REGRAS_DE_VALIDACAO para campos obrigatorios, defaults, permissoes, sanitizacao e regras que possam divergir entre camadas; quando houver mudanca, escreva antes => depois.
 Nao reprove por uma referencia que ainda depende de outro arquivo; registre a pendencia para cruzamento final.`
 
-const finalResponseTemplate = `Responda agora somente com este modelo, sem cabecalho extra:
-COMENTARIOS_INLINE:
-- nenhum
-REVISAO_FINAL:
-  EVENTO_GITEA: APPROVED|REQUEST_CHANGES|COMMENT
-  STATUS: aprovado|aprovado_com_observacao|reprovado|comentario
-  RESUMO: ate 2 frases objetivas
-  OBSERVACOES: todos os blocos analisados`
+func finalResponseTemplate() string {
+	return fmt.Sprintf(`A ultima resposta deve conter exclusivamente um objeto JSON valido, sem Markdown, sem bloco de codigo e sem texto antes ou depois.
+Valide internamente a estrutura antes de responder e use um parser JSON estrito.
+As propriedades de primeiro nivel devem ser exatamente comments e final_review; rejeite qualquer propriedade desconhecida.
+Todos os campos abaixo sao obrigatorios. comments deve ser um array, inclusive quando nao houver problemas.
+Schema esperado:
+{"comments":[{"file":"string nao vazia","line":"inteiro positivo","severity":"%s","decision_reason":"string nao vazia","comment":"string nao vazia"}],"final_review":{"gitea_event":"%s","status":"%s","summary":"string nao vazia","observations":"string"}}
+Use somente os valores listados de severity, status e gitea_event. Retorne a resposta completa.`,
+		strings.Join(AllowedSeverities(), "|"), strings.Join(AllowedGiteaEvents(), "|"), strings.Join(AllowedStatuses(), "|"))
+}
 
 func BuildPartialReviewPrompt(block ReviewBlock, resolvedPrompt string) string {
 	return BuildPartialReviewPromptWithMemory(block, resolvedPrompt, nil)
@@ -235,7 +237,7 @@ func BuildFinalReviewPrompt(reviews []PartialReview, resolvedPrompt string) stri
 	}
 
 	builder.WriteString("\n")
-	builder.WriteString(finalResponseTemplate)
+	builder.WriteString(finalResponseTemplate())
 	builder.WriteByte('\n')
 
 	return builder.String()

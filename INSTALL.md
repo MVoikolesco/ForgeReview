@@ -32,6 +32,8 @@ REVIEW_MAX_BLOCK_CHARS=4000
 REVIEW_MAX_FILES_PER_BLOCK=2
 REVIEW_CONCURRENCY=1
 OLLAMA_TIMEOUT_SECONDS=900
+REVIEW_PUBLISH_MANUAL_REVIEWS=false
+REVIEW_ALLOW_AUTONOMOUS_REJECTION=false
 ```
 
 ### Variaveis do .env
@@ -67,6 +69,8 @@ OLLAMA_TIMEOUT_SECONDS=900
 | `REVIEW_MAX_BLOCK_CHARS` | Tamanho maximo aproximado de cada bloco de diff enviado ao modelo. |
 | `REVIEW_MAX_FILES_PER_BLOCK` | Quantidade maxima de arquivos por bloco. |
 | `REVIEW_CONCURRENCY` | Mantenha `1`. Campo reservado para paralelismo de agentes/reviews, ainda em desenvolvimento. |
+| `REVIEW_PUBLISH_MANUAL_REVIEWS` | Publica no Gitea os reviews solicitados pelo endpoint manual `/review`. Padrao `false`; o fluxo de webhook continua publicando normalmente. |
+| `REVIEW_ALLOW_AUTONOMOUS_REJECTION` | Permite que o bot publique `APPROVED` ou `REQUEST_CHANGES` quando o review indicar isso. Padrao `false`; nesse caso o resultado e publicado como `COMMENT`, preservando o status, o corpo e os comentarios inline. |
 
 ### Sobre REVIEW_CONCURRENCY
 

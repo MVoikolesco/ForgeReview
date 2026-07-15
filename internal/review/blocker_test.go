@@ -269,8 +269,8 @@ REGRAS_DE_VALIDACAO:
 		!strings.Contains(finalPrompt, "## Veredito") ||
 		!strings.Contains(finalPrompt, "Memoria tecnica consolidada para cruzamento") ||
 		!strings.Contains(finalPrompt, "UserService.teteMethod") ||
-		!strings.Contains(finalPrompt, "COMENTARIOS_INLINE:") ||
-		!strings.Contains(finalPrompt, "EVENTO_GITEA: APPROVED|REQUEST_CHANGES|COMMENT") {
+		!strings.Contains(finalPrompt, "exclusivamente um objeto JSON valido") ||
+		!strings.Contains(finalPrompt, `"gitea_event":"APPROVED|REQUEST_CHANGES|COMMENT"`) {
 		t.Fatalf("unexpected final prompt %q", finalPrompt)
 	}
 

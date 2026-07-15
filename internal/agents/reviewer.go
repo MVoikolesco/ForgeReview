@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
 	"gitea-agents/internal/diff"
 	"gitea-agents/internal/gitea"
+	"gitea-agents/internal/ollama"
 	"gitea-agents/internal/queue"
 	"gitea-agents/internal/review"
 	"gitea-agents/internal/review/promptconfig"
@@ -28,13 +30,20 @@ type OllamaClient interface {
 	Model() string
 }
 
+type ollamaMetadataClient interface {
+	ChatWithMetadata(ctx context.Context, prompt string) (ollama.ChatResult, error)
+}
+
 type ReviewerOptions struct {
 	DiffLogDir             string
 	MaxBlockChars          int
 	MaxFilesPerBlock       int
 	ReviewConcurrency      int
 	OllamaTimeoutSeconds   int
+	ReviewFinalRetries     int
 	ReviewPromptConfigPath string
+	PublishManualReviews   bool
+	AllowAutonomousReject  bool
 }
 
 type ReviewerAgent struct {
@@ -63,6 +72,9 @@ func NewReviewerAgent(logger *log.Logger, giteaClient GiteaClient, ollamaClient 
 
 	if options.OllamaTimeoutSeconds <= 0 {
 		options.OllamaTimeoutSeconds = 900
+	}
+	if options.ReviewFinalRetries <= 0 {
+		options.ReviewFinalRetries = 5
 	}
 	if options.ReviewPromptConfigPath == "" {
 		options.ReviewPromptConfigPath = "./config/review-prompts.yaml"
@@ -173,6 +185,11 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 		if _, err := runLog.Write("final-resposta.log", finalReview); err != nil {
 			return err
 		}
+		if job.Manual && !a.options.PublishManualReviews {
+			if _, err := runLog.Write("final-review.md", finalReview); err != nil {
+				return err
+			}
+		}
 		a.logger.Printf("review final gerado chars=%d", len(finalReview))
 		a.logger.Printf("review final:\n%s", finalReview)
 		return nil
@@ -183,6 +200,7 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 	successfulBlocks := 0
 	var blockErrors []error
 	var ollamaStartedAt time.Time
+	var totalUsage ollama.ChatResult
 	for _, block := range blocks {
 		if err := ctx.Err(); err != nil {
 			a.logger.Printf("review cancelado antes de enviar bloco para ollama block=%d total=%d err=%v", block.Index, block.Total, err)
@@ -218,7 +236,7 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 				return err
 			}
 		}
-		result, err := a.ollamaClient.Chat(ctx, prompt)
+		result, usage, err := a.chatWithMetadata(ctx, prompt)
 		duration := time.Since(startedAt).Round(time.Millisecond)
 		totalElapsed := time.Since(ollamaStartedAt).Round(time.Millisecond)
 		if err != nil {
@@ -251,6 +269,8 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 			})
 			continue
 		}
+		totalUsage.PromptTokens += usage.PromptTokens
+		totalUsage.CompletionTokens += usage.CompletionTokens
 
 		if _, err := runLog.Write(fmt.Sprintf("block-%03d-resposta.log", block.Index), formatBlockResponseLog(block, result, duration, totalElapsed)); err != nil {
 			return err
@@ -300,26 +320,41 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 	if ollamaStartedAt.IsZero() {
 		ollamaStartedAt = finalStartedAt
 	}
-	finalReview, err := a.ollamaClient.Chat(ctx, finalPrompt)
+	finalResponse, finalReview, finalUsage, err := a.requestValidatedFinalReview(ctx, finalPrompt, runLog)
 	finalDuration := time.Since(finalStartedAt).Round(time.Millisecond)
 	finalTotalElapsed := time.Since(ollamaStartedAt).Round(time.Millisecond)
 	if err != nil {
-		return fmt.Errorf("erro ao consolidar review com ollama: %w", err)
+		return err
+	}
+	totalUsage.PromptTokens += finalUsage.PromptTokens
+	totalUsage.CompletionTokens += finalUsage.CompletionTokens
+	finalReview.Metadata = review.ReviewMetadata{
+		Model:            a.ollamaClient.Model(),
+		Elapsed:          finalTotalElapsed.String(),
+		PromptTokens:     totalUsage.PromptTokens,
+		CompletionTokens: totalUsage.CompletionTokens,
 	}
 
-	if _, err := runLog.Write("final-resposta.log", formatFinalResponseLog(finalReview, finalDuration, finalTotalElapsed, len(partialReviews), failedBlocks)); err != nil {
+	if _, err := runLog.Write("final-resposta.log", formatFinalResponseLog(finalResponse, finalDuration, finalTotalElapsed, len(partialReviews), failedBlocks)); err != nil {
 		return err
 	}
 
-	a.logger.Printf("review final gerado chars=%d duration=%s total_elapsed=%s", len(finalReview), finalDuration, finalTotalElapsed)
-	if err := runLog.AppendProcess("review final gerado chars=%d duration=%s total_elapsed=%s failed_blocks=%d", len(finalReview), finalDuration, finalTotalElapsed, failedBlocks); err != nil {
+	a.logger.Printf("review final gerado chars=%d duration=%s total_elapsed=%s", len(finalResponse), finalDuration, finalTotalElapsed)
+	if err := runLog.AppendProcess("review final gerado chars=%d duration=%s total_elapsed=%s failed_blocks=%d", len(finalResponse), finalDuration, finalTotalElapsed, failedBlocks); err != nil {
 		return err
 	}
-	a.logger.Printf("review final:\n%s", finalReview)
+	a.logger.Printf("review final:\n%s", finalResponse)
 
-	parsedFinalReview := review.ParseFinalReviewResponse(finalReview)
+	parsedFinalReview := finalReview
 	parsedFinalReview = review.ResolveFinalReviewCommentPositions(parsedFinalReview, files)
-	createReviewOptions := buildCreatePullReviewOptions(parsedFinalReview)
+	if job.Manual && !a.options.PublishManualReviews {
+		if _, err := runLog.Write("final-review.md", formatManualReviewMarkdown(parsedFinalReview)); err != nil {
+			return err
+		}
+		a.logger.Printf("review manual salvo sem publicar no gitea dir=%s", runLog.Dir())
+		return nil
+	}
+	createReviewOptions := buildCreatePullReviewOptions(parsedFinalReview, a.options.AllowAutonomousReject)
 	createdReview, err := a.giteaClient.CreatePullRequestReview(ctx, job.Owner, job.Repo, job.PRNumber, createReviewOptions)
 	if err != nil {
 		if appendErr := runLog.AppendProcess("erro ao publicar review no gitea event=%s comments=%d err=%v", createReviewOptions.Event, len(createReviewOptions.Comments), err); appendErr != nil {
@@ -335,8 +370,79 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 	return nil
 }
 
-func buildCreatePullReviewOptions(finalReview review.FinalReview) gitea.CreatePullReviewOptions {
+func formatManualReviewMarkdown(finalReview review.FinalReview) string {
+	var builder strings.Builder
+	builder.WriteString("# Review final\n\n")
+	builder.WriteString("- **Status:** ")
+	builder.WriteString(finalReview.Status)
+	builder.WriteString("\n- **Evento Gitea:** ")
+	builder.WriteString(finalReview.Event)
+	builder.WriteString("\n\n")
+	builder.WriteString(finalReview.ReviewBody())
+
+	if len(finalReview.InlineComments) > 0 {
+		builder.WriteString("\n\n## Comentarios inline\n")
+		for _, comment := range finalReview.InlineComments {
+			builder.WriteString("\n### ")
+			builder.WriteString(comment.Path)
+			if comment.NewPosition > 0 {
+				builder.WriteString(":")
+				builder.WriteString(strconv.Itoa(comment.NewPosition))
+			}
+			builder.WriteString("\n\n")
+			if comment.Severity != "" {
+				builder.WriteString("**Severidade:** ")
+				builder.WriteString(comment.Severity)
+				builder.WriteString("\n\n")
+			}
+			builder.WriteString(comment.Body)
+			builder.WriteString("\n")
+		}
+	}
+
+	return strings.TrimSpace(builder.String()) + "\n"
+}
+
+func (a *ReviewerAgent) requestValidatedFinalReview(ctx context.Context, prompt string, runLog *reviewRunLog) (string, review.FinalReview, ollama.ChatResult, error) {
+	currentPrompt := prompt
+	var validationErrors []string
+	for attempt := 1; attempt <= a.options.ReviewFinalRetries; attempt++ {
+		response, usage, err := a.chatWithMetadata(ctx, currentPrompt)
+		if err != nil {
+			return "", review.FinalReview{}, ollama.ChatResult{}, fmt.Errorf("erro ao consolidar review com ollama: %w", err)
+		}
+		parsed, validationErr := review.ValidateFinalReviewResponse(response)
+		if validationErr == nil {
+			return response, parsed, usage, nil
+		}
+
+		validationErrors = append(validationErrors, validationErr.Error())
+		if appendErr := runLog.AppendProcess("resposta final invalida tentativa=%d de %d erros=%s", attempt, a.options.ReviewFinalRetries, validationErr.Error()); appendErr != nil {
+			return "", review.FinalReview{}, ollama.ChatResult{}, appendErr
+		}
+		if attempt == a.options.ReviewFinalRetries {
+			break
+		}
+		currentPrompt = prompt + "\n\nCORRECAO OBRIGATORIA DA TENTATIVA ANTERIOR:\nA ultima resposta nao veio no padrao obrigatorio. Refaça a resposta completa e retorne exclusivamente um objeto JSON valido, sem Markdown e sem qualquer texto antes ou depois. Preserve exatamente as propriedades comments e final_review, incluindo todos os campos obrigatorios. Utilize somente os valores de severidade, status e evento definidos pelo projeto. Erros detectados: " + validationErr.Error()
+	}
+
+	return "", review.FinalReview{}, ollama.ChatResult{}, fmt.Errorf("review final invalido apos %d tentativas: %s", a.options.ReviewFinalRetries, strings.Join(validationErrors, " | "))
+}
+
+func (a *ReviewerAgent) chatWithMetadata(ctx context.Context, prompt string) (string, ollama.ChatResult, error) {
+	if client, ok := a.ollamaClient.(ollamaMetadataClient); ok {
+		result, err := client.ChatWithMetadata(ctx, prompt)
+		return result.Content, result, err
+	}
+	content, err := a.ollamaClient.Chat(ctx, prompt)
+	return content, ollama.ChatResult{Content: content}, err
+}
+
+func buildCreatePullReviewOptions(finalReview review.FinalReview, allowAutonomousReject bool) gitea.CreatePullReviewOptions {
 	event := finalReview.Event
+	if !allowAutonomousReject && (event == review.GiteaEventApproved || event == review.GiteaEventRequestChanges) {
+		event = review.GiteaEventComment
+	}
 	if event == review.GiteaEventRequestChanges && !hasBlockingComment(finalReview.InlineComments) {
 		event = review.GiteaEventComment
 	}

@@ -58,6 +58,20 @@ func (c *Client) Model() string {
 }
 
 func (c *Client) Chat(ctx context.Context, prompt string) (string, error) {
+	result, err := c.ChatWithMetadata(ctx, prompt)
+	if err != nil {
+		return "", err
+	}
+	return result.Content, nil
+}
+
+type ChatResult struct {
+	Content          string
+	PromptTokens     int
+	CompletionTokens int
+}
+
+func (c *Client) ChatWithMetadata(ctx context.Context, prompt string) (ChatResult, error) {
 	payload := chatRequest{
 		Model:     c.model,
 		Stream:    false,
@@ -70,36 +84,40 @@ func (c *Client) Chat(ctx context.Context, prompt string) (string, error) {
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("erro ao serializar payload ollama: %w", err)
+		return ChatResult{}, fmt.Errorf("erro ao serializar payload ollama: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/chat", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("erro ao criar request ollama: %w", err)
+		return ChatResult{}, fmt.Errorf("erro ao criar request ollama: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	res, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("erro ao chamar ollama: %w", err)
+		return ChatResult{}, fmt.Errorf("erro ao chamar ollama: %w", err)
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusMultipleChoices {
 		errorBody, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-		return "", fmt.Errorf("ollama retornou status=%d body=%s", res.StatusCode, strings.TrimSpace(string(errorBody)))
+		return ChatResult{}, fmt.Errorf("ollama retornou status=%d body=%s", res.StatusCode, strings.TrimSpace(string(errorBody)))
 	}
 
 	var chatResponse chatResponse
 	if err := json.NewDecoder(res.Body).Decode(&chatResponse); err != nil {
-		return "", fmt.Errorf("erro ao ler resposta ollama: %w", err)
+		return ChatResult{}, fmt.Errorf("erro ao ler resposta ollama: %w", err)
 	}
 
 	if chatResponse.Message.Content == "" {
-		return "", fmt.Errorf("ollama retornou resposta sem message.content")
+		return ChatResult{}, fmt.Errorf("ollama retornou resposta sem message.content")
 	}
 
-	return chatResponse.Message.Content, nil
+	return ChatResult{
+		Content:          chatResponse.Message.Content,
+		PromptTokens:     chatResponse.PromptEvalCount,
+		CompletionTokens: chatResponse.EvalCount,
+	}, nil
 }
 
 type chatRequest struct {
@@ -116,5 +134,7 @@ type chatMessage struct {
 }
 
 type chatResponse struct {
-	Message chatMessage `json:"message"`
+	Message         chatMessage `json:"message"`
+	PromptEvalCount int         `json:"prompt_eval_count"`
+	EvalCount       int         `json:"eval_count"`
 }

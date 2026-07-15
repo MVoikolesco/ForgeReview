@@ -22,16 +22,24 @@ type FinalReview struct {
 	Observations   string
 	Raw            string
 	Structured     bool
+	Metadata       ReviewMetadata
+}
+
+type ReviewMetadata struct {
+	Model            string
+	Elapsed          string
+	PromptTokens     int
+	CompletionTokens int
 }
 
 type InlineComment struct {
-	Severity        string
-	Path            string
-	NewPosition     int
-	Reference       string
-	Title           string
-	Body            string
-	DecisionReason  string
+	Severity       string
+	Path           string
+	NewPosition    int
+	Reference      string
+	Title          string
+	Body           string
+	DecisionReason string
 }
 
 func ParseFinalReviewResponse(content string) FinalReview {
@@ -122,6 +130,24 @@ func ParseFinalReviewResponse(content string) FinalReview {
 
 func (r FinalReview) ReviewBody() string {
 	var builder strings.Builder
+	if r.Status != "" {
+		builder.WriteString("> status: ")
+		builder.WriteString(r.Status)
+		builder.WriteString("\n")
+	}
+	if r.Metadata.Model != "" || r.Metadata.Elapsed != "" {
+		builder.WriteString("> elapsed time: ")
+		builder.WriteString(r.Metadata.Elapsed)
+		builder.WriteString("\n> model: ")
+		builder.WriteString(r.Metadata.Model)
+		builder.WriteString("\n> tokens: ")
+		builder.WriteString(strconv.Itoa(r.Metadata.PromptTokens + r.Metadata.CompletionTokens))
+		builder.WriteString(" (prompt: ")
+		builder.WriteString(strconv.Itoa(r.Metadata.PromptTokens))
+		builder.WriteString(", completion: ")
+		builder.WriteString(strconv.Itoa(r.Metadata.CompletionTokens))
+		builder.WriteString(")\n\n")
+	}
 	if r.Summary != "" {
 		builder.WriteString(r.Summary)
 	}
@@ -180,6 +206,9 @@ func ResolveFinalReviewCommentPositions(finalReview FinalReview, files []diff.Ch
 	for index := range finalReview.InlineComments {
 		comment := &finalReview.InlineComments[index]
 		if comment.Path == "" || comment.Reference == "" {
+			if comment.Reference == "" && comment.NewPosition > 0 {
+				continue
+			}
 			comment.NewPosition = 0
 			continue
 		}

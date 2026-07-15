@@ -22,7 +22,7 @@ func TestClientChatSendsPayloadAndReturnsContent(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"review final"}}`))
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"review final"},"prompt_eval_count":123,"eval_count":45}`))
 	}))
 	defer server.Close()
 
@@ -52,6 +52,14 @@ func TestClientChatSendsPayloadAndReturnsContent(t *testing.T) {
 
 	if content != "review final" {
 		t.Fatalf("unexpected content %q", content)
+	}
+
+	result, err := client.ChatWithMetadata(context.Background(), "analise este diff")
+	if err != nil {
+		t.Fatalf("expected metadata request to succeed, got %v", err)
+	}
+	if result.PromptTokens != 123 || result.CompletionTokens != 45 {
+		t.Fatalf("unexpected token counts %#v", result)
 	}
 
 	if got.Model != "deepseek-coder:6.7b" {

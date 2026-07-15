@@ -2,9 +2,12 @@ package webhook
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +31,7 @@ func RegisterRoutes(mux *http.ServeMux, logger *log.Logger, publisher queue.Publ
 
 	mux.Handle("/health", NewHealthHandler(serviceName, version, startedAt))
 	mux.HandleFunc("/webhook", handler.Receive)
+	mux.HandleFunc("/review", handler.ManualReview)
 }
 
 func (h *Handler) Receive(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +90,92 @@ func (h *Handler) Receive(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status": "accepted",
 	})
+}
+
+type manualReviewRequest struct {
+	URL string `json:"url"`
+}
+
+// ManualReview enqueues a review from a pull request URL without requiring a webhook event.
+func (h *Handler) ManualReview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPayloadBytes))
+	if err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var request manualReviewRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	owner, repo, prNumber, err := parsePullRequestURL(request.URL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	job := queue.ReviewJob{
+		Owner:             owner,
+		Repo:              repo,
+		PRNumber:          prNumber,
+		RequestedReviewer: h.botUsername,
+		Sender:            "manual",
+		Manual:            true,
+	}
+
+	h.logger.Printf("Review manual solicitado: %s/%s PR #%d", owner, repo, prNumber)
+	h.logger.Printf("Job criado: %+v", job)
+
+	if err := h.publisher.Publish(r.Context(), job); err != nil {
+		h.logger.Printf("erro ao publicar job manual no redis: %v", err)
+		http.Error(w, "failed to publish job", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status": "accepted",
+	})
+}
+
+func parsePullRequestURL(rawURL string) (string, string, int, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", "", 0, fmt.Errorf("url do pull request inválida")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", "", 0, fmt.Errorf("url do pull request deve usar http ou https")
+	}
+
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) != 4 || !strings.EqualFold(parts[2], "pulls") {
+		return "", "", 0, fmt.Errorf("url do pull request deve seguir o formato /owner/repo/pulls/numero")
+	}
+
+	owner, err := url.PathUnescape(parts[0])
+	if err != nil {
+		return "", "", 0, fmt.Errorf("owner inválido")
+	}
+	repo, err := url.PathUnescape(parts[1])
+	if err != nil {
+		return "", "", 0, fmt.Errorf("repositório inválido")
+	}
+	prNumber, err := strconv.Atoi(parts[3])
+	if err != nil || prNumber <= 0 {
+		return "", "", 0, fmt.Errorf("número do pull request inválido")
+	}
+	if owner == "" || repo == "" {
+		return "", "", 0, fmt.Errorf("owner e repositório são obrigatórios")
+	}
+
+	return owner, repo, prNumber, nil
 }
 
 func readPayload(w http.ResponseWriter, r *http.Request) ([]byte, error) {

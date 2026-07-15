@@ -106,6 +106,9 @@ func runWorker(ctx context.Context, cfg config.Config, logger *log.Logger, revie
 		MaxBlockChars:          cfg.ReviewMaxBlockChars,
 		MaxFilesPerBlock:       cfg.ReviewMaxFilesPerBlock,
 		ReviewConcurrency:      cfg.ReviewConcurrency,
+		ReviewFinalRetries:     cfg.ReviewFinalRetries,
+		PublishManualReviews:   cfg.ReviewPublishManual,
+		AllowAutonomousReject:  cfg.ReviewAllowRejection,
 		OllamaTimeoutSeconds:   cfg.OllamaTimeoutSeconds,
 		ReviewPromptConfigPath: cfg.ReviewPromptConfigPath,
 	}))

@@ -53,7 +53,54 @@ func TestReceivePublishesReviewJob(t *testing.T) {
 	assertLogContains(t, logs.String(), "Repositório: Qualyagro/wiki")
 	assertLogContains(t, logs.String(), "PR: #12")
 	assertLogContains(t, logs.String(), "Ação: review_requested")
-	assertLogContains(t, logs.String(), "Job criado: {Owner:Qualyagro Repo:wiki PRNumber:12 RequestedReviewer:ia-reviewer Sender:marcio}")
+	assertLogContains(t, logs.String(), "Job criado: {Owner:Qualyagro Repo:wiki PRNumber:12 RequestedReviewer:ia-reviewer Sender:marcio Manual:false}")
+}
+
+func TestManualReviewPublishesReviewJobFromURL(t *testing.T) {
+	mux, logs, publisher := newTestWebhook("ia-reviewer")
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/review",
+		strings.NewReader(`{"url":"https://gitea.example/Qualyagro/Oracle-APP/pulls/283"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, res.Code)
+	}
+	assertJob(t, publisher.jobs[0], queue.ReviewJob{
+		Owner:             "Qualyagro",
+		Repo:              "Oracle-APP",
+		PRNumber:          283,
+		RequestedReviewer: "ia-reviewer",
+		Sender:            "manual",
+		Manual:            true,
+	})
+	assertLogContains(t, logs.String(), "Review manual solicitado: Qualyagro/Oracle-APP PR #283")
+}
+
+func TestManualReviewRejectsInvalidURL(t *testing.T) {
+	mux, _, publisher := newTestWebhook("ia-reviewer")
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/review",
+		strings.NewReader(`{"url":"https://gitea.example/Qualyagro/Oracle-APP/issues/283"}`),
+	)
+	res := httptest.NewRecorder()
+
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, res.Code)
+	}
+	if len(publisher.jobs) != 0 {
+		t.Fatalf("expected no published job, got %+v", publisher.jobs)
+	}
 }
 
 func TestReceivePublishesReviewJobFromPullRequestReviewers(t *testing.T) {

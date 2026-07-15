@@ -26,10 +26,10 @@ CONTRATOS_DECLARADOS:
 - ARQUIVO: internal/app.go
   TIPO: metodo
   NOME: App.testeMethod
-REFERENCIAS_A_VERIFICAR:
+		REFERENCIAS_A_VERIFICAR:
 - nenhum
-REGRAS_DE_VALIDACAO:
-- nenhum`, "review bloco 2", "review final"},
+		REGRAS_DE_VALIDACAO:
+		- nenhum`, "review bloco 2", validFinalResponse()},
 	}
 	agent := NewReviewerAgent(log.New(&logs, "", 0), giteaClient, ollamaClient, ReviewerOptions{
 		DiffLogDir:             diffLogDir,
@@ -161,7 +161,7 @@ REGRAS_DE_VALIDACAO:
 		t.Fatalf("expected sending block log, got %q", logs.String())
 	}
 
-	if !strings.Contains(logs.String(), "review final gerado chars=12") {
+	if !strings.Contains(logs.String(), "review final gerado chars=") {
 		t.Fatalf("expected final review log, got %q", logs.String())
 	}
 
@@ -171,7 +171,7 @@ REGRAS_DE_VALIDACAO:
 	if giteaClient.reviewOwner != "Qualyagro" || giteaClient.reviewRepo != "wiki" || giteaClient.reviewPRNumber != 12 {
 		t.Fatalf("unexpected review publish target owner=%s repo=%s pr=%d", giteaClient.reviewOwner, giteaClient.reviewRepo, giteaClient.reviewPRNumber)
 	}
-	if giteaClient.reviewOptions.Event != "COMMENT" || giteaClient.reviewOptions.Body != "review final" {
+	if giteaClient.reviewOptions.Event != "COMMENT" || !strings.Contains(giteaClient.reviewOptions.Body, "Review final") {
 		t.Fatalf("unexpected review options %#v", giteaClient.reviewOptions)
 	}
 
@@ -211,8 +211,62 @@ REGRAS_DE_VALIDACAO:
 	if !strings.Contains(finalResponseContent, "tipo=final") ||
 		!strings.Contains(finalResponseContent, "response_duration=") ||
 		!strings.Contains(finalResponseContent, "total_desde_inicio_ollama=") ||
-		!strings.Contains(finalResponseContent, "review final") {
+		!strings.Contains(finalResponseContent, validFinalResponse()) {
 		t.Fatalf("unexpected final response log %q", string(finalResponse))
+	}
+}
+
+func TestReviewerAgentSavesManualReviewWithoutPublishing(t *testing.T) {
+	diffLogDir := t.TempDir()
+	giteaClient := &fakeGiteaClient{diff: sampleDiff()}
+	ollamaClient := &fakeOllamaClient{
+		model:     "deepseek-coder:6.7b",
+		responses: []string{"review bloco 1", "review bloco 2", validFinalResponse()},
+	}
+	agent := NewReviewerAgent(log.New(&bytes.Buffer{}, "", 0), giteaClient, ollamaClient, ReviewerOptions{
+		DiffLogDir:             diffLogDir,
+		MaxBlockChars:          4000,
+		MaxFilesPerBlock:       1,
+		ReviewPromptConfigPath: testPromptConfigPath(),
+	})
+
+	job := queue.ReviewJob{Owner: "Qualyagro", Repo: "wiki", PRNumber: 12, Manual: true}
+	if err := agent.Process(context.Background(), job); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if giteaClient.reviewCreated {
+		t.Fatal("expected manual review not to be published to gitea")
+	}
+
+	finalReview, err := os.ReadFile(filepath.Join(diffLogDir, "Qualyagro_wiki_pr-12", "final-review.md"))
+	if err != nil {
+		t.Fatalf("expected final markdown file, got %v", err)
+	}
+	if !strings.Contains(string(finalReview), "# Review final") {
+		t.Fatalf("expected markdown heading, got %q", finalReview)
+	}
+}
+
+func TestReviewerAgentPublishesManualReviewWhenEnabled(t *testing.T) {
+	giteaClient := &fakeGiteaClient{diff: sampleDiff()}
+	ollamaClient := &fakeOllamaClient{
+		model:     "deepseek-coder:6.7b",
+		responses: []string{"review bloco 1", "review bloco 2", validFinalResponse()},
+	}
+	agent := NewReviewerAgent(log.New(&bytes.Buffer{}, "", 0), giteaClient, ollamaClient, ReviewerOptions{
+		DiffLogDir:             t.TempDir(),
+		MaxBlockChars:          4000,
+		MaxFilesPerBlock:       1,
+		ReviewPromptConfigPath: testPromptConfigPath(),
+		PublishManualReviews:   true,
+	})
+
+	job := queue.ReviewJob{Owner: "Qualyagro", Repo: "wiki", PRNumber: 12, Manual: true}
+	if err := agent.Process(context.Background(), job); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !giteaClient.reviewCreated {
+		t.Fatal("expected manual review to be published to gitea")
 	}
 }
 
@@ -275,7 +329,7 @@ func TestReviewerAgentContinuesWhenOneBlockFails(t *testing.T) {
 	ollamaClient := &fakeOllamaClient{
 		model:      "deepseek-coder:6.7b",
 		callErrors: []error{errors.New("timeout")},
-		responses:  []string{"", "review bloco 2", "review final parcial"},
+		responses:  []string{"", "review bloco 2", validFinalResponse()},
 	}
 	agent := NewReviewerAgent(
 		log.New(&logs, "", 0),
@@ -331,7 +385,7 @@ func TestReviewerAgentContinuesWhenOneBlockFails(t *testing.T) {
 	finalResponseContent := string(finalResponse)
 	if !strings.Contains(finalResponseContent, "failed_blocks=1") ||
 		!strings.Contains(finalResponseContent, "total_desde_inicio_ollama=") ||
-		!strings.Contains(finalResponseContent, "review final parcial") {
+		!strings.Contains(finalResponseContent, validFinalResponse()) {
 		t.Fatalf("unexpected final response %q", string(finalResponse))
 	}
 }
@@ -376,6 +430,42 @@ func TestReviewerAgentStopsWhenContextIsCanceled(t *testing.T) {
 	}
 }
 
+func TestReviewerAgentRetriesInvalidFinalResponse(t *testing.T) {
+	client := &fakeOllamaClient{
+		responses: []string{"partial", "not json", validFinalResponse()},
+	}
+	agent := NewReviewerAgent(log.New(&bytes.Buffer{}, "", 0), &fakeGiteaClient{diff: sampleDiff()}, client, ReviewerOptions{
+		DiffLogDir: t.TempDir(), MaxBlockChars: 4000, MaxFilesPerBlock: 2, ReviewPromptConfigPath: testPromptConfigPath(),
+	})
+	if err := agent.Process(context.Background(), queue.ReviewJob{Owner: "o", Repo: "r", PRNumber: 1}); err != nil {
+		t.Fatalf("expected retry to recover: %v", err)
+	}
+	if len(client.prompts) != 3 {
+		t.Fatalf("expected one partial call and two final calls, got %d", len(client.prompts))
+	}
+	if !strings.Contains(client.prompts[2], "CORRECAO OBRIGATORIA") || !strings.Contains(client.prompts[2], "JSON invalido") {
+		t.Fatalf("expected specific correction prompt, got %q", client.prompts[2])
+	}
+}
+
+func TestReviewerAgentStopsAfterThreeInvalidFinalResponses(t *testing.T) {
+	client := &fakeOllamaClient{responses: []string{"partial", "x", "y", "z"}}
+	giteaClient := &fakeGiteaClient{diff: sampleDiff()}
+	agent := NewReviewerAgent(log.New(&bytes.Buffer{}, "", 0), giteaClient, client, ReviewerOptions{
+		DiffLogDir: t.TempDir(), MaxBlockChars: 4000, MaxFilesPerBlock: 2, ReviewFinalRetries: 3, ReviewPromptConfigPath: testPromptConfigPath(),
+	})
+	err := agent.Process(context.Background(), queue.ReviewJob{Owner: "o", Repo: "r", PRNumber: 1})
+	if err == nil || !strings.Contains(err.Error(), "apos 3 tentativas") {
+		t.Fatalf("expected final validation error, got %v", err)
+	}
+	if len(client.prompts) != 4 {
+		t.Fatalf("expected one partial call plus three final calls, got %d", len(client.prompts))
+	}
+	if giteaClient.reviewCreated {
+		t.Fatal("must not publish an invalid review")
+	}
+}
+
 func TestBuildCreatePullReviewOptions(t *testing.T) {
 	parsed := review.ParseFinalReviewResponse(`COMENTARIOS_INLINE:
 - SEVERIDADE: alta
@@ -398,7 +488,7 @@ REVISAO_FINAL:
   RESUMO: Ajustes necessarios.
   OBSERVACOES: todos os blocos analisados`)
 
-	options := buildCreatePullReviewOptions(parsed)
+	options := buildCreatePullReviewOptions(parsed, true)
 
 	if options.Event != "REQUEST_CHANGES" {
 		t.Fatalf("unexpected event %q", options.Event)
@@ -431,13 +521,55 @@ REVISAO_FINAL:
   RESUMO: Ha apenas ajuste de escrita.
   OBSERVACOES: todos os blocos analisados`)
 
-	options := buildCreatePullReviewOptions(parsed)
+	options := buildCreatePullReviewOptions(parsed, true)
 
 	if options.Event != "COMMENT" {
 		t.Fatalf("expected non-blocking typo to become COMMENT, got %q", options.Event)
 	}
 	if len(options.Comments) != 1 {
 		t.Fatalf("expected one comment, got %#v", options.Comments)
+	}
+}
+
+func TestBuildCreatePullReviewOptionsDoesNotRejectWhenAutonomyIsDisabled(t *testing.T) {
+	parsed := review.ParseFinalReviewResponse(`REVISAO_FINAL:
+  EVENTO_GITEA: REQUEST_CHANGES
+  STATUS: reprovado
+  RESUMO: Ajustes necessarios.
+  OBSERVACOES: Revisao concluida.`)
+
+	options := buildCreatePullReviewOptions(parsed, false)
+
+	if options.Event != review.GiteaEventComment {
+		t.Fatalf("expected rejection to become COMMENT, got %q", options.Event)
+	}
+	if !strings.Contains(options.Body, "> status: reprovado") {
+		t.Fatalf("expected status in review body, got %q", options.Body)
+	}
+}
+
+func TestBuildCreatePullReviewOptionsDoesNotApproveWhenAutonomyIsDisabled(t *testing.T) {
+	parsed := review.ParseFinalReviewResponse(`COMENTARIOS_INLINE:
+- SEVERIDADE: baixa
+  PATH: app/file.go
+  NEW_POSITION: 10
+  BODY: Boa implementacao.
+REVISAO_FINAL:
+  EVENTO_GITEA: APPROVED
+  STATUS: aprovado
+  RESUMO: Revisao aprovada.
+  OBSERVACOES: Revisao concluida.`)
+
+	options := buildCreatePullReviewOptions(parsed, false)
+
+	if options.Event != review.GiteaEventComment {
+		t.Fatalf("expected approval to become COMMENT, got %q", options.Event)
+	}
+	if !strings.Contains(options.Body, "> status: aprovado") {
+		t.Fatalf("expected status in review body, got %q", options.Body)
+	}
+	if len(options.Comments) != 1 || options.Comments[0].Path != "app/file.go" {
+		t.Fatalf("expected inline comment to be preserved, got %#v", options.Comments)
 	}
 }
 
@@ -549,4 +681,8 @@ index 555..666 100644
 -return oldValue
 +return newValue
 `
+}
+
+func validFinalResponse() string {
+	return `{"comments":[],"final_review":{"gitea_event":"COMMENT","status":"comentario","summary":"Review final","observations":"Todos os blocos analisados."}}`
 }
