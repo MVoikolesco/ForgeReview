@@ -8,8 +8,14 @@ services:
       - redis_data:/data
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   api:
+    image: forgereview:local
     build: .
     container_name: gitea-ai-reviewer-api
     restart: unless-stopped
@@ -19,16 +25,27 @@ services:
       APP_MODE: api
       PORT: 8080
       REDIS_ADDR: redis:6379
+      DATABASE_DSN: /data/forgereview.db
     ports:
       - "8088:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    volumes:
+      - config_data:/data
+      - ./logs:/logs:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   worker:
-    build: .
+    image: forgereview:local
     container_name: gitea-ai-reviewer-worker
     restart: unless-stopped
-    user: "0:0"
     env_file:
       - .env
     environment:
@@ -36,12 +53,20 @@ services:
       REDIS_ADDR: redis:6379
       REDIS_CONSUMER: worker-1
       DIFF_LOG_DIR: /logs/diffs
+      DATABASE_DSN: /data/forgereview.db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./logs:/logs
       - ./prompts:/app/prompts:ro
       - ./config:/app/config:ro
+      - config_data:/data
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
 
 volumes:
   redis_data:
+  config_data:

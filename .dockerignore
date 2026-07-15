@@ -2,3 +2,12 @@
 bin
 .env
 .DS_Store
+node_modules
+web-admin/node_modules
+web-admin/dist
+.tmp-go
+logs
+data
+Prod
+*.exe
+*.test
