@@ -2,6 +2,54 @@
 
 ForgeReview recebe solicitações de review do Gitea, enfileira os jobs no Redis e executa a análise com a integração de IA selecionada no SQLite. Ollama e OpenRouter estão funcionais; outros providers cadastrados retornam erro explícito até terem cliente implementado.
 
+## Pipeline de revisão
+
+O worker usa o pipeline v2 de múltiplas etapas:
+
+```text
+diff do PR -> planner -> reviewer por grupo -> consolidator -> verifier -> formatter -> Gitea
+```
+
+Cada etapa é uma chamada independente ao provider e troca dados internos em JSON. O pipeline não mantém conversa crescente nem busca contexto adicional no Gitea; usa apenas o diff recebido, arquivos alterados, stacks detectadas por `config/review-prompts.yaml`, configurações e respostas intermediárias do job em memória.
+
+O formato publicado permanece compatível com o contrato atual:
+
+```json
+{
+  "comments": [
+    {"file":"app/file.go","line":10,"severity":"alta","decision_reason":"...","comment":"..."}
+  ],
+  "final_review": {
+    "gitea_event":"REQUEST_CHANGES",
+    "status":"reprovado",
+    "summary":"Resumo objetivo.",
+    "observations":""
+  },
+  "metadata": {"pipeline_version":"2"}
+}
+```
+
+`metadata` é opcional para consumidores. Prompts, diffs completos e respostas brutas não são persistidos quando `log_sensitive_data` está desabilitado.
+
+Configurações operacionais principais:
+
+```text
+REVIEW_PLANNER_MAX_OUTPUT_TOKENS=2000
+REVIEW_GROUP_MAX_OUTPUT_TOKENS=3500
+REVIEW_CONSOLIDATOR_MAX_OUTPUT_TOKENS=3500
+REVIEW_VERIFIER_MAX_OUTPUT_TOKENS=2500
+REVIEW_FORMATTER_MAX_OUTPUT_TOKENS=2500
+REVIEW_CONTEXT_SAFETY_MARGIN_TOKENS=2048
+REVIEW_MIN_PUBLISH_CONFIDENCE=0.75
+REVIEW_MAX_PARALLEL_GROUPS=1
+REVIEW_MEDIUM_SEVERITY_EVENT=REQUEST_CHANGES
+REVIEW_PARTIAL_EVENT=COMMENT
+```
+
+Essas opções também existem em `review_policies` para profiles configurados no SQLite. Quando um profile é carregado, a policy do banco prevalece sobre os defaults de ambiente. O fluxo antigo foi removido; o pipeline v2 é o único fluxo de revisão.
+
+O limite de contexto do modelo é tratado separadamente do limite de saída. Antes de cada chamada, o worker estima tokens de entrada de forma conservadora e envia ao provider o menor valor entre o limite configurado da etapa e a saída disponível no contexto. Quando o diff excede o orçamento de contexto, o conteúdo é truncado em limite de linha, marcado no prompt com `TRUNCADO` e a revisão fica parcial, sem aprovação automática.
+
 ## Subida rápida
 
 1. Copie `.env.example` para `.env`.
