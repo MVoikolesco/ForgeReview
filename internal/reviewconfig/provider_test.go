@@ -34,6 +34,9 @@ INSERT INTO repositories(owner,name,full_name,review_profile_id) VALUES('acme','
 	if c.Provider.Name != "openrouter" || c.Model.Name != "openai/gpt" {
 		t.Fatalf("unexpected repository config: %+v", c)
 	}
+	if !c.Pipeline.PlannerEnabled || c.Pipeline.PlannerMaxOutputTokens != 2000 || c.Pipeline.GroupMaxOutputTokens != 3500 || c.Pipeline.MinimumPublishConfidence != 0.75 {
+		t.Fatalf("unexpected pipeline defaults: %+v", c.Pipeline)
+	}
 	c, e = p.GetConfig(context.Background(), "other/repo")
 	if e != nil {
 		t.Fatal(e)
