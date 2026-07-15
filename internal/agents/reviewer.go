@@ -2,7 +2,6 @@ package agents
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -16,6 +15,7 @@ import (
 	"gitea-agents/internal/openrouter"
 	"gitea-agents/internal/queue"
 	"gitea-agents/internal/review"
+	"gitea-agents/internal/review/pipeline"
 	"gitea-agents/internal/review/promptconfig"
 	"gitea-agents/internal/reviewconfig"
 )
@@ -37,6 +37,14 @@ type ollamaMetadataClient interface {
 	ChatWithMetadata(ctx context.Context, prompt string) (ollama.ChatResult, error)
 }
 
+type ollamaMaxTokenClient interface {
+	ChatWithMaxTokens(ctx context.Context, prompt string, maxOutputTokens int) (ollama.ChatResult, error)
+}
+
+type textMaxTokenClient interface {
+	ChatWithMaxTokens(ctx context.Context, prompt string, maxOutputTokens int) (string, error)
+}
+
 type ReviewerOptions struct {
 	DiffLogDir             string
 	MaxBlockChars          int
@@ -50,6 +58,10 @@ type ReviewerOptions struct {
 	ConfigProvider         reviewconfig.Provider
 	LogSensitiveData       bool
 	UnloadAfterReview      bool
+	ContextWindow          int
+	MaxOutputTokens        int
+	PipelineConfig         pipeline.Config
+	PipelineConfigSet      bool
 }
 
 type ReviewerAgent struct {
@@ -124,6 +136,25 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 		runtime.options.AllowAutonomousReject = cfg.Policy.AllowAutonomousRejection
 		runtime.options.LogSensitiveData = cfg.Policy.LogSensitiveData
 		runtime.options.UnloadAfterReview = cfg.Policy.UnloadModelAfterReview || cfg.Parameters.UnloadModelAfterReview
+		runtime.options.ContextWindow = cfg.Model.ContextWindow
+		runtime.options.MaxOutputTokens = cfg.Model.MaxOutputTokens
+		runtime.options.PipelineConfig = pipeline.Config{
+			PlannerEnabled:              cfg.Pipeline.PlannerEnabled,
+			ConsolidatorEnabled:         cfg.Pipeline.ConsolidatorEnabled,
+			VerifierEnabled:             cfg.Pipeline.VerifierEnabled,
+			FormatterEnabled:            cfg.Pipeline.FormatterEnabled,
+			PlannerMaxOutputTokens:      cfg.Pipeline.PlannerMaxOutputTokens,
+			ReviewerMaxOutputTokens:     cfg.Pipeline.GroupMaxOutputTokens,
+			ConsolidatorMaxOutputTokens: cfg.Pipeline.ConsolidatorMaxOutputTokens,
+			VerifierMaxOutputTokens:     cfg.Pipeline.VerifierMaxOutputTokens,
+			FormatterMaxOutputTokens:    cfg.Pipeline.FormatterMaxOutputTokens,
+			SafetyMarginTokens:          cfg.Pipeline.ContextSafetyMarginTokens,
+			MinimumPublishConfidence:    cfg.Pipeline.MinimumPublishConfidence,
+			MaxParallelReviewGroups:     cfg.Pipeline.MaxParallelGroups,
+			MediumSeverityEvent:         cfg.Pipeline.MediumSeverityEvent,
+			PartialEvent:                cfg.Pipeline.PartialEvent,
+		}
+		runtime.options.PipelineConfigSet = true
 		return runtime.process(ctx, job)
 	}
 	return a.process(ctx, job)
@@ -161,283 +192,7 @@ func (a *ReviewerAgent) process(ctx context.Context, job queue.ReviewJob) error 
 			}
 		}()
 	}
-	rawDiff, err := a.giteaClient.GetPullRequestDiff(ctx, job.Owner, job.Repo, job.PRNumber)
-	if err != nil {
-		return err
-	}
-
-	a.logger.Printf("diff obtido owner=%s repo=%s pr=%d size=%d", job.Owner, job.Repo, job.PRNumber, len(rawDiff))
-
-	runLog, err := newReviewRunLog(a.options.DiffLogDir, job, a.options.LogSensitiveData)
-	if err != nil {
-		return err
-	}
-	a.logger.Printf("logs fisicos do review dir=%s", runLog.Dir())
-
-	files := diff.Parse(rawDiff)
-	a.logger.Printf("diff parseado owner=%s repo=%s pr=%d files=%d", job.Owner, job.Repo, job.PRNumber, len(files))
-	if err := runLog.AppendProcess("diff obtido owner=%s repo=%s pr=%d size=%d files=%d", job.Owner, job.Repo, job.PRNumber, len(rawDiff), len(files)); err != nil {
-		return err
-	}
-
-	for _, file := range files {
-		a.logger.Printf(
-			"arquivo alterado path=%s additions=%d deletions=%d patch_size=%d",
-			file.Path,
-			file.Additions,
-			file.Deletions,
-			len(file.Patch),
-		)
-	}
-
-	if _, err := runLog.Write("01-diff-completo.log", formatFullDiffLog(rawDiff, files)); err != nil {
-		return err
-	}
-
-	promptResolver := promptconfig.NewPromptResolver(a.options.ReviewPromptConfigPath)
-	if _, err := promptResolver.Load(ctx); err != nil {
-		return err
-	}
-	a.logger.Printf("prompt config carregado path=%s", a.options.ReviewPromptConfigPath)
-	if err := runLog.AppendProcess("prompt config carregado path=%s", a.options.ReviewPromptConfigPath); err != nil {
-		return err
-	}
-
-	resolvedBlockFilter, err := promptResolver.ResolveBlockFilter(ctx, job.Owner, job.Repo)
-	if err != nil {
-		return err
-	}
-	blockFilter := reviewFileFilterFromConfig(resolvedBlockFilter)
-	includeDocs := blockFilter.IncludeDocs
-	ignoredDocs := countIgnoredDocs(files, blockFilter)
-	if ignoredDocs > 0 {
-		a.logger.Printf("docs ignorados owner=%s repo=%s pr=%d files=%d include_docs=%t", job.Owner, job.Repo, job.PRNumber, ignoredDocs, includeDocs)
-		if err := runLog.AppendProcess("docs ignorados files=%d include_docs=%t", ignoredDocs, includeDocs); err != nil {
-			return err
-		}
-	}
-	ignoredFiles := countIgnoredReviewFiles(files, blockFilter)
-	if ignoredFiles > 0 {
-		a.logger.Printf("arquivos ignorados por filtro owner=%s repo=%s pr=%d files=%d include_docs=%t ignore_patterns=%d force_include_patterns=%d", job.Owner, job.Repo, job.PRNumber, ignoredFiles, includeDocs, len(blockFilter.IgnoreFilePatterns), len(blockFilter.ForceIncludeFilePatterns))
-		if err := runLog.AppendProcess("arquivos ignorados por filtro files=%d include_docs=%t ignore_patterns=%d force_include_patterns=%d", ignoredFiles, includeDocs, len(blockFilter.IgnoreFilePatterns), len(blockFilter.ForceIncludeFilePatterns)); err != nil {
-			return err
-		}
-	}
-
-	basePartialPrompt, err := promptResolver.ResolvePartialPrompt(ctx, job.Owner, job.Repo, nil)
-	if err != nil {
-		return err
-	}
-	baseFinalPrompt, err := promptResolver.ResolveFinalPrompt(ctx, job.Owner, job.Repo)
-	if err != nil {
-		return err
-	}
-
-	if _, err := runLog.Write("02-prompt-base.log", review.BasePromptsLog(basePartialPrompt.Content, baseFinalPrompt.Content)); err != nil {
-		return err
-	}
-
-	blocks := review.BuildReviewBlocksWithFilter(files, a.options.MaxBlockChars, a.options.MaxFilesPerBlock, blockFilter)
-	reviewableFiles := countReviewableFiles(blocks)
-	a.logger.Printf("arquivos revisaveis owner=%s repo=%s pr=%d files=%d", job.Owner, job.Repo, job.PRNumber, reviewableFiles)
-	a.logger.Printf("blocos de review gerados owner=%s repo=%s pr=%d blocks=%d max_chars=%d max_files_per_block=%d", job.Owner, job.Repo, job.PRNumber, len(blocks), a.options.MaxBlockChars, a.options.MaxFilesPerBlock)
-	if a.options.ReviewConcurrency > 1 {
-		a.logger.Printf("review_concurrency configurado=%d processamento=sequencial", a.options.ReviewConcurrency)
-	}
-	if err := runLog.AppendProcess("blocos gerados reviewable_files=%d blocks=%d max_chars=%d max_files_per_block=%d", reviewableFiles, len(blocks), a.options.MaxBlockChars, a.options.MaxFilesPerBlock); err != nil {
-		return err
-	}
-
-	if len(blocks) == 0 {
-		finalReview := "Nenhum arquivo revisavel encontrado no diff."
-		if _, err := runLog.Write("final-resposta.log", finalReview); err != nil {
-			return err
-		}
-		if job.Manual && !a.options.PublishManualReviews {
-			if _, err := runLog.Write("final-review.md", finalReview); err != nil {
-				return err
-			}
-		}
-		a.logger.Printf("review final gerado chars=%d", len(finalReview))
-		a.logger.Printf("review final:\n%s", finalReview)
-		return nil
-	}
-
-	partialReviews := make([]review.PartialReview, 0, len(blocks))
-	failedBlocks := 0
-	successfulBlocks := 0
-	var blockErrors []error
-	var ollamaStartedAt time.Time
-	var totalUsage ollama.ChatResult
-	for _, block := range blocks {
-		if err := ctx.Err(); err != nil {
-			a.logger.Printf("review cancelado antes de enviar bloco ao provider block=%d total=%d err=%v", block.Index, block.Total, err)
-			if appendErr := runLog.AppendProcess("review cancelado antes de enviar bloco para ollama block=%d total=%d err=%v", block.Index, block.Total, err); appendErr != nil {
-				return appendErr
-			}
-			return fmt.Errorf("review cancelado antes do bloco %d/%d: %w", block.Index, block.Total, err)
-		}
-
-		resolvedPrompt, err := promptResolver.ResolvePartialPrompt(ctx, job.Owner, job.Repo, block.Files)
-		if err != nil {
-			return err
-		}
-		a.logger.Printf("prompt parcial resolvido owner=%s repo=%s stacks=%s files=%d prompt_chars=%d", job.Owner, job.Repo, strings.Join(resolvedPrompt.Stacks, ","), len(block.Files), len(resolvedPrompt.Content))
-		if err := runLog.AppendProcess("prompt parcial resolvido block=%d stacks=%s files=%d prompt_chars=%d", block.Index, strings.Join(resolvedPrompt.Stacks, ","), len(block.Files), len(resolvedPrompt.Content)); err != nil {
-			return err
-		}
-		prompt := review.BuildPartialReviewPromptWithMemory(block, resolvedPrompt.Content, partialReviews)
-		if _, err := runLog.Write(fmt.Sprintf("block-%03d-prompt.log", block.Index), prompt); err != nil {
-			return err
-		}
-
-		timeoutLabel := fmt.Sprintf("%ds", a.options.OllamaTimeoutSeconds)
-		a.logger.Printf("enviando bloco ao provider block=%d total=%d files=%d chars=%d model=%s timeout=%s", block.Index, block.Total, len(block.Files), len(block.Content), a.ollamaClient.Model(), timeoutLabel)
-		if err := runLog.AppendProcess("enviando bloco para ollama block=%d total=%d files=%d chars=%d model=%s timeout=%s prompt_chars=%d", block.Index, block.Total, len(block.Files), len(block.Content), a.ollamaClient.Model(), timeoutLabel, len(prompt)); err != nil {
-			return err
-		}
-
-		startedAt := time.Now()
-		if ollamaStartedAt.IsZero() {
-			ollamaStartedAt = startedAt
-			if err := runLog.AppendProcess("inicio chamadas ollama started_at=%s", ollamaStartedAt.Format(time.RFC3339)); err != nil {
-				return err
-			}
-		}
-		result, usage, err := a.chatWithMetadata(ctx, prompt)
-		duration := time.Since(startedAt).Round(time.Millisecond)
-		totalElapsed := time.Since(ollamaStartedAt).Round(time.Millisecond)
-		if err != nil {
-			failedBlocks++
-			blockErr := fmt.Errorf("bloco %d/%d: %w", block.Index, block.Total, err)
-			blockErrors = append(blockErrors, blockErr)
-			failureContent := fmt.Sprintf("Falha ao revisar este bloco: %v", err)
-
-			if _, writeErr := runLog.Write(fmt.Sprintf("block-%03d-erro.log", block.Index), formatBlockErrorLog(block, failureContent, duration, totalElapsed, err)); writeErr != nil {
-				return writeErr
-			}
-
-			a.logger.Printf("erro ao revisar bloco com provider block=%d total=%d files=%d chars=%d prompt_chars=%d timeout=%s duration=%s total_elapsed=%s err=%v", block.Index, block.Total, len(block.Files), len(block.Content), len(prompt), timeoutLabel, duration, totalElapsed, err)
-			if appendErr := runLog.AppendProcess("erro ao revisar bloco com ollama block=%d total=%d files=%d chars=%d prompt_chars=%d timeout=%s duration=%s total_elapsed=%s err=%v", block.Index, block.Total, len(block.Files), len(block.Content), len(prompt), timeoutLabel, duration, totalElapsed, err); appendErr != nil {
-				return appendErr
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				a.logger.Printf("review cancelado durante bloco block=%d total=%d err=%v", block.Index, block.Total, ctxErr)
-				if appendErr := runLog.AppendProcess("review cancelado durante bloco block=%d total=%d err=%v", block.Index, block.Total, ctxErr); appendErr != nil {
-					return appendErr
-				}
-				return fmt.Errorf("review cancelado durante bloco %d/%d: %w", block.Index, block.Total, ctxErr)
-			}
-
-			partialReviews = append(partialReviews, review.PartialReview{
-				Block:   block,
-				Content: failureContent,
-				Failed:  true,
-				Error:   err.Error(),
-			})
-			continue
-		}
-		totalUsage.PromptTokens += usage.PromptTokens
-		totalUsage.CompletionTokens += usage.CompletionTokens
-
-		if _, err := runLog.Write(fmt.Sprintf("block-%03d-resposta.log", block.Index), formatBlockResponseLog(block, result, duration, totalElapsed)); err != nil {
-			return err
-		}
-
-		successfulBlocks++
-		a.logger.Printf("resposta do provider recebida block=%d chars=%d duration=%s total_elapsed=%s", block.Index, len(result), duration, totalElapsed)
-		if err := runLog.AppendProcess("resposta ollama recebida block=%d chars=%d duration=%s total_elapsed=%s", block.Index, len(result), duration, totalElapsed); err != nil {
-			return err
-		}
-
-		partialReviews = append(partialReviews, review.PartialReview{
-			Block:   block,
-			Content: result,
-		})
-	}
-
-	if successfulBlocks == 0 {
-		return fmt.Errorf("todos os %d blocos falharam ao chamar o provider: %w", len(blocks), errors.Join(blockErrors...))
-	}
-
-	a.logger.Printf("gerando review final partial_reviews=%d failed_blocks=%d", len(partialReviews), failedBlocks)
-	if err := runLog.AppendProcess("gerando review final partial_reviews=%d failed_blocks=%d", len(partialReviews), failedBlocks); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		a.logger.Printf("review cancelado antes da consolidacao final err=%v", err)
-		if appendErr := runLog.AppendProcess("review cancelado antes da consolidacao final err=%v", err); appendErr != nil {
-			return appendErr
-		}
-		return fmt.Errorf("review cancelado antes da consolidacao final: %w", err)
-	}
-	resolvedFinalPrompt, err := promptResolver.ResolveFinalPrompt(ctx, job.Owner, job.Repo)
-	if err != nil {
-		return err
-	}
-	a.logger.Printf("prompt final resolvido owner=%s repo=%s prompt_chars=%d", job.Owner, job.Repo, len(resolvedFinalPrompt.Content))
-	if err := runLog.AppendProcess("prompt final resolvido prompt_chars=%d", len(resolvedFinalPrompt.Content)); err != nil {
-		return err
-	}
-	finalPrompt := review.BuildFinalReviewPrompt(partialReviews, resolvedFinalPrompt.Content)
-	if _, err := runLog.Write("final-prompt.log", finalPrompt); err != nil {
-		return err
-	}
-
-	finalStartedAt := time.Now()
-	if ollamaStartedAt.IsZero() {
-		ollamaStartedAt = finalStartedAt
-	}
-	finalResponse, finalReview, finalUsage, err := a.requestValidatedFinalReview(ctx, finalPrompt, runLog)
-	finalDuration := time.Since(finalStartedAt).Round(time.Millisecond)
-	finalTotalElapsed := time.Since(ollamaStartedAt).Round(time.Millisecond)
-	if err != nil {
-		return err
-	}
-	totalUsage.PromptTokens += finalUsage.PromptTokens
-	totalUsage.CompletionTokens += finalUsage.CompletionTokens
-	finalReview.Metadata = review.ReviewMetadata{
-		Model:            a.ollamaClient.Model(),
-		Elapsed:          finalTotalElapsed.String(),
-		PromptTokens:     totalUsage.PromptTokens,
-		CompletionTokens: totalUsage.CompletionTokens,
-	}
-
-	if _, err := runLog.Write("final-resposta.log", formatFinalResponseLog(finalResponse, finalDuration, finalTotalElapsed, len(partialReviews), failedBlocks)); err != nil {
-		return err
-	}
-
-	a.logger.Printf("review final gerado chars=%d duration=%s total_elapsed=%s", len(finalResponse), finalDuration, finalTotalElapsed)
-	if err := runLog.AppendProcess("review final gerado chars=%d duration=%s total_elapsed=%s failed_blocks=%d", len(finalResponse), finalDuration, finalTotalElapsed, failedBlocks); err != nil {
-		return err
-	}
-	if a.options.LogSensitiveData {
-		a.logger.Printf("review final:\n%s", finalResponse)
-	}
-
-	parsedFinalReview := finalReview
-	parsedFinalReview = review.ResolveFinalReviewCommentPositions(parsedFinalReview, files)
-	if job.Manual && !a.options.PublishManualReviews {
-		if _, err := runLog.Write("final-review.md", formatManualReviewMarkdown(parsedFinalReview)); err != nil {
-			return err
-		}
-		a.logger.Printf("review manual salvo sem publicar no gitea dir=%s", runLog.Dir())
-		return nil
-	}
-	createReviewOptions := buildCreatePullReviewOptions(parsedFinalReview, a.options.AllowAutonomousReject)
-	createdReview, err := a.giteaClient.CreatePullRequestReview(ctx, job.Owner, job.Repo, job.PRNumber, createReviewOptions)
-	if err != nil {
-		if appendErr := runLog.AppendProcess("erro ao publicar review no gitea event=%s comments=%d err=%v", createReviewOptions.Event, len(createReviewOptions.Comments), err); appendErr != nil {
-			return appendErr
-		}
-		return fmt.Errorf("erro ao publicar review no gitea: %w", err)
-	}
-	a.logger.Printf("review publicado no gitea owner=%s repo=%s pr=%d review_id=%d state=%s event=%s comments=%d", job.Owner, job.Repo, job.PRNumber, createdReview.ID, createdReview.State, createReviewOptions.Event, len(createReviewOptions.Comments))
-	if err := runLog.AppendProcess("review publicado no gitea review_id=%d state=%s event=%s comments=%d", createdReview.ID, createdReview.State, createReviewOptions.Event, len(createReviewOptions.Comments)); err != nil {
-		return err
-	}
-
-	return nil
+	return a.processPipeline(ctx, job)
 }
 
 func formatManualReviewMarkdown(finalReview review.FinalReview) string {
@@ -508,6 +263,295 @@ func (a *ReviewerAgent) chatWithMetadata(ctx context.Context, prompt string) (st
 	return content, ollama.ChatResult{Content: content}, err
 }
 
+func (a *ReviewerAgent) chatStageWithMetadata(ctx context.Context, stage string, prompt string, maxOutputTokens int) (string, pipeline.StageUsage, error) {
+	if client, ok := a.ollamaClient.(ollamaMaxTokenClient); ok {
+		result, err := client.ChatWithMaxTokens(ctx, prompt, maxOutputTokens)
+		return result.Content, pipeline.StageUsage{PromptTokens: result.PromptTokens, CompletionTokens: result.CompletionTokens}, err
+	}
+	if client, ok := a.ollamaClient.(textMaxTokenClient); ok {
+		content, err := client.ChatWithMaxTokens(ctx, prompt, maxOutputTokens)
+		return content, pipeline.StageUsage{}, err
+	}
+	content, usage, err := a.chatWithMetadata(ctx, prompt)
+	return content, pipeline.StageUsage{PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens}, err
+}
+
+func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob) error {
+	rawDiff, err := a.giteaClient.GetPullRequestDiff(ctx, job.Owner, job.Repo, job.PRNumber)
+	if err != nil {
+		return err
+	}
+	a.logger.Printf("diff obtido owner=%s repo=%s pr=%d size=%d", job.Owner, job.Repo, job.PRNumber, len(rawDiff))
+
+	runLog, err := newReviewRunLog(a.options.DiffLogDir, job, a.options.LogSensitiveData)
+	if err != nil {
+		return err
+	}
+	a.logger.Printf("logs fisicos do review dir=%s", runLog.Dir())
+
+	files := diff.Parse(rawDiff)
+	a.logger.Printf("diff parseado owner=%s repo=%s pr=%d files=%d", job.Owner, job.Repo, job.PRNumber, len(files))
+	for _, file := range files {
+		a.logger.Printf("arquivo alterado path=%s additions=%d deletions=%d patch_size=%d", file.Path, file.Additions, file.Deletions, len(file.Patch))
+	}
+	if err := runLog.AppendProcess("pipeline v2 iniciado files=%d diff_chars=%d", len(files), len(rawDiff)); err != nil {
+		return err
+	}
+	if _, err := runLog.Write("01-diff-completo.log", formatFullDiffLog(rawDiff, files)); err != nil {
+		return err
+	}
+
+	promptResolver := promptconfig.NewPromptResolver(a.options.ReviewPromptConfigPath)
+	if _, err := promptResolver.Load(ctx); err != nil {
+		return err
+	}
+	a.logger.Printf("prompt config carregado path=%s", a.options.ReviewPromptConfigPath)
+	resolvedBlockFilter, err := promptResolver.ResolveBlockFilter(ctx, job.Owner, job.Repo)
+	if err != nil {
+		return err
+	}
+	blockFilter := reviewFileFilterFromConfig(resolvedBlockFilter)
+	var reviewable []diff.ChangedFile
+	for _, file := range files {
+		if review.ShouldIgnoreReviewFileWithFilter(file.Path, blockFilter) {
+			continue
+		}
+		reviewable = append(reviewable, file)
+	}
+	if len(reviewable) == 0 {
+		finalReview := review.FinalReview{Event: review.GiteaEventComment, Status: "comentado", Summary: "Nenhum arquivo revisavel encontrado no diff.", Structured: true}
+		if job.Manual && !a.options.PublishManualReviews {
+			_, err := runLog.Write("final-review.md", formatManualReviewMarkdown(finalReview))
+			return err
+		}
+		created, err := a.giteaClient.CreatePullRequestReview(ctx, job.Owner, job.Repo, job.PRNumber, buildCreatePullReviewOptions(finalReview, a.options.AllowAutonomousReject))
+		if err != nil {
+			return fmt.Errorf("erro ao publicar review no gitea: %w", err)
+		}
+		a.logger.Printf("review publicado no gitea owner=%s repo=%s pr=%d review_id=%d state=%s event=%s comments=%d", job.Owner, job.Repo, job.PRNumber, created.ID, created.State, finalReview.Event, 0)
+		return nil
+	}
+
+	basePrompt, err := promptResolver.ResolvePartialPrompt(ctx, job.Owner, job.Repo, nil)
+	if err != nil {
+		return err
+	}
+	author := job.Author
+	if author == "" {
+		author = job.Sender
+	}
+	input := pipeline.Input{Owner: job.Owner, Repository: job.Repo, PullRequestNumber: job.PRNumber, Title: job.Title, Description: job.Description, Author: author, BaseBranch: job.BaseBranch, HeadBranch: job.HeadBranch, Files: reviewable, Stacks: basePrompt.Stacks, GlobalRules: basePrompt.Content}
+	cfg := pipelineConfigFromEnv()
+	if a.options.PipelineConfigSet {
+		cfg = mergePipelineConfig(cfg, a.options.PipelineConfig)
+	}
+	if cfg.ContextWindow <= 0 {
+		cfg.ContextWindow = a.options.ContextWindow
+	}
+	if a.options.MaxOutputTokens > 0 {
+		cfg.PlannerMaxOutputTokens = minPositive(cfg.PlannerMaxOutputTokens, a.options.MaxOutputTokens)
+		cfg.ReviewerMaxOutputTokens = minPositive(cfg.ReviewerMaxOutputTokens, a.options.MaxOutputTokens)
+		cfg.ConsolidatorMaxOutputTokens = minPositive(cfg.ConsolidatorMaxOutputTokens, a.options.MaxOutputTokens)
+		cfg.VerifierMaxOutputTokens = minPositive(cfg.VerifierMaxOutputTokens, a.options.MaxOutputTokens)
+		cfg.FormatterMaxOutputTokens = minPositive(cfg.FormatterMaxOutputTokens, a.options.MaxOutputTokens)
+	}
+	cfg.MaxGroupChars = a.options.MaxBlockChars
+	cfg.MaxFilesPerGroup = a.options.MaxFilesPerBlock
+	if cfg.MaxParallelReviewGroups <= 0 {
+		cfg.MaxParallelReviewGroups = 1
+	}
+
+	runner := pipeline.Runner{Config: cfg, Logger: a.logger, Chat: a.chatStageWithMetadata, StackRules: func(ctx context.Context, files []string) (string, []string, error) {
+		resolved, err := promptResolver.ResolvePartialPrompt(ctx, job.Owner, job.Repo, files)
+		if err != nil {
+			return "", nil, err
+		}
+		return resolved.Content, resolved.Stacks, nil
+	}}
+	started := time.Now()
+	finalResponse, finalReview, metadata, err := runner.Run(ctx, input)
+	if err != nil {
+		if appendErr := runLog.AppendProcess("pipeline v2 falhou err=%v", err); appendErr != nil {
+			return appendErr
+		}
+		return err
+	}
+	finalReview.Metadata = review.ReviewMetadata{Model: a.ollamaClient.Model(), Elapsed: time.Since(started).Round(time.Millisecond).String()}
+	if _, err := runLog.Write("final-resposta.log", formatPipelineFinalResponseLog(finalResponse, time.Since(started).Round(time.Millisecond), metadata)); err != nil {
+		return err
+	}
+	if err := runLog.AppendProcess("pipeline v2 concluido groups=%d successful=%d failed=%d raw_findings=%d confirmed=%d partial=%t", metadata.ReviewGroups, metadata.SuccessfulGroups, metadata.FailedGroups, metadata.RawFindings, metadata.ConfirmedFindings, metadata.PartialReview); err != nil {
+		return err
+	}
+	parsedFinalReview := review.ResolveFinalReviewCommentPositions(finalReview, files)
+	if job.Manual && !a.options.PublishManualReviews {
+		if _, err := runLog.Write("final-review.md", formatManualReviewMarkdown(parsedFinalReview)); err != nil {
+			return err
+		}
+		a.logger.Printf("review manual salvo sem publicar no gitea dir=%s", runLog.Dir())
+		return nil
+	}
+	createReviewOptions := buildCreatePullReviewOptions(parsedFinalReview, a.options.AllowAutonomousReject)
+	createdReview, err := a.giteaClient.CreatePullRequestReview(ctx, job.Owner, job.Repo, job.PRNumber, createReviewOptions)
+	if err != nil {
+		if appendErr := runLog.AppendProcess("erro ao publicar review no gitea event=%s comments=%d err=%v", createReviewOptions.Event, len(createReviewOptions.Comments), err); appendErr != nil {
+			return appendErr
+		}
+		return fmt.Errorf("erro ao publicar review no gitea: %w", err)
+	}
+	a.logger.Printf("review publicado no gitea owner=%s repo=%s pr=%d review_id=%d state=%s event=%s comments=%d", job.Owner, job.Repo, job.PRNumber, createdReview.ID, createdReview.State, createReviewOptions.Event, len(createReviewOptions.Comments))
+	return nil
+}
+
+func pipelineConfigFromEnv() pipeline.Config {
+	cfg := pipeline.DefaultConfig()
+	cfg.PlannerEnabled = getEnvBool("REVIEW_PLANNER_ENABLED", true)
+	cfg.ConsolidatorEnabled = getEnvBool("REVIEW_CONSOLIDATOR_ENABLED", true)
+	cfg.VerifierEnabled = getEnvBool("REVIEW_VERIFIER_ENABLED", true)
+	cfg.FormatterEnabled = getEnvBool("REVIEW_FORMATTER_ENABLED", true)
+	cfg.PlannerMaxOutputTokens = getEnvIntLocal("REVIEW_PLANNER_MAX_OUTPUT_TOKENS", cfg.PlannerMaxOutputTokens)
+	cfg.ReviewerMaxOutputTokens = getEnvIntLocal("REVIEW_GROUP_MAX_OUTPUT_TOKENS", cfg.ReviewerMaxOutputTokens)
+	cfg.ConsolidatorMaxOutputTokens = getEnvIntLocal("REVIEW_CONSOLIDATOR_MAX_OUTPUT_TOKENS", cfg.ConsolidatorMaxOutputTokens)
+	cfg.VerifierMaxOutputTokens = getEnvIntLocal("REVIEW_VERIFIER_MAX_OUTPUT_TOKENS", cfg.VerifierMaxOutputTokens)
+	cfg.FormatterMaxOutputTokens = getEnvIntLocal("REVIEW_FORMATTER_MAX_OUTPUT_TOKENS", cfg.FormatterMaxOutputTokens)
+	cfg.SafetyMarginTokens = getEnvIntLocal("REVIEW_CONTEXT_SAFETY_MARGIN_TOKENS", cfg.SafetyMarginTokens)
+	cfg.MaxParallelReviewGroups = getEnvIntLocal("REVIEW_MAX_PARALLEL_GROUPS", cfg.MaxParallelReviewGroups)
+	cfg.ContextWindow = getEnvIntLocal("REVIEW_CONTEXT_WINDOW", cfg.ContextWindow)
+	cfg.MaxInputTokens = getEnvIntLocal("REVIEW_MAX_INPUT_TOKENS", cfg.MaxInputTokens)
+	if cfg.ContextWindow <= 0 {
+		cfg.ContextWindow = 0
+	}
+	cfg.MinimumPublishConfidence = getEnvFloatLocal("REVIEW_MIN_PUBLISH_CONFIDENCE", cfg.MinimumPublishConfidence)
+	cfg.MediumSeverityEvent = getEnvStringLocal("REVIEW_MEDIUM_SEVERITY_EVENT", cfg.MediumSeverityEvent)
+	cfg.PartialEvent = getEnvStringLocal("REVIEW_PARTIAL_EVENT", cfg.PartialEvent)
+	return cfg
+}
+
+func mergePipelineConfig(base, override pipeline.Config) pipeline.Config {
+	base.PlannerEnabled = override.PlannerEnabled
+	base.ConsolidatorEnabled = override.ConsolidatorEnabled
+	base.VerifierEnabled = override.VerifierEnabled
+	base.FormatterEnabled = override.FormatterEnabled
+	if override.PlannerMaxOutputTokens > 0 {
+		base.PlannerMaxOutputTokens = override.PlannerMaxOutputTokens
+	}
+	if override.ReviewerMaxOutputTokens > 0 {
+		base.ReviewerMaxOutputTokens = override.ReviewerMaxOutputTokens
+	}
+	if override.ConsolidatorMaxOutputTokens > 0 {
+		base.ConsolidatorMaxOutputTokens = override.ConsolidatorMaxOutputTokens
+	}
+	if override.VerifierMaxOutputTokens > 0 {
+		base.VerifierMaxOutputTokens = override.VerifierMaxOutputTokens
+	}
+	if override.FormatterMaxOutputTokens > 0 {
+		base.FormatterMaxOutputTokens = override.FormatterMaxOutputTokens
+	}
+	if override.SafetyMarginTokens > 0 {
+		base.SafetyMarginTokens = override.SafetyMarginTokens
+	}
+	if override.MinimumPublishConfidence > 0 {
+		base.MinimumPublishConfidence = override.MinimumPublishConfidence
+	}
+	if override.MaxParallelReviewGroups > 0 {
+		base.MaxParallelReviewGroups = override.MaxParallelReviewGroups
+	}
+	if override.MediumSeverityEvent != "" {
+		base.MediumSeverityEvent = override.MediumSeverityEvent
+	}
+	if override.PartialEvent != "" {
+		base.PartialEvent = override.PartialEvent
+	}
+	return base
+}
+
+func getEnvStringLocal(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func getEnvIntLocal(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvFloatLocal(key string, fallback float64) float64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if value == "" {
+		return fallback
+	}
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func minPositive(a, b int) int {
+	if a <= 0 {
+		return b
+	}
+	if b <= 0 || a < b {
+		return a
+	}
+	return b
+}
+
+func formatPipelineFinalResponseLog(response string, duration time.Duration, metadata pipeline.Metadata) string {
+	stageCount := len(metadata.StageMetrics)
+	inputChars := 0
+	estimatedInputTokens := 0
+	requestedOutputTokens := 0
+	actualPromptTokens := 0
+	actualCompletionTokens := 0
+	for _, metric := range metadata.StageMetrics {
+		inputChars += metric.InputChars
+		estimatedInputTokens += metric.EstimatedInputTokens
+		requestedOutputTokens += metric.RequestedOutputTokens
+		actualPromptTokens += metric.ActualPromptTokens
+		actualCompletionTokens += metric.ActualCompletionTokens
+	}
+	return fmt.Sprintf(`===== METADADOS RESPOSTA PROVIDER =====
+tipo=final
+pipeline_version=%s
+review_groups=%d
+successful_groups=%d
+failed_groups=%d
+raw_findings=%d
+consolidated_findings=%d
+confirmed_findings=%d
+rejected_findings=%d
+partial_review=%t
+diff_truncated=%t
+stage_calls=%d
+input_chars=%d
+estimated_input_tokens=%d
+requested_output_tokens=%d
+actual_prompt_tokens=%d
+actual_completion_tokens=%d
+response_chars=%d
+response_duration=%s
+===== RESPOSTA =====
+%s`, metadata.PipelineVersion, metadata.ReviewGroups, metadata.SuccessfulGroups, metadata.FailedGroups, metadata.RawFindings, metadata.ConsolidatedFindings, metadata.ConfirmedFindings, metadata.RejectedFindings, metadata.PartialReview, metadata.DiffTruncated, stageCount, inputChars, estimatedInputTokens, requestedOutputTokens, actualPromptTokens, actualCompletionTokens, len(response), duration, response)
+}
+
 func buildCreatePullReviewOptions(finalReview review.FinalReview, allowAutonomousReject bool) gitea.CreatePullReviewOptions {
 	event := finalReview.Event
 	if !allowAutonomousReject && (event == review.GiteaEventApproved || event == review.GiteaEventRequestChanges) {
@@ -541,13 +585,40 @@ func buildCreatePullReviewOptions(finalReview review.FinalReview, allowAutonomou
 			continue
 		}
 		options.Comments = append(options.Comments, gitea.CreatePullReviewComment{
-			Body:        comment.Body,
+			Body:        formatInlineReviewComment(comment),
 			NewPosition: comment.NewPosition,
 			Path:        comment.Path,
 		})
 	}
 
 	return options
+}
+
+func formatInlineReviewComment(comment review.InlineComment) string {
+	var builder strings.Builder
+	severity := strings.TrimSpace(comment.Severity)
+	if severity == "" {
+		severity = "nao informada"
+	}
+	commentType := strings.TrimSpace(comment.Type)
+	if commentType == "" {
+		commentType = "semantica"
+	}
+	builder.WriteString("> severity: ")
+	builder.WriteString(severity)
+	builder.WriteString("\n> tipo: ")
+	builder.WriteString(commentType)
+
+	if reason := strings.TrimSpace(comment.DecisionReason); reason != "" {
+		builder.WriteString("\n\n")
+		builder.WriteString(reason)
+	}
+	if body := strings.TrimSpace(comment.Body); body != "" {
+		builder.WriteString("\n\n")
+		builder.WriteString(body)
+	}
+
+	return strings.TrimSpace(builder.String())
 }
 
 func hasBlockingComment(comments []review.InlineComment) bool {
