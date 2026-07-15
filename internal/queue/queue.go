@@ -12,6 +12,11 @@ type ReviewJob struct {
 	RequestedReviewer string
 	Sender            string
 	Manual            bool
+	Title             string
+	Description       string
+	Author            string
+	BaseBranch        string
+	HeadBranch        string
 }
 
 type Publisher interface {
