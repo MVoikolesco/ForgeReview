@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"gitea-agents/internal/queue"
+	"gitea-agents/internal/review/pipeline"
 )
 
 type reviewRunLog struct {
@@ -66,6 +68,29 @@ func (l *reviewRunLog) AppendProcess(format string, args ...any) error {
 		return fmt.Errorf("erro ao escrever log de processo: %w", err)
 	}
 
+	return nil
+}
+
+func (l *reviewRunLog) AppendProgress(event pipeline.ProgressEvent) error {
+	if !l.enabled {
+		return nil
+	}
+	if event.Timestamp == "" {
+		event.Timestamp = time.Now().Format(time.RFC3339)
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("erro ao serializar progresso: %w", err)
+	}
+	path := filepath.Join(l.dir, "00-progress.jsonl")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("erro ao abrir log de progresso: %w", err)
+	}
+	defer file.Close()
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("erro ao escrever log de progresso: %w", err)
+	}
 	return nil
 }
 

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"gitea-agents/internal/diff"
 	basereview "gitea-agents/internal/review"
 )
 
@@ -17,6 +18,7 @@ type Runner struct {
 	Logger     *log.Logger
 	Chat       ChatFunc
 	StackRules func(context.Context, []string) (string, []string, error)
+	Progress   ProgressFunc
 }
 
 func (r Runner) Run(ctx context.Context, input Input) (string, basereview.FinalReview, Metadata, error) {
@@ -41,6 +43,8 @@ func (r Runner) Run(ctx context.Context, input Input) (string, basereview.FinalR
 		return response, usage, err
 	}
 	r.logf("pipeline iniciado owner=%s repo=%s pr=%d files=%d", input.Owner, input.Repository, input.PullRequestNumber, len(input.Files))
+	r.progress(ProgressEvent{Stage: "preparacao", Status: "done", Percent: 15, Message: fmt.Sprintf("%d arquivos preparados", len(input.Files)), Files: filePaths(input.Files)})
+	r.progress(ProgressEvent{Stage: "planejamento", Status: "running", Percent: 20, Message: "Agrupando arquivos para review"})
 
 	plan, plannerFallback := r.plan(ctx, cfg, input)
 	meta.PlannerFallback = plannerFallback
@@ -50,6 +54,8 @@ func (r Runner) Run(ctx context.Context, input Input) (string, basereview.FinalR
 		meta.PlannerFallback = true
 		meta.ReviewGroups = len(plan.Groups)
 	}
+	r.progress(ProgressEvent{Stage: "planejamento", Status: "done", Percent: 30, Message: fmt.Sprintf("%d grupos de review", len(plan.Groups)), TotalGroups: len(plan.Groups)})
+	r.progress(ProgressEvent{Stage: "revisao", Status: "running", Percent: 35, Message: "Revisando grupos", TotalGroups: len(plan.Groups)})
 
 	reviews, failedGroups, err := r.reviewGroups(ctx, cfg, input, plan)
 	if err != nil {
@@ -65,16 +71,22 @@ func (r Runner) Run(ctx context.Context, input Input) (string, basereview.FinalR
 	if len(reviews) == 0 {
 		return "", basereview.FinalReview{}, meta, fmt.Errorf("todos os grupos falharam")
 	}
+	r.progress(ProgressEvent{Stage: "revisao", Status: "done", Percent: 60, Message: fmt.Sprintf("%d/%d grupos revisados", len(reviews), len(plan.Groups)), TotalGroups: len(plan.Groups), FailedGroups: len(failedGroups), Findings: meta.RawFindings})
 
+	r.progress(ProgressEvent{Stage: "consolidacao", Status: "running", Percent: 65, Message: "Consolidando achados"})
 	consolidated, consolidatedFallback := r.consolidate(ctx, cfg, input, plan, reviews, failedGroups)
 	meta.ConsolidatorFallback = consolidatedFallback
 	meta.ConsolidatedFindings = len(consolidated.Findings)
+	r.progress(ProgressEvent{Stage: "consolidacao", Status: "done", Percent: 75, Message: fmt.Sprintf("%d achados consolidados", meta.ConsolidatedFindings), Findings: meta.ConsolidatedFindings})
 
+	r.progress(ProgressEvent{Stage: "verificacao", Status: "running", Percent: 80, Message: "Validando relevancia dos achados"})
 	approved, rejected, verifierFallback := r.verify(ctx, cfg, input, consolidated)
 	meta.VerifierFallback = verifierFallback
 	meta.ConfirmedFindings = len(approved)
 	meta.RejectedFindings = rejected
+	r.progress(ProgressEvent{Stage: "verificacao", Status: "done", Percent: 88, Message: fmt.Sprintf("%d confirmados, %d rejeitados", meta.ConfirmedFindings, meta.RejectedFindings), Findings: meta.ConfirmedFindings})
 
+	r.progress(ProgressEvent{Stage: "formatacao", Status: "running", Percent: 92, Message: "Montando comentario final"})
 	response, formatterFallback := r.format(ctx, cfg, consolidated, approved, meta)
 	meta.FormatterFallback = formatterFallback
 	response = alignFinalCommentLines(response, approved)
@@ -85,6 +97,7 @@ func (r Runner) Run(ctx context.Context, input Input) (string, basereview.FinalR
 		return "", basereview.FinalReview{}, meta, err
 	}
 	r.logf("pipeline concluido duration=%s partial=%t comments=%d", time.Since(started).Round(time.Millisecond), meta.PartialReview, len(response.Comments))
+	r.progress(ProgressEvent{Stage: "formatacao", Status: "done", Percent: 96, Message: fmt.Sprintf("%d comentarios formatados", len(response.Comments)), Findings: len(response.Comments)})
 	return string(raw), parsed, meta, nil
 }
 
@@ -140,6 +153,7 @@ func (r Runner) reviewGroups(ctx context.Context, cfg Config, input Input, plan 
 			defer wg.Done()
 			defer func() { <-sem }()
 			res := result{index: index, groupID: group.ID}
+			r.progress(ProgressEvent{Stage: "revisao", Status: "running", Percent: reviewGroupPercent(index, len(plan.Groups), false), Message: fmt.Sprintf("Revisando grupo %s", group.ID), GroupID: group.ID, GroupIndex: index + 1, TotalGroups: len(plan.Groups), Files: group.Files})
 			stackRules := ""
 			if r.StackRules != nil {
 				rules, stacks, err := r.StackRules(ctx, group.Files)
@@ -180,6 +194,7 @@ func (r Runner) reviewGroups(ctx context.Context, cfg Config, input Input, plan 
 			}
 			review.Findings = validateFindings(review.Findings, input, group.ID)
 			r.logf("review group concluido group=%s findings=%d duration=%s", group.ID, len(review.Findings), time.Since(started).Round(time.Millisecond))
+			r.progress(ProgressEvent{Stage: "revisao", Status: "done", Percent: reviewGroupPercent(index, len(plan.Groups), true), Message: fmt.Sprintf("Grupo %s revisado", group.ID), GroupID: group.ID, GroupIndex: index + 1, TotalGroups: len(plan.Groups), Files: group.Files, Findings: len(review.Findings)})
 			res.review = review
 			results <- res
 		}(index, group)
@@ -352,4 +367,34 @@ func (r Runner) logf(format string, args ...any) {
 	if r.Logger != nil {
 		r.Logger.Printf(format, args...)
 	}
+}
+
+func (r Runner) progress(event ProgressEvent) {
+	if r.Progress == nil {
+		return
+	}
+	if event.Timestamp == "" {
+		event.Timestamp = time.Now().Format(time.RFC3339)
+	}
+	r.Progress(event)
+}
+
+func reviewGroupPercent(index, total int, done bool) int {
+	if total <= 0 {
+		return 35
+	}
+	step := 25.0 / float64(total)
+	position := float64(index)
+	if done {
+		position++
+	}
+	return 35 + int(position*step)
+}
+
+func filePaths(files []diff.ChangedFile) []string {
+	paths := make([]string, 0, len(files))
+	for _, file := range files {
+		paths = append(paths, file.Path)
+	}
+	return paths
 }

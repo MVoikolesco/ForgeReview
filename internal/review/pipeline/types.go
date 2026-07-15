@@ -175,3 +175,19 @@ type StageUsage struct {
 }
 
 type ChatFunc func(ctx context.Context, stage string, prompt string, maxOutputTokens int) (string, StageUsage, error)
+
+type ProgressEvent struct {
+	Stage        string   `json:"stage"`
+	Status       string   `json:"status"`
+	Percent      int      `json:"percent"`
+	Message      string   `json:"message,omitempty"`
+	GroupID      string   `json:"group_id,omitempty"`
+	GroupIndex   int      `json:"group_index,omitempty"`
+	TotalGroups  int      `json:"total_groups,omitempty"`
+	Files        []string `json:"files,omitempty"`
+	Findings     int      `json:"findings,omitempty"`
+	FailedGroups int      `json:"failed_groups,omitempty"`
+	Timestamp    string   `json:"timestamp,omitempty"`
+}
+
+type ProgressFunc func(ProgressEvent)

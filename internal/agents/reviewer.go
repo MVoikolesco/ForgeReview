@@ -288,6 +288,12 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 		return err
 	}
 	a.logger.Printf("logs fisicos do review dir=%s", runLog.Dir())
+	progress := func(event pipeline.ProgressEvent) {
+		if err := runLog.AppendProgress(event); err != nil {
+			a.logger.Printf("erro ao gravar progresso do review: %v", err)
+		}
+	}
+	progress(pipeline.ProgressEvent{Stage: "preparacao", Status: "running", Percent: 5, Message: "Baixando e analisando diff"})
 
 	files := diff.Parse(rawDiff)
 	a.logger.Printf("diff parseado owner=%s repo=%s pr=%d files=%d", job.Owner, job.Repo, job.PRNumber, len(files))
@@ -319,6 +325,7 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 		reviewable = append(reviewable, file)
 	}
 	if len(reviewable) == 0 {
+		progress(pipeline.ProgressEvent{Stage: "preparacao", Status: "done", Percent: 100, Message: "Nenhum arquivo revisavel encontrado"})
 		finalReview := review.FinalReview{Event: review.GiteaEventComment, Status: "comentado", Summary: "Nenhum arquivo revisavel encontrado no diff.", Structured: true}
 		if job.Manual && !a.options.PublishManualReviews {
 			_, err := runLog.Write("final-review.md", formatManualReviewMarkdown(finalReview))
@@ -361,7 +368,7 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 		cfg.MaxParallelReviewGroups = 1
 	}
 
-	runner := pipeline.Runner{Config: cfg, Logger: a.logger, Chat: a.chatStageWithMetadata, StackRules: func(ctx context.Context, files []string) (string, []string, error) {
+	runner := pipeline.Runner{Config: cfg, Logger: a.logger, Chat: a.chatStageWithMetadata, Progress: progress, StackRules: func(ctx context.Context, files []string) (string, []string, error) {
 		resolved, err := promptResolver.ResolvePartialPrompt(ctx, job.Owner, job.Repo, files)
 		if err != nil {
 			return "", nil, err
@@ -371,6 +378,7 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 	started := time.Now()
 	finalResponse, finalReview, metadata, err := runner.Run(ctx, input)
 	if err != nil {
+		progress(pipeline.ProgressEvent{Stage: "erro", Status: "failed", Percent: 100, Message: err.Error()})
 		if appendErr := runLog.AppendProcess("pipeline v2 falhou err=%v", err); appendErr != nil {
 			return appendErr
 		}
@@ -388,18 +396,22 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 		if _, err := runLog.Write("final-review.md", formatManualReviewMarkdown(parsedFinalReview)); err != nil {
 			return err
 		}
+		progress(pipeline.ProgressEvent{Stage: "publicacao", Status: "done", Percent: 100, Message: "Review manual salvo sem publicar"})
 		a.logger.Printf("review manual salvo sem publicar no gitea dir=%s", runLog.Dir())
 		return nil
 	}
+	progress(pipeline.ProgressEvent{Stage: "publicacao", Status: "running", Percent: 98, Message: "Publicando review no Gitea"})
 	createReviewOptions := buildCreatePullReviewOptions(parsedFinalReview, a.options.AllowAutonomousReject)
 	createdReview, err := a.giteaClient.CreatePullRequestReview(ctx, job.Owner, job.Repo, job.PRNumber, createReviewOptions)
 	if err != nil {
+		progress(pipeline.ProgressEvent{Stage: "publicacao", Status: "failed", Percent: 100, Message: err.Error()})
 		if appendErr := runLog.AppendProcess("erro ao publicar review no gitea event=%s comments=%d err=%v", createReviewOptions.Event, len(createReviewOptions.Comments), err); appendErr != nil {
 			return appendErr
 		}
 		return fmt.Errorf("erro ao publicar review no gitea: %w", err)
 	}
 	a.logger.Printf("review publicado no gitea owner=%s repo=%s pr=%d review_id=%d state=%s event=%s comments=%d", job.Owner, job.Repo, job.PRNumber, createdReview.ID, createdReview.State, createReviewOptions.Event, len(createReviewOptions.Comments))
+	progress(pipeline.ProgressEvent{Stage: "publicacao", Status: "done", Percent: 100, Message: fmt.Sprintf("Review publicado com %d comentarios", len(createReviewOptions.Comments))})
 	return nil
 }
 

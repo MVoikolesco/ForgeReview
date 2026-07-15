@@ -2,12 +2,15 @@ package admin
 
 import (
 	"bufio"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+
+	"gitea-agents/internal/review/pipeline"
 )
 
 type reviewLogSummary struct {
@@ -15,6 +18,16 @@ type reviewLogSummary struct {
 	UpdatedAt string `json:"updated_at"`
 	Files     int    `json:"files"`
 	Bytes     int64  `json:"bytes"`
+}
+
+type reviewProgressSummary struct {
+	Name      string                   `json:"name"`
+	UpdatedAt string                   `json:"updated_at"`
+	Percent   int                      `json:"percent"`
+	Stage     string                   `json:"stage"`
+	Status    string                   `json:"status"`
+	Message   string                   `json:"message"`
+	Events    []pipeline.ProgressEvent `json:"events"`
 }
 
 func (h Handler) observabilityRoute(w http.ResponseWriter, r *http.Request, action string) {
@@ -29,6 +42,8 @@ func (h Handler) observabilityRoute(w http.ResponseWriter, r *http.Request, acti
 		h.workerLogs(w, r)
 	case "reviews":
 		h.reviewLogs(w, r)
+	case "progress":
+		h.reviewProgress(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -97,6 +112,19 @@ func (h Handler) reviewLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, reviews)
 }
 
+func (h Handler) reviewProgress(w http.ResponseWriter, r *http.Request) {
+	progress, err := latestReviewProgress(h.logDir)
+	if err != nil && !os.IsNotExist(err) {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if progress == nil {
+		writeJSON(w, 200, map[string]any{"active": false})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"active": progress.Status != "done" && progress.Status != "failed", "review": progress})
+}
+
 func scanReviewLogs(root string) ([]reviewLogSummary, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -132,4 +160,59 @@ func scanReviewLogs(root string) ([]reviewLogSummary, error) {
 		items = items[:50]
 	}
 	return items, nil
+}
+
+func latestReviewProgress(root string) (*reviewProgressSummary, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	items := []reviewProgressSummary{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		item, err := readReviewProgress(filepath.Join(root, entry.Name()), entry.Name())
+		if err != nil || len(item.Events) == 0 {
+			continue
+		}
+		items = append(items, *item)
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].UpdatedAt > items[j].UpdatedAt })
+	return &items[0], nil
+}
+
+func readReviewProgress(dir, name string) (*reviewProgressSummary, error) {
+	path := filepath.Join(dir, "00-progress.jsonl")
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	item := &reviewProgressSummary{Name: name, Events: []pipeline.ProgressEvent{}}
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var event pipeline.ProgressEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			continue
+		}
+		item.Events = append(item.Events, event)
+		item.UpdatedAt = event.Timestamp
+		item.Percent = event.Percent
+		item.Stage = event.Stage
+		item.Status = event.Status
+		item.Message = event.Message
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return item, nil
 }
