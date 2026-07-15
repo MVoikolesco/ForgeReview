@@ -123,6 +123,11 @@ func (q *Queue) Publish(ctx context.Context, job queue.ReviewJob) error {
 			"requested_reviewer": job.RequestedReviewer,
 			"sender":             job.Sender,
 			"manual":             job.Manual,
+			"title":              job.Title,
+			"description":        job.Description,
+			"author":             job.Author,
+			"base_branch":        job.BaseBranch,
+			"head_branch":        job.HeadBranch,
 		},
 	}).Result()
 
@@ -184,6 +189,11 @@ func decodeJob(values map[string]any) (queue.ReviewJob, error) {
 		RequestedReviewer: valueAsString(values["requested_reviewer"]),
 		Sender:            valueAsString(values["sender"]),
 		Manual:            valueAsBool(values["manual"]),
+		Title:             valueAsString(values["title"]),
+		Description:       valueAsString(values["description"]),
+		Author:            valueAsString(values["author"]),
+		BaseBranch:        valueAsString(values["base_branch"]),
+		HeadBranch:        valueAsString(values["head_branch"]),
 	}, nil
 }
 
