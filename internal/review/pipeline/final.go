@@ -17,6 +17,38 @@ func deterministicFinal(findings []ReviewFinding, meta Metadata, cfg Config, sum
 	return enforceDecision(response, findings, meta, cfg, summary)
 }
 
+func alignFinalCommentLines(response FinalResponse, findings []ReviewFinding) FinalResponse {
+	if len(response.Comments) == 0 || len(findings) == 0 {
+		return response
+	}
+
+	used := make([]bool, len(findings))
+	for commentIndex := range response.Comments {
+		comment := &response.Comments[commentIndex]
+		findingIndex := findMatchingFindingIndex(*comment, findings, used)
+		if findingIndex < 0 {
+			continue
+		}
+		comment.Line = findings[findingIndex].Line
+		used[findingIndex] = true
+	}
+
+	return response
+}
+
+func findMatchingFindingIndex(comment FinalComment, findings []ReviewFinding, used []bool) int {
+	for index, finding := range findings {
+		if used[index] || finding.File != comment.File {
+			continue
+		}
+		if comment.Severity != "" && normalizeSeverity(comment.Severity) != normalizeSeverity(finding.Severity) {
+			continue
+		}
+		return index
+	}
+	return -1
+}
+
 func enforceDecision(response FinalResponse, _ []ReviewFinding, meta Metadata, cfg Config, summary string) FinalResponse {
 	response.Comments = normalizeFinalComments(response.Comments)
 	if response.Comments == nil {

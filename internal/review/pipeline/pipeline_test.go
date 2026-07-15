@@ -108,6 +108,17 @@ func TestDeterministicFinalDoesNotApprovePartialReview(t *testing.T) {
 	}
 }
 
+func TestAlignFinalCommentLinesUsesValidatedFindingLines(t *testing.T) {
+	response := FinalResponse{Comments: []FinalComment{{File: "app.go", Line: 11, Severity: "alta", DecisionReason: "r", Comment: "c"}}}
+	findings := []ReviewFinding{{File: "app.go", Line: 10, Severity: "alta"}}
+
+	aligned := alignFinalCommentLines(response, findings)
+
+	if aligned.Comments[0].Line != 10 {
+		t.Fatalf("expected formatter line to be replaced by validated finding line, got %d", aligned.Comments[0].Line)
+	}
+}
+
 func TestTruncateInputDiffMarksFilesWithoutCuttingMidLine(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.MaxInputTokens = 20

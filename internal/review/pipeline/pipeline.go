@@ -77,6 +77,7 @@ func (r Runner) Run(ctx context.Context, input Input) (string, basereview.FinalR
 
 	response, formatterFallback := r.format(ctx, cfg, consolidated, approved, meta)
 	meta.FormatterFallback = formatterFallback
+	response = alignFinalCommentLines(response, approved)
 	response.Metadata = meta
 	raw, _ := json.Marshal(response)
 	parsed, err := basereview.ValidateFinalReviewResponse(string(raw))
