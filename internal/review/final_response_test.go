@@ -8,9 +8,9 @@ import (
 )
 
 func TestValidateFinalReviewResponse(t *testing.T) {
-	valid := `{"comments":[{"file":"app/file.go","line":3,"severity":"media","decision_reason":"Regressao","comment":"Corrija o contrato."}],"final_review":{"gitea_event":"REQUEST_CHANGES","status":"reprovado","summary":"Ha um problema.","observations":"Bloco analisado."}}`
+	valid := `{"comments":[{"file":"app/file.go","line":3,"severity":"media","type":"contrato","decision_reason":"Regressao","comment":"Corrija o contrato."}],"final_review":{"gitea_event":"REQUEST_CHANGES","status":"reprovado","summary":"Ha um problema.","observations":"Bloco analisado."}}`
 	parsed, err := ValidateFinalReviewResponse(valid)
-	if err != nil || len(parsed.InlineComments) != 1 || parsed.InlineComments[0].NewPosition != 3 {
+	if err != nil || len(parsed.InlineComments) != 1 || parsed.InlineComments[0].NewPosition != 3 || parsed.InlineComments[0].Type != "contrato" {
 		t.Fatalf("expected valid response, got %#v, %v", parsed, err)
 	}
 }
@@ -25,12 +25,12 @@ func TestValidateFinalReviewResponseRejectsInvalidContracts(t *testing.T) {
 		{"invalid json", "{", "JSON invalido"},
 		{"text around json", "antes " + base, "JSON invalido"},
 		{"markdown", "```json\n" + base + "\n```", "JSON invalido"},
-		{"severity", strings.Replace(base, `"comments":[]`, `"comments":[{"file":"a","line":1,"severity":"critica","decision_reason":"x","comment":"x"}]`, 1), "severity nao permitida"},
+		{"severity", strings.Replace(base, `"comments":[]`, `"comments":[{"file":"a","line":1,"severity":"grave","decision_reason":"x","comment":"x"}]`, 1), "severity nao permitida"},
 		{"status", strings.Replace(base, `"status":"comentario"`, `"status":"invalido"`, 1), "status nao permitido"},
 		{"event", strings.Replace(base, `"gitea_event":"COMMENT"`, `"gitea_event":"MERGE"`, 1), "gitea_event nao permitido"},
 		{"line type", strings.Replace(base, `"comments":[]`, `"comments":[{"file":"a","line":"1","severity":"baixa","decision_reason":"x","comment":"x"}]`, 1), "estrutura JSON invalida"},
 		{"missing field", strings.Replace(base, `,"observations":""`, "", 1), "final_review.observations ausente"},
-		{"unknown field", strings.Replace(base, `"comments":[]`, `"comments":[],"extra":true`, 1), "propriedades de primeiro nivel"},
+		{"unknown field", strings.Replace(base, `"comments":[]`, `"comments":[],"extra":true`, 1), "propriedade desconhecida"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -39,6 +39,14 @@ func TestValidateFinalReviewResponseRejectsInvalidContracts(t *testing.T) {
 				t.Fatalf("expected %q, got %v", test.want, err)
 			}
 		})
+	}
+}
+
+func TestValidateFinalReviewResponseAcceptsMetadataAndCriticalSeverity(t *testing.T) {
+	body := `{"comments":[{"file":"app/file.go","line":3,"severity":"critica","decision_reason":"Regressao critica","comment":"Corrija antes do merge."}],"final_review":{"gitea_event":"REQUEST_CHANGES","status":"reprovado","summary":"Ha um problema critico.","observations":""},"metadata":{"pipeline_version":"2"}}`
+	parsed, err := ValidateFinalReviewResponse(body)
+	if err != nil || len(parsed.InlineComments) != 1 || parsed.InlineComments[0].Severity != "critica" {
+		t.Fatalf("expected metadata and critical severity to be valid, got %#v, %v", parsed, err)
 	}
 }
 
@@ -164,12 +172,14 @@ index 7bc9fb4..bf1b437 100644
 			{Path: "app/Controllers/Oracle/OracleAccess.php", Reference: "!$this->oracleAccessModel->systemEsists($json->serial)", NewPosition: 41},
 			{Path: "app/Controllers/Oracle/OracleAccess.php", Reference: "'status' => 200,", NewPosition: 27},
 			{Path: "app/Controllers/Oracle/OracleAccess.php", Reference: "referencia inexistente", NewPosition: 99},
+			{Path: "app/Controllers/Oracle/OracleAccess.php", NewPosition: 25},
+			{Path: "app/Controllers/Oracle/OracleAccess.php", NewPosition: 26},
 		},
 	}
 
 	resolved := ResolveFinalReviewCommentPositions(finalReview, files)
 
-	expected := []int{49, 42, 28, 0}
+	expected := []int{49, 42, 28, 0, 0, 26}
 	for index, line := range expected {
 		if resolved.InlineComments[index].NewPosition != line {
 			t.Fatalf("comment %d expected line %d, got %d", index, line, resolved.InlineComments[index].NewPosition)
