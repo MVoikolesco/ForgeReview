@@ -1,143 +1,139 @@
-# Gitea AI Reviewer
+# ForgeReview
 
-Orquestrador em Go para receber webhooks do Gitea, enfileirar pedidos de revisao e publicar comentarios automatizados em Pull Requests usando um modelo Ollama.
+ForgeReview recebe solicitações de review do Gitea, enfileira os jobs no Redis e executa a análise com a integração de IA selecionada no SQLite. Ollama e OpenRouter estão funcionais; outros providers cadastrados retornam erro explícito até terem cliente implementado.
 
-O projeto foi criado para manter o fluxo de review previsivel: a API responde rapido ao webhook, o worker processa o diff em blocos, o modelo gera reviews parciais, uma etapa final consolida o resultado e o Gitea recebe comentarios inline com evento final (`APPROVED`, `COMMENT` ou `REQUEST_CHANGES`).
+## Subida rápida
 
-## Recursos
-
-- Recebe eventos de review do Gitea via webhook.
-- Enfileira jobs em Redis Streams para processamento assincrono.
-- Busca o diff completo do Pull Request pela API do Gitea.
-- Divide o diff por arquivos e blocos configuraveis.
-- Detecta stacks por `file_patterns`, sem cadastro por projeto.
-- Carrega prompts Markdown em tempo de execucao, sem rebuild.
-- Mantem formato rigido de resposta para gerar comentarios inline com seguranca.
-- Registra logs fisicos com diff, prompts e respostas do modelo.
-
-## Como Funciona
-
-```text
-Gitea webhook
-  -> API /webhook
-  -> Redis Streams
-  -> Worker
-  -> Gitea diff
-  -> blocos de review
-  -> Ollama
-  -> consolidacao final
-  -> Gitea Pull Request Review
-```
-
-O worker nao envia o diff inteiro em uma unica chamada. Ele separa o diff por arquivo, monta blocos menores e chama o modelo sequencialmente. Depois, uma chamada final consolida os reviews parciais e produz o corpo do review e os comentarios inline.
-
-## Avisos Importantes
-
-- Nao altere a estrutura do prompt de entrada nem o formato de resposta base sem alterar tambem o parser e os testes. O processamento depende desse contrato para transformar a resposta do modelo em comentarios no Gitea.
-- Os arquivos Markdown em `prompts/base/` podem ter regras de revisao ajustadas, mas nao devem instruir o modelo a responder em outro formato.
-- O formato final esperado pelo sistema inclui secoes como `STATUS`, `ACHADOS_CONCRETOS`, `COMENTARIOS_INLINE`, `REVISAO_FINAL` e `EVENTO_GITEA`.
-- Mantenha `REVIEW_CONCURRENCY=1`. Essa configuracao esta reservada para paralelismo de agentes/reviews, revisando mais de um PR por vez, e ainda esta em desenvolvimento. No futuro, so deve ser usada com capacidade adequada de modelo/infraestrutura e, em provedor pago, plano Pro ou equivalente. Nao altere por enquanto.
-
-## Prompts
-
-Os prompts ficam em `prompts/` e a configuracao principal fica em [config/review-prompts.yaml](config/review-prompts.yaml).
-
-```text
-prompts/
-  base/
-    review_partial.md
-    review_final.md
-  stacks/
-    angular.md
-    codeigniter.md
-    go.md
-    laravel.md
-    php.md
-    react.md
-    solidjs.md
-    vue.md
-    sql.md
-    docker.md
-    cicd.md
-```
-
-O YAML define filtros globais e stacks autodetectadas. Cada stack aponta para um `.md` e uma lista de `file_patterns`; quando um bloco contem arquivos que casam com esses patterns, o prompt da stack e acrescentado ao prompt base.
-
-O contrato de resposta do modelo fica preservado no codigo. Isso e intencional: o parser depende das secoes `STATUS`, `ACHADOS_CONCRETOS`, `COMENTARIOS_INLINE`, `REVISAO_FINAL` e `EVENTO_GITEA` para publicar corretamente no Gitea.
-
-## Estrutura
-
-```text
-cmd/server/              entrada da API e worker
-config/                  configuracao dos prompts
-internal/agents/         agentes de processamento
-internal/diff/           parser de diff
-internal/gitea/          cliente da API do Gitea
-internal/ollama/         cliente do Ollama
-internal/queue/          contratos de fila
-internal/queue/redis/    Redis Streams
-internal/review/         blocos, prompts e parser de resposta final
-internal/webhook/        handlers HTTP
-internal/worker/         consumidor de jobs
-prompts/                 prompts base e por stack
-```
-
-## Instalacao
-
-Veja o passo a passo em [INSTALL.md](INSTALL.md).
-
-## Como Rodar
-
-Resumo rapido para ambiente com Docker:
+1. Copie `.env.example` para `.env`.
+2. Configure `GITEA_URL`, `GITEA_TOKEN`, `GITEA_BOT_USERNAME` e altere `ADMIN_PASSWORD`.
+3. Se usar OpenRouter, preencha `OPENROUTER_API_KEY`. O painel armazenará somente esse nome, nunca o segredo.
+4. Execute:
 
 ```sh
-cp .env.example .env
-docker compose up --build
+docker compose up -d --build
 ```
 
-Antes de subir, edite o `.env` com `GITEA_URL`, `GITEA_TOKEN`, `GITEA_BOT_USERNAME`, `OLLAMA_URL` e `OLLAMA_MODEL`.
+5. Aguarde os serviços ficarem saudáveis e abra `http://localhost:8088`.
 
-Depois de subir os servicos, a API fica disponivel em:
+Credenciais iniciais do painel:
 
 ```text
-http://localhost:8088
+Usuário: admin
+Senha:   change-me
 ```
 
-O worker fica em outro container e consome os jobs da fila Redis. Os logs de diffs, prompts e respostas ficam em `logs/diffs/`.
+Elas são controladas por `ADMIN_USERNAME` e `ADMIN_PASSWORD`. Troque a senha antes de expor a porta.
 
-Para iniciar um review manualmente, envie a URL do Pull Request para a mesma API. O job entra na fila e segue exatamente o mesmo fluxo do webhook:
+## Configuração inicial do review
+
+Abra **Configurar IA** no painel. O assistente executa um fluxo linear:
+
+1. Escolha Ollama ou OpenRouter.
+2. Informe a conexão e valide o acesso.
+3. Escolha um modelo retornado pelo catálogo real do provider.
+4. Ajuste apenas os parâmetros aplicáveis à integração escolhida.
+5. Defina o profile padrão e a policy de revisão.
+6. Revise e conclua.
+
+A conclusão usa uma única transação SQLite: conexão, modelo, parâmetros, profile e policy são gravados juntos ou nenhum registro é alterado. Os cadastros individuais continuam disponíveis em **Avançado**.
+
+Os prompts não fazem parte do cadastro administrativo. O worker usa diretamente `config/review-prompts.yaml`, `prompts/base/review_partial.md`, `prompts/base/review_final.md` e os complementos versionados em `prompts/stacks`. Alterações de prompts ficam reservadas para uma evolução futura do produto.
+
+Para Ollama no host, o endereço padrão é `http://host.docker.internal:11434` e os modelos vêm de `/api/tags`. Para OpenRouter, a API valida `OPENROUTER_API_KEY` em `/api/v1/key` e carrega os modelos de `/api/v1/models`.
+
+## Seleção de provider e modelo
+
+Para cada PR, o worker consulta o SQLite usando `owner/repositório`:
+
+```text
+repositório com profile → profile do repositório
+sem vínculo específico  → profile padrão
+profile → modelo → conexão → provider
+```
+
+- `ollama`: usa `/api/chat`, os parâmetros Ollama cadastrados e pode descarregar o modelo ao terminar.
+- `openrouter`: usa a base oficial `https://openrouter.ai/api/v1`, autenticação Bearer e `/chat/completions`. O modelo é salvo pelo slug oficial retornado pelo catálogo. O limite operacional de saída é configurado separadamente (padrão: `4096`); o máximo anunciado pelo catálogo nunca é enviado automaticamente como `max_tokens`. `HTTP-Referer` e `X-OpenRouter-Title` podem ser configurados para atribuição da aplicação.
+- Sem configuração completa e habilitada, o job falha com mensagem clara. Não existe fallback para configurações de review no `.env`.
+
+Alterações administrativas entram em vigor no próximo PR; não é necessário reiniciar o worker. Ao adicionar ou trocar o valor de uma variável secreta no `.env`, recrie o worker para atualizar seu ambiente.
+
+## Docker e SQLite
+
+O volume `config_data` contém `/data/forgereview.db` e é compartilhado pela API e pelo worker. O entrypoint corrige as permissões do volume e depois executa o processo como usuário não-root. Apenas a API aplica migrations e seeds; o worker inicia depois que a API está saudável e apenas valida o schema.
+
+Se uma versão anterior criou o volume com permissões incorretas, basta reconstruir e recriar os containers:
+
+```sh
+docker compose down
+docker compose up -d --build --force-recreate
+```
+
+Não use `docker compose down -v` se quiser preservar as configurações já cadastradas.
+
+## Segurança e privacidade
+
+- O SQLite não possui tabelas para diff, código analisado, prompt final montado ou resposta completa do modelo.
+- API keys e tokens são referenciados pelo nome da variável de ambiente.
+- `log_sensitive_data` é falso por padrão. Quando falso, o worker não grava diff, prompts ou respostas em disco e não imprime a resposta completa no console.
+- Habilitar `log_sensitive_data` cria arquivos sob `/logs/diffs`; faça isso somente durante diagnóstico controlado.
+- A autenticação do painel é Basic Auth. Use HTTPS por meio de um proxy reverso em ambientes expostos.
+
+## Endpoints principais
+
+```text
+GET  /health
+POST /webhook
+POST /review
+GET  /api/admin/status
+POST /api/admin/setup/catalog
+POST /api/admin/setup/complete
+GET  /api/admin/observability/metrics
+GET  /api/admin/observability/logs
+GET  /api/admin/observability/reviews
+```
+
+As rotas `/api/admin/*` exigem as credenciais administrativas. O painel oferece CRUD para providers, conexões, modelos, parâmetros, profiles, policies, instâncias Gitea e repositórios. A API rejeita alterações administrativas em prompts.
+
+Review manual:
 
 ```sh
 curl -X POST http://localhost:8088/review \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://gitea.example/Qualyagro/Oracle-APP/pulls/283"}'
+  -d '{"url":"https://gitea.example/owner/repository/pulls/123"}'
 ```
 
-A API responde `202 Accepted`; o worker busca o diff, executa o review e salva o resultado em `final-review.md`. Por padrao, reviews manuais nao publicam comentarios no Pull Request; para habilitar a publicacao, use `REVIEW_PUBLISH_MANUAL_REVIEWS=true` no `.env`.
+## Desenvolvimento
 
-Por seguranca, `REVIEW_ALLOW_AUTONOMOUS_REJECTION=false` por padrao. Assim, reviews que indicariam aprovacao ou rejeicao sao publicados como comentario (`COMMENT`), sem alterar o status do Pull Request, preservando o corpo, os comentarios e as marcacoes de linha. O corpo publicado informa o status (`aprovado`, `aprovado_com_observacao` ou `reprovado`), o modelo utilizado, tokens consumidos e o tempo decorrido. Para permitir decisoes automaticas, defina essa flag como `true`.
+Backend:
 
-## Como Contribuir
+```sh
+go test ./...
+go run ./cmd/server
+```
 
-Veja as orientacoes em [CONTRIBUTING.md](CONTRIBUTING.md).
+Frontend:
 
-Contribuicoes devem preservar o contrato de resposta do modelo, pois ele e usado para gerar comentarios inline e escolher o evento final do review no Gitea.
+```sh
+cd web-admin
+npm ci
+npm run dev
+```
 
-## Licenca
+Build completo:
 
-Distribuido sob a licenca MIT. Veja [LICENSE](LICENSE).
+```sh
+docker compose build
+```
 
-## Status
+Estrutura principal:
 
-O projeto ja possui o fluxo principal de review automatizado:
-
-- webhook;
-- fila;
-- worker;
-- busca de diff;
-- blocos de review;
-- chamada ao Ollama;
-- consolidacao final;
-- publicacao do review no Gitea.
-
-Novos agentes podem ser adicionados mantendo o worker desacoplado por meio da interface `Agent`.
+```text
+cmd/server/             inicialização da API e do worker
+internal/admin/         API administrativa
+internal/store/         SQLite, migrations e seeds
+internal/reviewconfig/  resolução por repositório/profile
+internal/ollama/        cliente Ollama
+internal/openrouter/    cliente OpenRouter
+internal/agents/        execução do review
+web-admin/              painel React componentizado
+```
