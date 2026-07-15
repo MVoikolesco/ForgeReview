@@ -85,6 +85,14 @@ func (c *Client) Chat(ctx context.Context, prompt string) (string, error) {
 	return result.Content, nil
 }
 
+func (c *Client) ChatWithMaxTokens(ctx context.Context, prompt string, maxOutputTokens int) (ChatResult, error) {
+	options := c.options
+	if maxOutputTokens > 0 {
+		options.NumPredict = maxOutputTokens
+	}
+	return c.chatWithOptions(ctx, prompt, options)
+}
+
 type ChatResult struct {
 	Content          string
 	PromptTokens     int
@@ -92,6 +100,10 @@ type ChatResult struct {
 }
 
 func (c *Client) ChatWithMetadata(ctx context.Context, prompt string) (ChatResult, error) {
+	return c.chatWithOptions(ctx, prompt, c.options)
+}
+
+func (c *Client) chatWithOptions(ctx context.Context, prompt string, options Options) (ChatResult, error) {
 	payload := chatRequest{
 		Model:     c.model,
 		Stream:    false,
@@ -99,7 +111,7 @@ func (c *Client) ChatWithMetadata(ctx context.Context, prompt string) (ChatResul
 		Messages: []chatMessage{
 			{Role: "user", Content: prompt},
 		},
-		Options: c.options,
+		Options: options,
 	}
 
 	body, err := json.Marshal(payload)

@@ -39,8 +39,11 @@ const (
 	minimumOutputReserve   = 256
 )
 
-func (c *Client) effectiveMaxTokens(prompt string) (int, error) {
+func (c *Client) effectiveMaxTokens(prompt string, requestedMaxTokens int) (int, error) {
 	maxTokens := c.maxTokens
+	if requestedMaxTokens > 0 {
+		maxTokens = requestedMaxTokens
+	}
 	if maxTokens <= 0 || (c.contextWindow > 0 && maxTokens >= c.contextWindow) {
 		maxTokens = defaultReviewMaxTokens
 	}
@@ -66,10 +69,18 @@ func (c *Client) effectiveMaxTokens(prompt string) (int, error) {
 }
 
 func (c *Client) Chat(ctx context.Context, prompt string) (string, error) {
+	return c.chat(ctx, prompt, 0)
+}
+
+func (c *Client) ChatWithMaxTokens(ctx context.Context, prompt string, maxOutputTokens int) (string, error) {
+	return c.chat(ctx, prompt, maxOutputTokens)
+}
+
+func (c *Client) chat(ctx context.Context, prompt string, requestedMaxTokens int) (string, error) {
 	if c.key == "" {
 		return "", fmt.Errorf("OpenRouter API key is empty")
 	}
-	maxTokens, err := c.effectiveMaxTokens(prompt)
+	maxTokens, err := c.effectiveMaxTokens(prompt, requestedMaxTokens)
 	if err != nil {
 		return "", err
 	}

@@ -79,7 +79,7 @@ func TestClientRepairsLegacyCatalogLimitAndReservesPromptContext(t *testing.T) {
 
 func TestClientClampsOutputToAvailableContext(t *testing.T) {
 	client := NewClient(Config{ContextWindow: 5000, MaxTokens: 4096})
-	got, err := client.effectiveMaxTokens(string(make([]byte, 3000)))
+	got, err := client.effectiveMaxTokens(string(make([]byte, 3000)), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
