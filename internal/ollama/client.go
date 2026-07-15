@@ -56,6 +56,26 @@ func NewClient(cfg Config) *Client {
 func (c *Client) Model() string {
 	return c.model
 }
+func (c *Client) Unload(ctx context.Context, model string) error {
+	payload, err := json.Marshal(map[string]any{"model": model, "keep_alive": 0})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/generate", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("erro ao descarregar modelo ollama: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("ollama unload retornou status=%d", res.StatusCode)
+	}
+	return nil
+}
 
 func (c *Client) Chat(ctx context.Context, prompt string) (string, error) {
 	result, err := c.ChatWithMetadata(ctx, prompt)

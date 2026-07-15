@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -12,9 +13,11 @@ import (
 	"gitea-agents/internal/diff"
 	"gitea-agents/internal/gitea"
 	"gitea-agents/internal/ollama"
+	"gitea-agents/internal/openrouter"
 	"gitea-agents/internal/queue"
 	"gitea-agents/internal/review"
 	"gitea-agents/internal/review/promptconfig"
+	"gitea-agents/internal/reviewconfig"
 )
 
 const ReviewerAgentName = "reviewer"
@@ -25,7 +28,7 @@ type GiteaClient interface {
 	CreatePullRequestReview(ctx context.Context, owner string, repo string, prNumber int, options gitea.CreatePullReviewOptions) (gitea.PullReview, error)
 }
 
-type OllamaClient interface {
+type AIReviewerClient interface {
 	Chat(ctx context.Context, prompt string) (string, error)
 	Model() string
 }
@@ -44,16 +47,24 @@ type ReviewerOptions struct {
 	ReviewPromptConfigPath string
 	PublishManualReviews   bool
 	AllowAutonomousReject  bool
+	ConfigProvider         reviewconfig.Provider
+	LogSensitiveData       bool
+	UnloadAfterReview      bool
 }
 
 type ReviewerAgent struct {
 	logger       *log.Logger
 	giteaClient  GiteaClient
-	ollamaClient OllamaClient
+	ollamaClient AIReviewerClient
 	options      ReviewerOptions
 }
 
-func NewReviewerAgent(logger *log.Logger, giteaClient GiteaClient, ollamaClient OllamaClient, options ReviewerOptions) *ReviewerAgent {
+func NewReviewerAgent(logger *log.Logger, giteaClient GiteaClient, ollamaClient AIReviewerClient, options ReviewerOptions) *ReviewerAgent {
+	// Directly constructed agents are used by local unit tests. Production always
+	// supplies ConfigProvider and then takes this flag from the SQLite policy.
+	if options.ConfigProvider == nil {
+		options.LogSensitiveData = true
+	}
 	if options.DiffLogDir == "" {
 		options.DiffLogDir = defaultDiffLogDir
 	}
@@ -93,6 +104,63 @@ func (a *ReviewerAgent) Name() string {
 }
 
 func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error {
+	if a.options.ConfigProvider != nil {
+		cfg, err := a.options.ConfigProvider.GetConfig(ctx, job.Owner+"/"+job.Repo)
+		if err != nil {
+			return fmt.Errorf("review configuration is required for %s/%s: %w", job.Owner, job.Repo, err)
+		}
+		client, err := reviewerClientFromConfig(cfg)
+		if err != nil {
+			return err
+		}
+		runtime := *a
+		runtime.ollamaClient = client
+		runtime.options.MaxBlockChars = cfg.Policy.MaxBlockChars
+		runtime.options.MaxFilesPerBlock = cfg.Policy.MaxFilesPerBlock
+		runtime.options.ReviewConcurrency = cfg.Policy.ReviewConcurrency
+		runtime.options.OllamaTimeoutSeconds = cfg.Parameters.TimeoutSeconds
+		runtime.options.ReviewFinalRetries = cfg.Policy.ReviewFinalRetries
+		runtime.options.PublishManualReviews = cfg.Policy.PublishManualReviews
+		runtime.options.AllowAutonomousReject = cfg.Policy.AllowAutonomousRejection
+		runtime.options.LogSensitiveData = cfg.Policy.LogSensitiveData
+		runtime.options.UnloadAfterReview = cfg.Policy.UnloadModelAfterReview || cfg.Parameters.UnloadModelAfterReview
+		return runtime.process(ctx, job)
+	}
+	return a.process(ctx, job)
+}
+
+func reviewerClientFromConfig(cfg *reviewconfig.ReviewConfig) (AIReviewerClient, error) {
+	switch cfg.Provider.Name {
+	case "ollama":
+		return ollama.NewClient(ollama.Config{URL: cfg.Connection.BaseURL, Model: cfg.Model.Name, Options: ollama.Options{Temperature: cfg.Parameters.Temperature, TopP: cfg.Parameters.TopP, RepeatPenalty: cfg.Parameters.RepeatPenalty, NumCtx: cfg.Parameters.NumCtx, NumThread: cfg.Parameters.NumThreads, NumPredict: cfg.Parameters.NumPredict}, KeepAlive: cfg.Parameters.KeepAlive, TimeoutSeconds: cfg.Parameters.TimeoutSeconds}), nil
+	case "openrouter":
+		if cfg.Connection.APIKeyEnvName == "" {
+			return nil, fmt.Errorf("OpenRouter connection has no API key environment variable configured")
+		}
+		key := os.Getenv(cfg.Connection.APIKeyEnvName)
+		if key == "" {
+			return nil, fmt.Errorf("OpenRouter secret environment variable %q is not set", cfg.Connection.APIKeyEnvName)
+		}
+		return openrouter.NewClient(openrouter.Config{URL: cfg.Connection.BaseURL, Model: cfg.Model.Name, APIKey: key, HTTPReferer: cfg.Connection.HTTPReferer, AppTitle: cfg.Connection.AppTitle, Temperature: cfg.Parameters.Temperature, TopP: cfg.Parameters.TopP, ContextWindow: cfg.Model.ContextWindow, MaxTokens: cfg.Model.MaxOutputTokens, TimeoutSeconds: cfg.Parameters.TimeoutSeconds}), nil
+	default:
+		return nil, fmt.Errorf("provider %q is not implemented", cfg.Provider.Name)
+	}
+}
+
+func (a *ReviewerAgent) process(ctx context.Context, job queue.ReviewJob) error {
+	if a.options.UnloadAfterReview {
+		defer func() {
+			unloadCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if client, ok := a.ollamaClient.(interface {
+				Unload(context.Context, string) error
+			}); ok {
+				if err := client.Unload(unloadCtx, a.ollamaClient.Model()); err != nil {
+					a.logger.Printf("erro ao descarregar modelo model=%s err=%v", a.ollamaClient.Model(), err)
+				}
+			}
+		}()
+	}
 	rawDiff, err := a.giteaClient.GetPullRequestDiff(ctx, job.Owner, job.Repo, job.PRNumber)
 	if err != nil {
 		return err
@@ -100,7 +168,7 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 
 	a.logger.Printf("diff obtido owner=%s repo=%s pr=%d size=%d", job.Owner, job.Repo, job.PRNumber, len(rawDiff))
 
-	runLog, err := newReviewRunLog(a.options.DiffLogDir, job)
+	runLog, err := newReviewRunLog(a.options.DiffLogDir, job, a.options.LogSensitiveData)
 	if err != nil {
 		return err
 	}
@@ -203,7 +271,7 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 	var totalUsage ollama.ChatResult
 	for _, block := range blocks {
 		if err := ctx.Err(); err != nil {
-			a.logger.Printf("review cancelado antes de enviar bloco para ollama block=%d total=%d err=%v", block.Index, block.Total, err)
+			a.logger.Printf("review cancelado antes de enviar bloco ao provider block=%d total=%d err=%v", block.Index, block.Total, err)
 			if appendErr := runLog.AppendProcess("review cancelado antes de enviar bloco para ollama block=%d total=%d err=%v", block.Index, block.Total, err); appendErr != nil {
 				return appendErr
 			}
@@ -224,7 +292,7 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 		}
 
 		timeoutLabel := fmt.Sprintf("%ds", a.options.OllamaTimeoutSeconds)
-		a.logger.Printf("enviando bloco para ollama block=%d total=%d files=%d chars=%d model=%s timeout=%s", block.Index, block.Total, len(block.Files), len(block.Content), a.ollamaClient.Model(), timeoutLabel)
+		a.logger.Printf("enviando bloco ao provider block=%d total=%d files=%d chars=%d model=%s timeout=%s", block.Index, block.Total, len(block.Files), len(block.Content), a.ollamaClient.Model(), timeoutLabel)
 		if err := runLog.AppendProcess("enviando bloco para ollama block=%d total=%d files=%d chars=%d model=%s timeout=%s prompt_chars=%d", block.Index, block.Total, len(block.Files), len(block.Content), a.ollamaClient.Model(), timeoutLabel, len(prompt)); err != nil {
 			return err
 		}
@@ -249,7 +317,7 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 				return writeErr
 			}
 
-			a.logger.Printf("erro ao revisar bloco com ollama block=%d total=%d files=%d chars=%d prompt_chars=%d timeout=%s duration=%s total_elapsed=%s err=%v", block.Index, block.Total, len(block.Files), len(block.Content), len(prompt), timeoutLabel, duration, totalElapsed, err)
+			a.logger.Printf("erro ao revisar bloco com provider block=%d total=%d files=%d chars=%d prompt_chars=%d timeout=%s duration=%s total_elapsed=%s err=%v", block.Index, block.Total, len(block.Files), len(block.Content), len(prompt), timeoutLabel, duration, totalElapsed, err)
 			if appendErr := runLog.AppendProcess("erro ao revisar bloco com ollama block=%d total=%d files=%d chars=%d prompt_chars=%d timeout=%s duration=%s total_elapsed=%s err=%v", block.Index, block.Total, len(block.Files), len(block.Content), len(prompt), timeoutLabel, duration, totalElapsed, err); appendErr != nil {
 				return appendErr
 			}
@@ -277,7 +345,7 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 		}
 
 		successfulBlocks++
-		a.logger.Printf("resposta ollama recebida block=%d chars=%d duration=%s total_elapsed=%s", block.Index, len(result), duration, totalElapsed)
+		a.logger.Printf("resposta do provider recebida block=%d chars=%d duration=%s total_elapsed=%s", block.Index, len(result), duration, totalElapsed)
 		if err := runLog.AppendProcess("resposta ollama recebida block=%d chars=%d duration=%s total_elapsed=%s", block.Index, len(result), duration, totalElapsed); err != nil {
 			return err
 		}
@@ -289,7 +357,7 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 	}
 
 	if successfulBlocks == 0 {
-		return fmt.Errorf("todos os %d blocos falharam ao chamar o ollama: %w", len(blocks), errors.Join(blockErrors...))
+		return fmt.Errorf("todos os %d blocos falharam ao chamar o provider: %w", len(blocks), errors.Join(blockErrors...))
 	}
 
 	a.logger.Printf("gerando review final partial_reviews=%d failed_blocks=%d", len(partialReviews), failedBlocks)
@@ -343,7 +411,9 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 	if err := runLog.AppendProcess("review final gerado chars=%d duration=%s total_elapsed=%s failed_blocks=%d", len(finalResponse), finalDuration, finalTotalElapsed, failedBlocks); err != nil {
 		return err
 	}
-	a.logger.Printf("review final:\n%s", finalResponse)
+	if a.options.LogSensitiveData {
+		a.logger.Printf("review final:\n%s", finalResponse)
+	}
 
 	parsedFinalReview := finalReview
 	parsedFinalReview = review.ResolveFinalReviewCommentPositions(parsedFinalReview, files)

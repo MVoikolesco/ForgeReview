@@ -42,6 +42,64 @@ func (q *Queue) Ping(ctx context.Context) error {
 	return q.client.Ping(ctx).Err()
 }
 
+func (q *Queue) workerKey(consumer string) string { return q.stream + ":worker:" + consumer }
+
+func (q *Queue) Heartbeat(ctx context.Context, consumer, state, currentJob string) error {
+	key := q.workerKey(consumer)
+	if err := q.client.HSet(ctx, key, map[string]any{"name": consumer, "state": state, "current_job": currentJob, "last_seen": time.Now().UTC().Format(time.RFC3339Nano)}).Err(); err != nil {
+		return err
+	}
+	return q.client.Expire(ctx, key, 20*time.Second).Err()
+}
+
+func (q *Queue) RecordJob(ctx context.Context, consumer string, success bool) error {
+	field := "processed"
+	if !success {
+		field = "failed"
+	}
+	return q.client.HIncrBy(ctx, q.workerKey(consumer), field, 1).Err()
+}
+
+func (q *Queue) Metrics(ctx context.Context) (queue.Metrics, error) {
+	result := queue.Metrics{}
+	if err := q.client.Ping(ctx).Err(); err != nil {
+		return result, err
+	}
+	result.Connected = true
+	var err error
+	if result.StreamLength, err = q.client.XLen(ctx, q.stream).Result(); err != nil {
+		return result, err
+	}
+	pending, err := q.client.XPending(ctx, q.stream, q.group).Result()
+	if err == nil {
+		result.Pending = pending.Count
+	} else if !strings.Contains(err.Error(), "NOGROUP") {
+		return result, err
+	}
+	var cursor uint64
+	for {
+		keys, next, scanErr := q.client.Scan(ctx, cursor, q.stream+":worker:*", 20).Result()
+		if scanErr != nil {
+			return result, scanErr
+		}
+		for _, key := range keys {
+			values, getErr := q.client.HGetAll(ctx, key).Result()
+			if getErr != nil {
+				return result, getErr
+			}
+			lastSeen, _ := time.Parse(time.RFC3339Nano, values["last_seen"])
+			processed, _ := strconv.ParseInt(values["processed"], 10, 64)
+			failed, _ := strconv.ParseInt(values["failed"], 10, 64)
+			result.Workers = append(result.Workers, queue.WorkerMetric{Name: values["name"], State: values["state"], CurrentJob: values["current_job"], LastSeen: lastSeen, Processed: processed, Failed: failed})
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	return result, nil
+}
+
 func (q *Queue) EnsureGroup(ctx context.Context) error {
 	err := q.client.XGroupCreateMkStream(ctx, q.stream, q.group, "0").Err()
 	if err == nil {

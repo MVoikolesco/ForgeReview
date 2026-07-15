@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -9,20 +10,50 @@ import (
 	"syscall"
 	"time"
 
+	"gitea-agents/internal/admin"
 	"gitea-agents/internal/agents"
 	"gitea-agents/internal/config"
 	"gitea-agents/internal/gitea"
-	"gitea-agents/internal/ollama"
 	redisqueue "gitea-agents/internal/queue/redis"
+	"gitea-agents/internal/reviewconfig"
+	"gitea-agents/internal/store"
 	"gitea-agents/internal/webhook"
 	"gitea-agents/internal/worker"
 )
 
 func main() {
 	cfg := config.Load()
-	logger := log.New(os.Stdout, "["+cfg.ServiceName+"] ", log.LstdFlags)
+	logOutput := io.Writer(os.Stdout)
+	var workerLog *os.File
+	if cfg.AppMode == "worker" {
+		if err := os.MkdirAll("/logs", 0o755); err == nil {
+			workerLog, err = os.OpenFile("/logs/worker.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+			if err == nil {
+				logOutput = io.MultiWriter(os.Stdout, workerLog)
+				defer workerLog.Close()
+			}
+		}
+	}
+	logger := log.New(logOutput, "["+cfg.ServiceName+"] ", log.LstdFlags)
 	if err := cfg.Validate(); err != nil {
 		logger.Fatalf("config invalida: %v", err)
+	}
+	configurationStore, err := store.Open(cfg)
+	if err != nil {
+		logger.Fatalf("erro ao abrir SQLite de configuracao: %v", err)
+	}
+	defer configurationStore.Close()
+	if cfg.AppMode == "api" {
+		if err := configurationStore.Initialize(context.Background()); err != nil {
+			logger.Fatalf("erro ao inicializar SQLite: %v", err)
+		}
+		if err := configurationStore.Seed(context.Background(), cfg); err != nil {
+			logger.Fatalf("erro ao criar catalogo inicial: %v", err)
+		}
+	} else if cfg.AppMode == "worker" {
+		if err := configurationStore.RequireSchema(context.Background()); err != nil {
+			logger.Fatalf("erro ao validar SQLite: %v", err)
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -37,15 +68,15 @@ func main() {
 
 	switch cfg.AppMode {
 	case "api":
-		runAPI(ctx, cfg, logger, reviewQueue)
+		runAPI(ctx, cfg, logger, reviewQueue, configurationStore)
 	case "worker":
-		runWorker(ctx, cfg, logger, reviewQueue)
+		runWorker(ctx, cfg, logger, reviewQueue, configurationStore)
 	default:
 		logger.Fatalf("APP_MODE inválido: %s", cfg.AppMode)
 	}
 }
 
-func runAPI(ctx context.Context, cfg config.Config, logger *log.Logger, reviewQueue *redisqueue.Queue) {
+func runAPI(ctx context.Context, cfg config.Config, logger *log.Logger, reviewQueue *redisqueue.Queue, configurationStore *store.Store) {
 	mux := http.NewServeMux()
 	webhook.RegisterRoutes(
 		mux,
@@ -56,6 +87,8 @@ func runAPI(ctx context.Context, cfg config.Config, logger *log.Logger, reviewQu
 		cfg.Version,
 		time.Now(),
 	)
+	admin.Register(mux, configurationStore, cfg.AdminUsername, cfg.AdminPassword, reviewQueue, cfg.DiffLogDir)
+	mux.Handle("/", http.FileServer(http.Dir("./web")))
 
 	server := &http.Server{
 		Addr:              cfg.Address(),
@@ -80,37 +113,22 @@ func runAPI(ctx context.Context, cfg config.Config, logger *log.Logger, reviewQu
 	}
 }
 
-func runWorker(ctx context.Context, cfg config.Config, logger *log.Logger, reviewQueue *redisqueue.Queue) {
+func runWorker(ctx context.Context, cfg config.Config, logger *log.Logger, reviewQueue *redisqueue.Queue, configurationStore *store.Store) {
 	if err := reviewQueue.EnsureGroup(ctx); err != nil {
 		logger.Fatalf("erro ao criar consumer group: %v", err)
 	}
 
 	giteaClient := gitea.NewClient(cfg.GiteaURL, cfg.GiteaToken)
-	ollamaClient := ollama.NewClient(ollama.Config{
-		URL:   cfg.OllamaURL,
-		Model: cfg.OllamaModel,
-		Options: ollama.Options{
-			Temperature:   cfg.OllamaTemperature,
-			TopP:          cfg.OllamaTopP,
-			RepeatPenalty: cfg.OllamaRepeatPenalty,
-			NumCtx:        cfg.OllamaNumCtx,
-			NumThread:     cfg.OllamaNumThread,
-			NumPredict:    cfg.OllamaNumPredict,
-		},
-		KeepAlive:      cfg.OllamaKeepAlive,
-		TimeoutSeconds: cfg.OllamaTimeoutSeconds,
-	})
 	registry := agents.NewRegistry()
-	registry.Register(agents.NewReviewerAgent(logger, giteaClient, ollamaClient, agents.ReviewerOptions{
-		DiffLogDir:             cfg.DiffLogDir,
-		MaxBlockChars:          cfg.ReviewMaxBlockChars,
-		MaxFilesPerBlock:       cfg.ReviewMaxFilesPerBlock,
-		ReviewConcurrency:      cfg.ReviewConcurrency,
-		ReviewFinalRetries:     cfg.ReviewFinalRetries,
-		PublishManualReviews:   cfg.ReviewPublishManual,
-		AllowAutonomousReject:  cfg.ReviewAllowRejection,
-		OllamaTimeoutSeconds:   cfg.OllamaTimeoutSeconds,
+	registry.Register(agents.NewReviewerAgent(logger, giteaClient, nil, agents.ReviewerOptions{
+		DiffLogDir:    cfg.DiffLogDir,
+		MaxBlockChars: 1, MaxFilesPerBlock: 1, ReviewConcurrency: 1,
+		ReviewFinalRetries:     5,
+		PublishManualReviews:   false,
+		AllowAutonomousReject:  false,
+		OllamaTimeoutSeconds:   900,
 		ReviewPromptConfigPath: cfg.ReviewPromptConfigPath,
+		ConfigProvider:         reviewconfig.SQLiteProvider{Store: configurationStore},
 	}))
 
 	agent, err := registry.Get(agents.ReviewerAgentName)

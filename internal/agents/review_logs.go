@@ -11,10 +11,14 @@ import (
 )
 
 type reviewRunLog struct {
-	dir string
+	dir     string
+	enabled bool
 }
 
-func newReviewRunLog(rootDir string, job queue.ReviewJob) (*reviewRunLog, error) {
+func newReviewRunLog(rootDir string, job queue.ReviewJob, enabled bool) (*reviewRunLog, error) {
+	if !enabled {
+		return &reviewRunLog{enabled: false}, nil
+	}
 	if rootDir == "" {
 		rootDir = defaultDiffLogDir
 	}
@@ -24,14 +28,20 @@ func newReviewRunLog(rootDir string, job queue.ReviewJob) (*reviewRunLog, error)
 		return nil, fmt.Errorf("erro ao criar diretorio de logs de review: %w", err)
 	}
 
-	return &reviewRunLog{dir: dir}, nil
+	return &reviewRunLog{dir: dir, enabled: true}, nil
 }
 
 func (l *reviewRunLog) Dir() string {
+	if !l.enabled {
+		return "disabled"
+	}
 	return l.dir
 }
 
 func (l *reviewRunLog) Write(name string, content string) (string, error) {
+	if !l.enabled {
+		return "", nil
+	}
 	path := filepath.Join(l.dir, sanitizeLogName(name))
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("erro ao salvar log fisico: %w", err)
@@ -41,6 +51,9 @@ func (l *reviewRunLog) Write(name string, content string) (string, error) {
 }
 
 func (l *reviewRunLog) AppendProcess(format string, args ...any) error {
+	if !l.enabled {
+		return nil
+	}
 	path := filepath.Join(l.dir, "00-processo.log")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {

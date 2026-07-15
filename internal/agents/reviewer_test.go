@@ -157,7 +157,7 @@ CONTRATOS_DECLARADOS:
 		t.Fatalf("expected blocks log, got %q", logs.String())
 	}
 
-	if !strings.Contains(logs.String(), "enviando bloco para ollama block=1 total=2 files=1") || !strings.Contains(logs.String(), "timeout=900s") {
+	if !strings.Contains(logs.String(), "enviando bloco ao provider block=1 total=2 files=1") || !strings.Contains(logs.String(), "timeout=900s") {
 		t.Fatalf("expected sending block log, got %q", logs.String())
 	}
 
@@ -355,7 +355,7 @@ func TestReviewerAgentContinuesWhenOneBlockFails(t *testing.T) {
 		t.Fatalf("expected final prompt to mention partial analysis, got %q", ollamaClient.prompts[2])
 	}
 
-	if !strings.Contains(logs.String(), "erro ao revisar bloco com ollama block=1 total=2 files=1") {
+	if !strings.Contains(logs.String(), "erro ao revisar bloco com provider block=1 total=2 files=1") {
 		t.Fatalf("expected block error log, got %q", logs.String())
 	}
 
