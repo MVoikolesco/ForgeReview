@@ -2,21 +2,21 @@
   "name": "forgereview-admin",
   "private": true,
   "version": "0.1.0",
-  "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build"
+    "dev": "next dev",
+    "build": "next build",
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@xyflow/react": "^12.11.2",
+    "lucide-react": "^0.468.0",
+    "next": "^15.1.6",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@types/node": "20.17.6",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
-    "typescript": "^5.9.3",
-    "vite": "^8.1.4"
+    "typescript": "^5.9.3"
   }
 }

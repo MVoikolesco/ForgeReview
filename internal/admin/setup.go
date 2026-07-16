@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -325,19 +326,24 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
-	_, _ = tx.ExecContext(r.Context(), "UPDATE review_profiles SET is_default=0 WHERE is_default=1")
-	profileResult, err := tx.ExecContext(r.Context(), `INSERT INTO review_profiles(name,description,model_id,is_default,is_enabled) VALUES(?,?,NULL,1,1)`, input.Profile.Name, input.Profile.Description)
-	if err != nil {
-		writeError(w, 400, err.Error())
-		return
+	var profileID int64
+	err = tx.QueryRowContext(r.Context(), "SELECT id FROM review_profiles WHERE is_default=1 LIMIT 1").Scan(&profileID)
+	if err == nil {
+		_, err = tx.ExecContext(r.Context(), "UPDATE review_profiles SET model_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", modelID, profileID)
+	} else if err == sql.ErrNoRows {
+		profileResult, insertErr := tx.ExecContext(r.Context(), `INSERT INTO review_profiles(name,description,model_id,is_default,is_enabled) VALUES(?,?,?,1,1)`, input.Profile.Name, input.Profile.Description, modelID)
+		if insertErr != nil {
+			writeError(w, 400, insertErr.Error())
+			return
+		}
+		profileID, _ = profileResult.LastInsertId()
+		policy := input.Policy
+		policy.MaxBlockChars = requirePositive(policy.MaxBlockChars, 12000)
+		policy.MaxFilesPerBlock = requirePositive(policy.MaxFilesPerBlock, 4)
+		policy.ReviewConcurrency = requirePositive(policy.ReviewConcurrency, 1)
+		policy.ReviewFinalRetries = requirePositive(policy.ReviewFinalRetries, 5)
+		_, err = tx.ExecContext(r.Context(), `INSERT INTO review_policies(profile_id,max_block_chars,max_files_per_block,review_concurrency,review_wip_pull_requests,review_own_pull_requests,log_sensitive_data,unload_model_after_review,review_final_retries,publish_manual_reviews,allow_autonomous_rejection) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, profileID, policy.MaxBlockChars, policy.MaxFilesPerBlock, policy.ReviewConcurrency, boolInt(policy.ReviewWIPPullRequests), boolInt(policy.ReviewOwnPullRequests), boolInt(policy.LogSensitiveData), boolInt(policy.UnloadModelAfterReview), policy.ReviewFinalRetries, boolInt(policy.PublishManualReviews), boolInt(policy.AllowAutonomousRejection))
 	}
-	profileID, _ := profileResult.LastInsertId()
-	policy := input.Policy
-	policy.MaxBlockChars = requirePositive(policy.MaxBlockChars, 12000)
-	policy.MaxFilesPerBlock = requirePositive(policy.MaxFilesPerBlock, 4)
-	policy.ReviewConcurrency = requirePositive(policy.ReviewConcurrency, 1)
-	policy.ReviewFinalRetries = requirePositive(policy.ReviewFinalRetries, 5)
-	_, err = tx.ExecContext(r.Context(), `INSERT INTO review_policies(profile_id,max_block_chars,max_files_per_block,review_concurrency,review_wip_pull_requests,review_own_pull_requests,log_sensitive_data,unload_model_after_review,review_final_retries,publish_manual_reviews,allow_autonomous_rejection) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, profileID, policy.MaxBlockChars, policy.MaxFilesPerBlock, policy.ReviewConcurrency, boolInt(policy.ReviewWIPPullRequests), boolInt(policy.ReviewOwnPullRequests), boolInt(policy.LogSensitiveData), boolInt(policy.UnloadModelAfterReview), policy.ReviewFinalRetries, boolInt(policy.PublishManualReviews), boolInt(policy.AllowAutonomousRejection))
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
