@@ -1,5 +1,6 @@
 "use client";
 
+import { StepperModal } from "@/components/stepper/stepper-modal";
 import type { AdminRequest } from "@/lib/admin-client";
 import type { CatalogModel, SetupDraft } from "@/lib/contracts";
 import {
@@ -8,7 +9,6 @@ import {
   Box,
   Check,
   CheckCircle2,
-  ChevronRight,
   Cpu,
   KeyRound,
   Loader2,
@@ -16,7 +16,6 @@ import {
   Search,
   Server,
   Sparkles,
-  X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -229,134 +228,114 @@ export function ConnectionWizard({
 
   const canContinue = step !== 2 || Boolean(draft.model);
   return (
-    <div
-      className="wizard-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label={addMode ? "Adicionar modelo" : "Cadastrar conexão"}
+    <StepperModal
+      steps={steps}
+      step={step}
+      eyebrow={`Etapa ${step + 1} de ${steps.length}`}
+      title={wizardTitle(step)}
+      description={wizardSubtitle(step)}
+      brand={<Sparkles size={18} />}
+      heading={addMode ? "Adicionar modelo" : "Nova conexão"}
+      railDescription={
+        addMode
+          ? `Amplie ${existingConnection?.name} com outro modelo.`
+          : "Configure uma rota completa em poucos passos."
+      }
+      footnote="As configurações são validadas antes de serem salvas."
+      error={error}
+      onClose={onClose}
+      footer={
+        <WizardFooter
+          step={step}
+          steps={steps.length}
+          busy={busy}
+          canContinue={canContinue}
+          onBack={() => (step ? setStep((value) => value - 1) : onClose())}
+          onNext={next}
+          addMode={addMode}
+        />
+      }
     >
-      <div className="wizard-modal">
-        <aside className="wizard-rail">
-          <div>
-            <span className="rail-logo">
-              <Sparkles size={18} />
-            </span>
-            <strong>{addMode ? "Adicionar modelo" : "Nova conexão"}</strong>
-            <p>
-              {addMode
-                ? `Amplie ${existingConnection?.name} com outro modelo.`
-                : "Configure uma rota completa em poucos passos."}
-            </p>
-          </div>
-          <ol>
-            {steps.map(([title, subtitle], index) => (
-              <li
-                key={title}
-                className={
-                  index === step ? "active" : index < step ? "complete" : ""
-                }
-              >
-                <span>{index < step ? <Check size={15} /> : index + 1}</span>
-                <div>
-                  <strong>{title}</strong>
-                  <small>{subtitle}</small>
-                </div>
-                {index === step && <ChevronRight size={16} />}
-              </li>
-            ))}
-          </ol>
-          <small className="rail-footnote">
-            As configurações são validadas antes de serem salvas.
-          </small>
-        </aside>
-        <div className="wizard-content">
-          <header>
-            <div>
-              <span className="eyebrow">
-                Etapa {step + 1} de {steps.length}
-              </span>
-              <h2>{wizardTitle(step)}</h2>
-              <p>{wizardSubtitle(step)}</p>
-            </div>
-            <button
-              className="close-button"
-              onClick={onClose}
-              aria-label="Fechar"
-            >
-              <X size={20} />
-            </button>
-          </header>
-          {error && <div className="banner error">{error}</div>}
-          <div className="wizard-body">
-            {step === 0 && (
-              <ProviderStep
-                selected={draft.provider}
-                onSelect={chooseProvider}
-              />
-            )}
-            {step === 1 && (
-              <ConnectionStep draft={draft} update={updateConnection} />
-            )}
-            {step === 2 && (
-              <ModelStep
-                models={visibleModels}
-                selected={draft.model}
-                search={search}
-                setSearch={setSearch}
-                onSelect={(model) =>
-                  setDraft((current) => ({ ...current, model }))
-                }
-              />
-            )}
-            {step === 3 && (
-              <ReviewStep
-                draft={draft}
-                existingProfiles={existingProfiles}
-                addMode={addMode}
-                makeDefault={makeDefault}
-                setMakeDefault={setMakeDefault}
-              />
-            )}
-          </div>
-          <footer>
-            <button
-              className="secondary-button"
-              onClick={() => (step ? setStep((value) => value - 1) : onClose())}
-              disabled={busy}
-            >
-              <ArrowLeft size={17} />
-              {step ? "Voltar" : "Cancelar"}
-            </button>
-            <span>
-              Etapa {step + 1} de {steps.length}
-            </span>
-            <button
-              className="primary-button"
-              onClick={next}
-              disabled={!canContinue || busy}
-            >
-              {busy ? (
-                <Loader2 className="spin" size={17} />
-              ) : step === 3 ? (
-                <CheckCircle2 size={17} />
-              ) : null}
-              {busy
-                ? step === 1
-                  ? "Validando..."
-                  : "Salvando..."
-                : step === 3
-                  ? addMode
-                    ? "Adicionar modelo"
-                    : "Criar e usar conexão"
-                  : step === 1
-                    ? "Validar e buscar modelos"
-                    : "Continuar"}
-              {!busy && step < 3 && <ArrowRight size={17} />}
-            </button>
-          </footer>
-        </div>
-      </div>
-    </div>
+      <>
+        {step === 0 && (
+          <ProviderStep selected={draft.provider} onSelect={chooseProvider} />
+        )}
+        {step === 1 && (
+          <ConnectionStep draft={draft} update={updateConnection} />
+        )}
+        {step === 2 && (
+          <ModelStep
+            models={visibleModels}
+            selected={draft.model}
+            search={search}
+            setSearch={setSearch}
+            onSelect={(model) => setDraft((current) => ({ ...current, model }))}
+          />
+        )}
+        {step === 3 && (
+          <ReviewStep
+            draft={draft}
+            existingProfiles={existingProfiles}
+            addMode={addMode}
+            makeDefault={makeDefault}
+            setMakeDefault={setMakeDefault}
+          />
+        )}
+      </>
+    </StepperModal>
+  );
+}
+
+function WizardFooter({
+  step,
+  steps,
+  busy,
+  canContinue,
+  onBack,
+  onNext,
+  addMode,
+}: {
+  step: number;
+  steps: number;
+  busy: boolean;
+  canContinue: boolean;
+  onBack: () => void;
+  onNext: () => void;
+  addMode: boolean;
+}) {
+  return (
+    <footer>
+      <button className="secondary-button" onClick={onBack} disabled={busy}>
+        <ArrowLeft size={17} />
+        {step ? "Voltar" : "Cancelar"}
+      </button>
+      <span>
+        Etapa {step + 1} de {steps}
+      </span>
+      <button
+        className="primary-button"
+        onClick={onNext}
+        disabled={!canContinue || busy}
+      >
+        {busy ? (
+          <Loader2 className="spin" size={17} />
+        ) : step === 3 ? (
+          <CheckCircle2 size={17} />
+        ) : null}
+        {busy
+          ? step === 1
+            ? "Validando..."
+            : "Salvando..."
+          : step === 3
+            ? addMode
+              ? "Adicionar modelo"
+              : "Criar e usar conexão"
+            : step === 1
+              ? "Validar e buscar modelos"
+              : "Continuar"}
+        {!busy && step < 3 && <ArrowRight size={17} />}
+      </button>
+    </footer>
   );
 }
 
@@ -634,7 +613,11 @@ function ReviewStep({
       </div>
       {addMode && (
         <label className="default-choice">
-          <input type="checkbox" checked={makeDefault} onChange={(event) => setMakeDefault(event.target.checked)} />
+          <input
+            type="checkbox"
+            checked={makeDefault}
+            onChange={(event) => setMakeDefault(event.target.checked)}
+          />
           Tornar este o modelo padrão desta conexão
         </label>
       )}

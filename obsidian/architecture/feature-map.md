@@ -4,6 +4,7 @@
 
 - AI connections: one default connection per provider, explicit provider/model defaults, add-model catalog flow, and transactional model/connection removal with reference handling.
 - Gitea admin integration: create and test an instance, list organizations and repositories, and save a multiple repository selection.
+- Gitea administration now exposes one connection at a time: the existing connection shows endpoint, bot, organization, and repositories, with stepper-based edit and transactional removal before a replacement can be added.
 - Gitea tokens are never returned by generic CRUD or dedicated GET responses and are encrypted at rest for new registrations.
 - Worker jobs carry an optional Gitea instance ID; the worker resolves repository selections and configured-instance credentials, with environment fallback for older jobs.
 

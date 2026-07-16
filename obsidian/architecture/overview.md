@@ -10,6 +10,9 @@ ForgeReview exposes an authenticated admin API and Next.js console for AI and Gi
 - `internal/admin` owns validated admin endpoints and secret handling; `gitea_instances.token_ciphertext` stores AES-GCM ciphertext.
 - `internal/gitea` resolves a worker client by job instance, repository selection, or the enabled default instance (then lowest enabled id); jobs without a configured instance fall back to `GITEA_URL`/`GITEA_TOKEN`.
 - `web-admin/src/components/gitea` provides the admin wizard and repository selection flow.
+- Gitea editing reuses the stepper visual language; the API rejects a second instance and deletes an instance together with its repository mappings.
+- `web-admin/src/components/stepper/stepper-modal.tsx` owns the shared stepper shell; wizard content and footers remain flow-specific.
+- Shared card surfaces use `styles/_mixins.scss` for the same border, radius, surface, and shadow treatment.
 - `internal/admin` enforces one default connection per provider and performs model/connection deletion in transactions, promoting active replacements when references allow it.
 - `web-admin/src/components/connections` reuses the wizard in add-model mode; catalog reads use the existing connection and explicit default actions do not change the global provider.
 

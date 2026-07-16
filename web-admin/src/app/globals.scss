@@ -10,6 +10,7 @@
 @use "../components/connections/connection-detail";
 @use "../components/connections/connection-wizard";
 @use "../components/executions/executions-flow";
+@use "../components/gitea/gitea-area";
 
 :root {
   --font-body: "Segoe UI", Arial, sans-serif;
@@ -41,8 +42,15 @@
   color-scheme: dark;
 }
 
-* { box-sizing: border-box; }
-html, body { min-height: 100%; }
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
 body {
   margin: 0;
   background: var(--canvas);
@@ -50,12 +58,35 @@ body {
   font-family: var(--font-body);
   font-size: 15px;
 }
-[data-theme="dark"] body { color: #e6ebf4; }
-button, input { font: inherit; }
-button { color: inherit; }
-button:focus-visible, input:focus-visible {
+
+[data-theme="dark"] body {
+  color: #e6ebf4;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+button:focus-visible,
+input:focus-visible {
   outline: 3px solid rgba(79, 140, 255, 0.28);
   outline-offset: 2px;
 }
-h1, h2, h3, p { margin-top: 0; }
-h1, h2, h3 { font-family: var(--font-display); }
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+}

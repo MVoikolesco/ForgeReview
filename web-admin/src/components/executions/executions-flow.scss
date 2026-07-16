@@ -17,10 +17,8 @@
   gap: 12px;
 
   >article {
+    @include mixins.card;
     min-height: 112px;
-    border: 1px solid tokens.$line;
-    border-radius: tokens.$radius-lg;
-    background: tokens.$surface;
   }
 }
 
@@ -156,11 +154,9 @@
 }
 
 .execution-flow-panel {
+  @include mixins.card;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid tokens.$line;
-  border-radius: tokens.$radius-lg;
-  background: tokens.$surface;
 
   >header {
     min-height: 88px;
@@ -243,14 +239,10 @@
 }
 
 .execution-node {
+  @include mixins.card(16px);
   width: 286px;
   display: grid;
   gap: 7px;
-  border: 1px solid #d9e1ed;
-  border-radius: 14px;
-  padding: 16px;
-  background: rgba(255, 255, 255, .96);
-  box-shadow: 0 15px 35px rgba(33, 62, 112, .11);
   cursor: grab;
   transition: border-color .18s ease, box-shadow .18s ease;
 

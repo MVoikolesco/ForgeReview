@@ -137,6 +137,8 @@
 
 .wizard-content {
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
 
@@ -206,8 +208,33 @@
 
 .wizard-body {
   min-height: 0;
+  min-width: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 28px 34px;
+  scrollbar-width: thin;
+  scrollbar-color: #b9c8df transparent;
+
+  &::-webkit-scrollbar {
+    width: 9px;
+  }
+
+  &::-webkit-scrollbar-track {
+    margin: 10px 0;
+    border-radius: 99px;
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 99px;
+    background-clip: padding-box;
+    background-color: #b9c8df;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: #8fa9d1;
+  }
 }
 
 .provider-options {
@@ -736,6 +763,18 @@
   .wizard-content>footer {
     border-color: tokens.$line;
     background: #111b2c;
+  }
+
+  .wizard-body {
+    scrollbar-color: #49688f transparent;
+
+    &::-webkit-scrollbar-thumb {
+      background-color: #49688f;
+    }
+
+    &::-webkit-scrollbar-thumb:hover {
+      background-color: #6388b7;
+    }
   }
 }
 

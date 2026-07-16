@@ -52,6 +52,48 @@ func TestGiteaTokenIsEncryptedAndNeverReturned(t *testing.T) {
 	}
 }
 
+func TestGiteaHasOneConnectionAndDeletesItsRepositories(t *testing.T) {
+	os.Setenv("GITEA_TOKEN_ENCRYPTION_KEY", "01234567890123456789012345678901")
+	defer os.Unsetenv("GITEA_TOKEN_ENCRYPTION_KEY")
+	s, err := store.Open(config.Config{DatabaseDriver: "sqlite", DatabaseDSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	Register(mux, s, "admin", "secret")
+	create := func(name string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/admin/gitea/instances", strings.NewReader(fmt.Sprintf(`{"name":%q,"base_url":"https://gitea.example","bot_username":"bot","token":"secret"}`, name)))
+		req.SetBasicAuth("admin", "secret")
+		res := httptest.NewRecorder()
+		mux.ServeHTTP(res, req)
+		return res
+	}
+	if res := create("main"); res.Code != http.StatusCreated {
+		t.Fatalf("create=%d %s", res.Code, res.Body.String())
+	}
+	if res := create("second"); res.Code != http.StatusConflict {
+		t.Fatalf("duplicate=%d %s", res.Code, res.Body.String())
+	}
+	if _, err = s.DB.Exec(`INSERT INTO repositories(gitea_instance_id,owner,name,full_name) VALUES(1,'org','repo','org/repo')`); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/gitea/instances/1", nil)
+	req.SetBasicAuth("admin", "secret")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("delete=%d %s", res.Code, res.Body.String())
+	}
+	var count int
+	if err = s.DB.QueryRow("SELECT COUNT(*) FROM repositories").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("repositories remain: count=%d err=%v", count, err)
+	}
+}
+
 func TestRepositoriesRouteAndAuthentication(t *testing.T) {
 	s, e := store.Open(config.Config{DatabaseDriver: "sqlite", DatabaseDSN: ":memory:"})
 	if e != nil {

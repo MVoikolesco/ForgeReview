@@ -38,3 +38,11 @@ Record durable decisions using this structure:
 - **Affected paths:** `internal/queue`, `internal/queue/redis`, `internal/gitea/resolver.go`, `internal/agents/reviewer.go`, `cmd/server/main.go`.
 - **Related notes:** [[Architecture]], [[Feature Map]], [[../operations/change-log|Change Log]]
 
+## 2026-07-16 — Keep one manageable Gitea connection
+
+- **Context:** The Gitea screen mixed registration with ongoing management and allowed ambiguous multiple-instance setup.
+- **Decision:** Present the configured connection as a summary card, reuse the existing stepper for edits, and allow a new registration only after deletion; delete repository mappings transactionally with the instance.
+- **Rationale:** This makes the lifecycle explicit and prevents orphaned repository selections.
+- **Affected paths:** `internal/admin/gitea.go`, `internal/admin/handler_test.go`, `web-admin/src/components/gitea`.
+- **Related notes:** [[Architecture]], [[Feature Map]], [[../operations/change-log|Change Log]]
+

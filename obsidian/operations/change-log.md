@@ -41,3 +41,19 @@ Record meaningful changes using this structure:
 - **Validation:** `gofmt`; `go test ./...`.
 - **Notes updated:** [[../architecture/overview|Architecture]].
 
+## 2026-07-16 — Gitea connection lifecycle UI
+
+- **Outcome:** Reworked Gitea registration into the product stepper pattern and added a configured-connection summary with organization/repository visibility, edit, and remove actions.
+- **Scope:** `web-admin/src/components/gitea`, `internal/admin/gitea.go`, `internal/admin/handler_test.go`.
+- **Validation:** `go test ./internal/admin ./internal/store`; `web-admin npm run lint`; `web-admin npm run build` passed. Build retains the existing multiple-lockfile workspace warning.
+- **Notes updated:** [[../architecture/overview|Architecture]], [[../architecture/feature-map|Feature Map]], [[../decisions/log|Decision Log]].
+- **Limitations:** The organization shown after reload is derived from the owner of the saved repository mapping; an empty selection has no persisted organization label.
+
+## 2026-07-16 — Shared stepper and card visual system
+
+- **Outcome:** Extracted the reusable stepper modal shell, fixed modal body scrolling for long model/repository lists, styled its scrollbar, and standardized primary card surfaces.
+- **Scope:** `web-admin/src/components/stepper`, wizard styles/components, `web-admin/src/styles/_mixins.scss`, connection dashboard, execution surfaces, and Gitea styles.
+- **Validation:** `web-admin npm run lint`; `web-admin npm run build`; and `go test ./...` passed. Build retains the existing multiple-lockfile workspace warning.
+- **Notes updated:** [[../architecture/overview|Architecture]].
+- **Limitations:** Specialized controls, badges, node states, and modal chrome retain their intentional interaction-specific styling.
+
