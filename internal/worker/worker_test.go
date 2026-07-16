@@ -42,7 +42,8 @@ func TestWorkerProcessesJobWithAgent(t *testing.T) {
 	}
 }
 
-func TestWorkerReturnsErrorWhenAgentFails(t *testing.T) {
+func TestWorkerKeepsRunningWhenAgentFails(t *testing.T) {
+	var logs bytes.Buffer
 	consumer := &fakeConsumer{
 		job: queue.ReviewJob{
 			Owner:    "Qualyagro",
@@ -51,11 +52,16 @@ func TestWorkerReturnsErrorWhenAgentFails(t *testing.T) {
 		},
 	}
 	agent := &fakeAgent{name: "reviewer", err: errors.New("agent failed")}
-	worker := New(log.New(&bytes.Buffer{}, "", 0), consumer, "worker-1", agent)
+	worker := New(log.New(&logs, "", 0), consumer, "worker-1", agent)
 
-	err := worker.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error")
+	if err := worker.Run(context.Background()); err != nil {
+		t.Fatalf("expected failed job to be isolated, got %v", err)
+	}
+	if !consumer.handled {
+		t.Fatal("expected failed job to be acknowledged")
+	}
+	if !strings.Contains(logs.String(), "job falhou sem interromper worker") {
+		t.Fatalf("expected isolated failure log, got %q", logs.String())
 	}
 }
 

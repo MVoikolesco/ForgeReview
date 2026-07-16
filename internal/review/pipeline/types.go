@@ -27,10 +27,11 @@ type Config struct {
 	PartialEvent                string
 	MaxGroupChars               int
 	MaxFilesPerGroup            int
+	ContractMaxAttempts         int
 }
 
 func DefaultConfig() Config {
-	return Config{PlannerEnabled: true, ConsolidatorEnabled: true, VerifierEnabled: true, FormatterEnabled: true, PlannerMaxOutputTokens: 2000, ReviewerMaxOutputTokens: 3500, ConsolidatorMaxOutputTokens: 3500, VerifierMaxOutputTokens: 2500, FormatterMaxOutputTokens: 2500, SafetyMarginTokens: 2048, MinimumPublishConfidence: 0.75, MaxParallelReviewGroups: 1, MediumSeverityEvent: "REQUEST_CHANGES", PartialEvent: "COMMENT", MaxGroupChars: 4000, MaxFilesPerGroup: 2}
+	return Config{PlannerEnabled: true, ConsolidatorEnabled: true, VerifierEnabled: true, FormatterEnabled: true, PlannerMaxOutputTokens: 2000, ReviewerMaxOutputTokens: 3500, ConsolidatorMaxOutputTokens: 3500, VerifierMaxOutputTokens: 2500, FormatterMaxOutputTokens: 2500, SafetyMarginTokens: 2048, MinimumPublishConfidence: 0.75, MaxParallelReviewGroups: 1, MediumSeverityEvent: "REQUEST_CHANGES", PartialEvent: "COMMENT", MaxGroupChars: 4000, MaxFilesPerGroup: 2, ContractMaxAttempts: 5}
 }
 
 type Input struct {
@@ -187,6 +188,8 @@ type ProgressEvent struct {
 	Files        []string `json:"files,omitempty"`
 	Findings     int      `json:"findings,omitempty"`
 	FailedGroups int      `json:"failed_groups,omitempty"`
+	Attempt      int      `json:"attempt,omitempty"`
+	MaxAttempts  int      `json:"max_attempts,omitempty"`
 	Timestamp    string   `json:"timestamp,omitempty"`
 }
 

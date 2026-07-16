@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -155,6 +156,78 @@ func TestRunnerFullFlowAndFallbacks(t *testing.T) {
 	}
 	if calls != 5 || len(meta.StageMetrics) != 5 || !meta.ConsolidatorFallback || !meta.FormatterFallback || meta.ConfirmedFindings != 1 || len(final.InlineComments) != 1 || !strings.Contains(raw, "metadata") {
 		t.Fatalf("unexpected result calls=%d meta=%#v final=%#v raw=%s", calls, meta, final, raw)
+	}
+}
+
+func TestReviewGroupRetriesInvalidContractUntilSuccess(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ContractMaxAttempts = 5
+	input := Input{Owner: "o", Repository: "r", PullRequestNumber: 1, Files: sampleFiles()}
+	plan := ReviewPlan{Groups: []ReviewGroup{{ID: "group-1", Files: []string{"app.go"}}}}
+	calls := 0
+	var events []ProgressEvent
+	var processLogs []string
+	runner := Runner{
+		Config: cfg,
+		Chat: func(ctx context.Context, stage string, prompt string, maxOutputTokens int) (string, StageUsage, error) {
+			calls++
+			if calls < 5 {
+				return `{"group_id":"group-1","reviewed_files":["app.go"],"findings":[],"review_summary":"ok","CONTRATOS_DECLARADOS":true}`, StageUsage{}, nil
+			}
+			if !strings.Contains(prompt, "tentativa 5 de 5") {
+				t.Fatalf("expected retry correction in prompt, got %q", prompt)
+			}
+			return `{"group_id":"group-1","reviewed_files":["app.go"],"findings":[],"review_summary":"ok"}`, StageUsage{}, nil
+		},
+		Progress: func(event ProgressEvent) { events = append(events, event) },
+		ProcessLog: func(format string, args ...any) {
+			processLogs = append(processLogs, fmt.Sprintf(format, args...))
+		},
+	}
+
+	reviews, failed, err := runner.reviewGroups(context.Background(), cfg, input, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 5 || len(reviews) != 1 || len(failed) != 0 {
+		t.Fatalf("unexpected retry result calls=%d reviews=%d failed=%v", calls, len(reviews), failed)
+	}
+	retries := 0
+	for _, event := range events {
+		if event.Status == "retrying" {
+			retries++
+			if event.MaxAttempts != 5 || event.Attempt < 2 {
+				t.Fatalf("unexpected retry event %#v", event)
+			}
+		}
+	}
+	if retries != 4 || len(processLogs) != 4 || !strings.Contains(processLogs[0], "contrato invalido") {
+		t.Fatalf("expected four visible retries, events=%#v logs=%#v", events, processLogs)
+	}
+}
+
+func TestReviewGroupReportsFailureAfterContractRetries(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ContractMaxAttempts = 5
+	input := Input{Files: sampleFiles()}
+	plan := ReviewPlan{Groups: []ReviewGroup{{ID: "group-1", Files: []string{"app.go"}}}}
+	calls := 0
+	var events []ProgressEvent
+	runner := Runner{Config: cfg, Chat: func(context.Context, string, string, int) (string, StageUsage, error) {
+		calls++
+		return `{"group_id":"group-1","reviewed_files":[],"findings":[],"review_summary":"ok","extra":true}`, StageUsage{}, nil
+	}, Progress: func(event ProgressEvent) { events = append(events, event) }}
+
+	reviews, failed, err := runner.reviewGroups(context.Background(), cfg, input, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 5 || len(reviews) != 0 || len(failed) != 1 {
+		t.Fatalf("unexpected exhausted retry result calls=%d reviews=%d failed=%v", calls, len(reviews), failed)
+	}
+	last := events[len(events)-1]
+	if last.Status != "failed" || last.Attempt != 5 || last.MaxAttempts != 5 || !strings.Contains(last.Message, "Contrato inválido") {
+		t.Fatalf("expected terminal contract event, got %#v", last)
 	}
 }
 

@@ -364,11 +364,16 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 	}
 	cfg.MaxGroupChars = a.options.MaxBlockChars
 	cfg.MaxFilesPerGroup = a.options.MaxFilesPerBlock
+	cfg.ContractMaxAttempts = a.options.ReviewFinalRetries
 	if cfg.MaxParallelReviewGroups <= 0 {
 		cfg.MaxParallelReviewGroups = 1
 	}
 
-	runner := pipeline.Runner{Config: cfg, Logger: a.logger, Chat: a.chatStageWithMetadata, Progress: progress, StackRules: func(ctx context.Context, files []string) (string, []string, error) {
+	runner := pipeline.Runner{Config: cfg, Logger: a.logger, Chat: a.chatStageWithMetadata, Progress: progress, ProcessLog: func(format string, args ...any) {
+		if err := runLog.AppendProcess(format, args...); err != nil {
+			a.logger.Printf("erro ao gravar log de processo do review: %v", err)
+		}
+	}, StackRules: func(ctx context.Context, files []string) (string, []string, error) {
 		resolved, err := promptResolver.ResolvePartialPrompt(ctx, job.Owner, job.Repo, files)
 		if err != nil {
 			return "", nil, err

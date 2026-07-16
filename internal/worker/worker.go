@@ -71,6 +71,12 @@ func (w *Worker) Run(ctx context.Context) error {
 		heartbeatMu.Lock()
 		setHeartbeat("idle", "")
 		heartbeatMu.Unlock()
-		return err
+		if err != nil {
+			w.logger.Printf("job falhou sem interromper worker: job=%s err=%v", jobName, err)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+		}
+		return nil
 	})
 }
