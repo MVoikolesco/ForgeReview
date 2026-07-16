@@ -1,0 +1,32 @@
+@use "../../styles/tokens";
+
+.provider-mark {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: #31535b;
+  background: #dff0f0;
+
+  &.openrouter {
+    color: #69512f;
+    background: #f7ead4;
+  }
+
+  &.large {
+    width: 54px;
+    height: 54px;
+    border-radius: 14px;
+  }
+}
+
+[data-theme="dark"] .provider-mark {
+  color: #92c3e7;
+  background: #17334b;
+
+  &.openrouter {
+    color: #e5b981;
+    background: #3c2c21;
+  }
+}

@@ -1,0 +1,31 @@
+@mixin keyframes {
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @keyframes shine {
+    to {
+      background-position-x: -300%;
+    }
+  }
+
+  @keyframes live-pulse {
+    50% {
+      opacity: 0.35;
+    }
+  }
+
+  @keyframes execution-progress-flow {
+    to {
+      background-position: -200% 0;
+    }
+  }
+
+  @keyframes execution-edge-flow {
+    to {
+      stroke-dashoffset: -17;
+    }
+  }
+}

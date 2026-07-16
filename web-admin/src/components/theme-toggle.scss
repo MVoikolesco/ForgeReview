@@ -1,0 +1,60 @@
+@use "../styles/tokens";
+
+.theme-toggle {
+  width: 72px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  border: 1px solid tokens.$line;
+  border-radius: 18px;
+  padding: 0 8px;
+  color: #8692a8;
+  background: tokens.$surface;
+  cursor: pointer;
+
+  >svg:first-child {
+    color: #e59b2c;
+  }
+
+  &-track {
+    width: 22px;
+    height: 12px;
+    padding: 2px;
+    border-radius: 8px;
+    background: #dce4f0;
+
+    i {
+      display: block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: white;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+      transition: transform 0.2s ease;
+    }
+  }
+}
+
+[data-theme="dark"] .theme-toggle {
+  color: #cbd4e4;
+  border-color: tokens.$line;
+  background: #162237;
+
+  >svg:first-child {
+    color: #77849a;
+  }
+
+  >svg:last-child {
+    color: #8bb4ff;
+  }
+
+  &-track {
+    background: #3978e8;
+
+    i {
+      transform: translateX(10px);
+    }
+  }
+}
