@@ -28,6 +28,10 @@ type GiteaClient interface {
 	CreatePullRequestReview(ctx context.Context, owner string, repo string, prNumber int, options gitea.CreatePullReviewOptions) (gitea.PullReview, error)
 }
 
+type GiteaClientResolver interface {
+	Resolve(ctx context.Context, instanceID int64, owner, repo string) (*gitea.Client, error)
+}
+
 type AIReviewerClient interface {
 	Chat(ctx context.Context, prompt string) (string, error)
 	Model() string
@@ -56,6 +60,7 @@ type ReviewerOptions struct {
 	PublishManualReviews   bool
 	AllowAutonomousReject  bool
 	ConfigProvider         reviewconfig.Provider
+	GiteaResolver          GiteaClientResolver
 	LogSensitiveData       bool
 	UnloadAfterReview      bool
 	ContextWindow          int
@@ -117,6 +122,14 @@ func (a *ReviewerAgent) Name() string {
 
 func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error {
 	if a.options.ConfigProvider != nil {
+		runtime := *a
+		if a.options.GiteaResolver != nil {
+			client, err := a.options.GiteaResolver.Resolve(ctx, job.GiteaInstanceID, job.Owner, job.Repo)
+			if err != nil {
+				return err
+			}
+			runtime.giteaClient = client
+		}
 		cfg, err := a.options.ConfigProvider.GetConfig(ctx, job.Owner+"/"+job.Repo)
 		if err != nil {
 			return fmt.Errorf("review configuration is required for %s/%s: %w", job.Owner, job.Repo, err)
@@ -125,7 +138,6 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 		if err != nil {
 			return err
 		}
-		runtime := *a
 		runtime.ollamaClient = client
 		runtime.options.MaxBlockChars = cfg.Policy.MaxBlockChars
 		runtime.options.MaxFilesPerBlock = cfg.Policy.MaxFilesPerBlock
@@ -155,6 +167,15 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 			PartialEvent:                cfg.Pipeline.PartialEvent,
 		}
 		runtime.options.PipelineConfigSet = true
+		return runtime.process(ctx, job)
+	}
+	if a.options.GiteaResolver != nil {
+		runtime := *a
+		client, err := a.options.GiteaResolver.Resolve(ctx, job.GiteaInstanceID, job.Owner, job.Repo)
+		if err != nil {
+			return err
+		}
+		runtime.giteaClient = client
 		return runtime.process(ctx, job)
 	}
 	return a.process(ctx, job)

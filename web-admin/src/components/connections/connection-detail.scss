@@ -52,6 +52,32 @@
   gap: 9px;
 }
 
+.danger-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid #e6b9b9;
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: #a33d3d;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.danger-button:disabled,
+.icon-button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.model-row .icon-button {
+  width: 30px;
+  height: 30px;
+  color: #a33d3d;
+}
+
 .detail-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 310px;

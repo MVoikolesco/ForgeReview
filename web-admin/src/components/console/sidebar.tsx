@@ -1,7 +1,7 @@
 import { Brand } from "@/components/brand";
 import { Cable, ChevronLeft, GitBranch, LogOut, Settings2 } from "lucide-react";
 
-export type ConsoleView = "connections" | "executions";
+export type ConsoleView = "connections" | "executions" | "gitea";
 
 type Props = {
   collapsed: boolean;
@@ -34,6 +34,14 @@ export function Sidebar({
         >
           <Cable size={19} />
           <span>Conexões</span>
+        </button>
+        <button
+          className={`nav-item ${active === "gitea" ? "active" : ""}`}
+          aria-current={active === "gitea" ? "page" : undefined}
+          onClick={() => onNavigate("gitea")}
+        >
+          <GitBranch size={19} />
+          <span>Gitea</span>
         </button>
         <button
           className={`nav-item ${active === "executions" ? "active" : ""}`}

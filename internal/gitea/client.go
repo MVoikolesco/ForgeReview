@@ -18,6 +18,21 @@ type Client struct {
 	httpClient *http.Client
 }
 
+type Organization struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	FullName string `json:"full_name"`
+}
+type Repository struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	FullName string `json:"full_name"`
+	Owner    struct {
+		Login string `json:"login"`
+	} `json:"owner"`
+	Private bool `json:"private"`
+}
+
 type PullReview struct {
 	ID    int64  `json:"id"`
 	State string `json:"state"`
@@ -44,6 +59,46 @@ func NewClient(baseURL string, token string) *Client {
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+func (c *Client) doJSON(ctx context.Context, path string, result any) error {
+	if c.baseURL == "" {
+		return fmt.Errorf("gitea url is empty")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1"+path, nil)
+	if err != nil {
+		return err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "token "+c.token)
+	}
+	req.Header.Set("Accept", "application/json")
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("gitea request failed: status=%d", res.StatusCode)
+	}
+	return json.NewDecoder(res.Body).Decode(result)
+}
+
+func (c *Client) TestConnection(ctx context.Context) error {
+	var user map[string]any
+	return c.doJSON(ctx, "/user", &user)
+}
+func (c *Client) ListOrganizations(ctx context.Context) ([]Organization, error) {
+	var result []Organization
+	return result, c.doJSON(ctx, "/user/orgs?limit=50", &result)
+}
+func (c *Client) ListRepositories(ctx context.Context, organization string) ([]Repository, error) {
+	path := "/user/repos?limit=50"
+	if organization != "" {
+		path = "/orgs/" + url.PathEscape(organization) + "/repos?limit=50"
+	}
+	var result []Repository
+	return result, c.doJSON(ctx, path, &result)
 }
 
 func (c *Client) GetPullRequestDiff(ctx context.Context, owner string, repo string, prNumber int) (string, error) {

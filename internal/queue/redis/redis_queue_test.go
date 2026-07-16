@@ -4,6 +4,7 @@ import "testing"
 
 func TestDecodeJobIncludesPullRequestMetadata(t *testing.T) {
 	job, err := decodeJob(map[string]any{
+		"gitea_instance_id":  "7",
 		"owner":              "acme",
 		"repo":               "portal",
 		"pr_number":          "42",
@@ -19,7 +20,7 @@ func TestDecodeJobIncludesPullRequestMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.Title != "Corrige login" || job.Description != "Descricao" || job.Author != "ana" || job.BaseBranch != "main" || job.HeadBranch != "feature/login" {
+	if job.GiteaInstanceID != 7 || job.Title != "Corrige login" || job.Description != "Descricao" || job.Author != "ana" || job.BaseBranch != "main" || job.HeadBranch != "feature/login" {
 		t.Fatalf("unexpected metadata %#v", job)
 	}
 }

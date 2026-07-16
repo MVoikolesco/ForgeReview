@@ -10,13 +10,13 @@ func TestLoadIgnoresLegacyReviewEnvironment(t *testing.T) {
 		t.Fatal("unexpected prompt metadata path")
 	}
 }
-func TestValidateWorkerRequiresGitea(t *testing.T) {
+func TestValidateWorkerAllowsDatabaseGiteaConfiguration(t *testing.T) {
 	c := Load()
 	c.AppMode = "worker"
 	c.GiteaURL = ""
 	c.GiteaToken = ""
-	if c.Validate() == nil {
-		t.Fatal("expected worker validation error")
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 func TestValidateAPIBootstrap(t *testing.T) {

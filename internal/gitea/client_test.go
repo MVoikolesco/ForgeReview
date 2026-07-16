@@ -103,3 +103,35 @@ func TestCreatePullRequestReview(t *testing.T) {
 		t.Fatalf("unexpected review %#v", review)
 	}
 }
+
+func TestAuthenticatedCatalogRequests(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "token secret-token" {
+			t.Fatalf("missing auth")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/user/orgs":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"acme","full_name":"Acme"}]`))
+		case "/api/v1/orgs/acme/repos":
+			_, _ = w.Write([]byte(`[{"id":2,"name":"app","full_name":"acme/app","owner":{"login":"acme"}}]`))
+		case "/api/v1/user":
+			_, _ = w.Write([]byte(`{"login":"bot"}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, "secret-token")
+	if err := client.TestConnection(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	orgs, err := client.ListOrganizations(context.Background())
+	if err != nil || len(orgs) != 1 {
+		t.Fatalf("orgs=%#v err=%v", orgs, err)
+	}
+	repos, err := client.ListRepositories(context.Background(), "acme")
+	if err != nil || len(repos) != 1 {
+		t.Fatalf("repos=%#v err=%v", repos, err)
+	}
+}

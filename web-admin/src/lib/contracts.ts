@@ -101,3 +101,20 @@ export type SetupDraft = {
     unload_model_after_review: boolean;
   };
 };
+
+export type GiteaInstance = {
+  id: number;
+  name: string;
+  base_url: string;
+  bot_username: string;
+  is_enabled: number;
+  is_default: number;
+};
+export type GiteaOrganization = { id: number; name: string; full_name: string };
+export type GiteaRepository = {
+  id: number;
+  name: string;
+  full_name: string;
+  owner: { login: string };
+  private: boolean;
+};

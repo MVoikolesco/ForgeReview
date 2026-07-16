@@ -68,6 +68,12 @@ type completeSetupRequest struct {
 	Profile    setupProfile    `json:"profile"`
 	Policy     setupPolicy     `json:"policy"`
 }
+type addModelRequest struct {
+	ConnectionID int64           `json:"connection_id"`
+	Model        catalogModel    `json:"model"`
+	Parameters   setupParameters `json:"parameters"`
+	MakeDefault  bool            `json:"make_default"`
+}
 
 func (h Handler) setupRoute(w http.ResponseWriter, r *http.Request, action string) {
 	if r.Method != http.MethodPost {
@@ -79,6 +85,8 @@ func (h Handler) setupRoute(w http.ResponseWriter, r *http.Request, action strin
 		h.providerCatalog(w, r)
 	case "complete":
 		h.completeSetup(w, r)
+	case "add-model":
+		h.addModel(w, r, 0)
 	default:
 		http.NotFound(w, r)
 	}
@@ -286,8 +294,6 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "Provider não está disponível")
 		return
 	}
-	_, _ = tx.ExecContext(r.Context(), "UPDATE ai_providers SET is_default=0 WHERE is_default=1")
-	_, _ = tx.ExecContext(r.Context(), "UPDATE ai_providers SET is_default=1,updated_at=CURRENT_TIMESTAMP WHERE id=?", providerID)
 	_, _ = tx.ExecContext(r.Context(), "UPDATE ai_connections SET is_default=0 WHERE provider_id=? AND is_default=1", providerID)
 	connectionResult, err := tx.ExecContext(r.Context(), `INSERT INTO ai_connections(provider_id,name,base_url,api_key_env_name,http_referer,app_title,is_default,is_enabled) VALUES(?,?,?,?,?,?,1,1)`, providerID, input.Connection.Name, input.Connection.BaseURL, input.Connection.APIKeyEnvName, input.Connection.HTTPReferer, input.Connection.AppTitle)
 	if err != nil {
@@ -353,4 +359,76 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "connection_id": connectionID, "model_id": modelID, "profile_id": profileID})
+}
+
+func (h Handler) addModel(w http.ResponseWriter, r *http.Request, pathID int64) {
+	var input addModelRequest
+	if json.NewDecoder(r.Body).Decode(&input) != nil {
+		writeError(w, 400, "JSON inválido")
+		return
+	}
+	if input.ConnectionID == 0 {
+		input.ConnectionID = pathID
+	}
+	if input.ConnectionID <= 0 || input.Model.ID == "" {
+		writeError(w, 400, "Conexão e modelo são obrigatórios")
+		return
+	}
+	tx, err := h.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	var provider string
+	if err = tx.QueryRowContext(r.Context(), `SELECT p.name FROM ai_connections c JOIN ai_providers p ON p.id=c.provider_id WHERE c.id=? AND c.is_enabled=1`, input.ConnectionID).Scan(&provider); err != nil {
+		writeError(w, 404, "conexão não encontrada ou inativa")
+		return
+	}
+	_ = provider
+	var modelID int64
+	err = tx.QueryRowContext(r.Context(), "SELECT id FROM ai_models WHERE connection_id=? AND provider_model_name=?", input.ConnectionID, input.Model.ID).Scan(&modelID)
+	if err == nil {
+		writeError(w, 409, "Este modelo já está cadastrado nesta conexão")
+		return
+	}
+	if err != sql.ErrNoRows {
+		writeError(w, 500, err.Error())
+		return
+	}
+	maxTokens := input.Parameters.MaxOutputTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
+	if input.Model.MaxCompletionTokens > 0 && maxTokens > input.Model.MaxCompletionTokens {
+		maxTokens = input.Model.MaxCompletionTokens
+	}
+	if input.Model.ContextLength > 0 && maxTokens >= input.Model.ContextLength {
+		maxTokens = requirePositive(input.Model.ContextLength/4, 1)
+	}
+	result, err := tx.ExecContext(r.Context(), `INSERT INTO ai_models(connection_id,provider_model_name,display_name,context_window,max_output_tokens,supports_json,supports_tools,supports_streaming,is_default,is_enabled) VALUES(?,?,?,?,?,?,?,?,0,1)`, input.ConnectionID, input.Model.ID, input.Model.Name, input.Model.ContextLength, maxTokens, boolInt(contains(input.Model.SupportedParameters, "response_format") || contains(input.Model.SupportedParameters, "structured_outputs")), boolInt(contains(input.Model.SupportedParameters, "tools")), 1)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	modelID, _ = result.LastInsertId()
+	p := input.Parameters
+	p.TimeoutSeconds = requirePositive(p.TimeoutSeconds, 900)
+	if _, err = tx.ExecContext(r.Context(), `INSERT INTO model_parameters(model_id,temperature,top_p,repeat_penalty,num_ctx,num_threads,num_predict,keep_alive,timeout_seconds,unload_model_after_review) VALUES(?,?,?,?,?,?,?,?,?,?)`, modelID, p.Temperature, p.TopP, p.RepeatPenalty, p.NumCtx, p.NumThreads, p.NumPredict, p.KeepAlive, p.TimeoutSeconds, boolInt(p.UnloadModelAfterReview)); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	if input.MakeDefault {
+		if _, err = tx.ExecContext(r.Context(), "UPDATE ai_models SET is_default=0 WHERE connection_id=?", input.ConnectionID); err == nil {
+			_, err = tx.ExecContext(r.Context(), "UPDATE ai_models SET is_default=1,updated_at=CURRENT_TIMESTAMP WHERE id=?", modelID)
+		}
+	}
+	if err != nil || tx.Commit() != nil {
+		if err == nil {
+			err = fmt.Errorf("could not save model")
+		}
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "model_id": modelID})
 }

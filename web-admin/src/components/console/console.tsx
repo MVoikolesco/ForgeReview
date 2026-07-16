@@ -3,9 +3,10 @@
 import { ConnectionWizard } from "@/components/connections/connection-wizard";
 import { ConnectionsDashboard } from "@/components/connections/connections-dashboard";
 import { ExecutionsFlow } from "@/components/executions/executions-flow";
+import { GiteaArea } from "@/components/gitea/gitea-area";
 import { ThemeToggle, type Theme } from "@/components/theme-toggle";
 import { createAdminClient } from "@/lib/admin-client";
-import type { ConnectionData } from "@/lib/contracts";
+import type { Connection, ConnectionData } from "@/lib/contracts";
 import { Menu, Plus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ConsoleView } from "./sidebar";
@@ -39,6 +40,9 @@ export function Console({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardConnection, setWizardConnection] = useState<Connection | null>(
+    null,
+  );
   const [collapsed, setCollapsed] = useState(false);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [view, setView] = useState<ConsoleView>("connections");
@@ -131,7 +135,10 @@ export function Console({
                 </div>
                 <button
                   className="primary-button"
-                  onClick={() => setWizardOpen(true)}
+                  onClick={() => {
+                    setWizardConnection(null);
+                    setWizardOpen(true);
+                  }}
                 >
                   <Plus size={18} />
                   Nova conexão
@@ -144,7 +151,21 @@ export function Console({
                 loading={loading}
                 onRefresh={refresh}
                 onNew={() => setWizardOpen(true)}
+                onAddModel={(connection) => {
+                  setWizardConnection(connection);
+                  setWizardOpen(true);
+                }}
               />
+            </>
+          ) : view === "gitea" ? (
+            <>
+              <div className="page-heading">
+                <div>
+                  <span className="eyebrow">Integrações</span>
+                  <h1>Gitea</h1>
+                </div>
+              </div>
+              <GiteaArea request={request} onAuthError={onLogout} />
             </>
           ) : (
             <>
@@ -167,9 +188,28 @@ export function Console({
         <ConnectionWizard
           request={request}
           existingProfiles={data.profiles.length}
-          onClose={() => setWizardOpen(false)}
+          existingConnection={
+            wizardConnection
+              ? {
+                  id: wizardConnection.id,
+                  provider: data.providers.find(
+                    (item) => item.id === wizardConnection.provider_id,
+                  )?.name as "ollama" | "openrouter",
+                  name: wizardConnection.name,
+                  base_url: wizardConnection.base_url,
+                  api_key_env_name: wizardConnection.api_key_env_name,
+                  http_referer: wizardConnection.http_referer,
+                  app_title: wizardConnection.app_title,
+                }
+              : undefined
+          }
+          onClose={() => {
+            setWizardOpen(false);
+            setWizardConnection(null);
+          }}
           onComplete={async () => {
             setWizardOpen(false);
+            setWizardConnection(null);
             await refresh();
           }}
         />

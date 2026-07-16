@@ -180,6 +180,19 @@
   }
 }
 
+.default-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  color: #526158;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+
+  input { accent-color: #2869c7; }
+}
+
 .close-button {
   width: 35px;
   height: 35px;
