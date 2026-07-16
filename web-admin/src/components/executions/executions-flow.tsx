@@ -1,0 +1,517 @@
+"use client";
+
+import type { AdminRequest } from "@/lib/admin-client";
+import {
+  Background,
+  Controls,
+  Handle,
+  Position,
+  ReactFlow,
+  useNodesState,
+  type Edge,
+  type Node,
+  type NodeProps,
+} from "@xyflow/react";
+import {
+  Activity,
+  Clock3,
+  HardDrive,
+  RefreshCw,
+  ServerCog,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+type Worker = {
+  name: string;
+  state: string;
+  current_job: string;
+};
+
+type Metrics = {
+  queue: {
+    connected: boolean;
+    stream_length: number;
+    pending: number;
+    workers: Worker[];
+  };
+  reviews: { total: number; bytes: number };
+  queue_error?: string;
+};
+
+type ProgressEvent = {
+  stage: string;
+  status: string;
+  percent: number;
+  message?: string;
+  group_id?: string;
+  group_index?: number;
+  total_groups?: number;
+  files?: string[];
+  findings?: number;
+  failed_groups?: number;
+  attempt?: number;
+  max_attempts?: number;
+  timestamp?: string;
+};
+
+type ReviewProgress = {
+  name: string;
+  updated_at: string;
+  percent: number;
+  stage: string;
+  status: string;
+  message: string;
+  events: ProgressEvent[];
+};
+
+type ProgressResponse = {
+  active: boolean;
+  review?: ReviewProgress;
+};
+
+type ReviewLog = {
+  name: string;
+  updated_at: string;
+  files: number;
+  bytes: number;
+};
+
+type StageNodeData = {
+  title: string;
+  subtitle: string;
+  status: string;
+  percent: number;
+  message?: string;
+  events: ProgressEvent[];
+  active: boolean;
+  targetPosition: Position;
+  sourcePosition: Position;
+};
+
+const emptyMetrics: Metrics = {
+  queue: { connected: false, stream_length: 0, pending: 0, workers: [] },
+  reviews: { total: 0, bytes: 0 },
+};
+
+const workflowStages = [
+  {
+    id: "preparacao",
+    title: "Preparação",
+    subtitle: "Diff, contexto e filtros",
+  },
+  {
+    id: "planejamento",
+    title: "Planejamento",
+    subtitle: "Organização dos grupos",
+  },
+  {
+    id: "revisao",
+    title: "Revisão",
+    subtitle: "Análise dos blocos de arquivos",
+  },
+  {
+    id: "consolidacao",
+    title: "Consolidação",
+    subtitle: "Síntese dos achados",
+  },
+  {
+    id: "verificacao",
+    title: "Verificação",
+    subtitle: "Confiança e consistência",
+  },
+  {
+    id: "formatacao",
+    title: "Formatação",
+    subtitle: "Composição do comentário",
+  },
+  { id: "publicacao", title: "Publicação", subtitle: "Envio para o Gitea" },
+] as const;
+
+const stagePositions = [
+  { x: 0, y: 0 },
+  { x: 419, y: 16 },
+  { x: 812, y: 0 },
+  { x: 1138, y: 169 },
+  { x: 923, y: 397 },
+  { x: 440, y: 382 },
+  { x: 9, y: 389 },
+];
+
+function statusLabel(status: string) {
+  if (status === "done") return "Concluída";
+  if (status === "running") return "Em execução";
+  if (status === "retrying") return "Retentando";
+  if (status === "failed") return "Falhou";
+  return "Aguardando";
+}
+
+function stageName(stage: string) {
+  return workflowStages.find((item) => item.id === stage)?.title || stage;
+}
+
+function formatTime(timestamp?: string) {
+  if (!timestamp) return "--:--:--";
+  return new Date(timestamp).toLocaleTimeString("pt-BR");
+}
+
+function formatSize(value: number) {
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  return `${Math.ceil(value / 1024)} KB`;
+}
+
+function WorkflowNode({ data, selected }: NodeProps<Node<StageNodeData>>) {
+  const status = data.status || "pending";
+  const expanded =
+    selected || data.active || status === "failed" || status === "retrying";
+  const recentEvents = data.events.slice(-4).reverse();
+
+  return (
+    <article
+      className={`execution-node ${status} ${data.active ? "active" : ""} ${expanded ? "expanded" : ""}`}
+    >
+      <Handle type="target" position={data.targetPosition} />
+      <header>
+        <span className="execution-node-status">
+          <i />
+          {statusLabel(status)}
+        </span>
+        <span className="execution-node-percent">{data.percent}%</span>
+      </header>
+      <strong>{data.title}</strong>
+      <small>{data.message || data.subtitle}</small>
+      <div className="execution-node-progress">
+        <span style={{ width: `${data.percent}%` }} />
+      </div>
+      {expanded && (
+        <div className="execution-node-logs">
+          {recentEvents.length ? (
+            recentEvents.map((event, index) => (
+              <div
+                className={event.status}
+                key={`${event.timestamp || event.message}-${index}`}
+              >
+                <header>
+                  <span>{event.message || statusLabel(event.status)}</span>
+                  <time>{formatTime(event.timestamp)}</time>
+                </header>
+                {event.group_id && (
+                  <p>
+                    Grupo {event.group_index || "-"}/{event.total_groups || "-"}{" "}
+                    · {event.group_id}
+                  </p>
+                )}
+                {!!event.files?.length && (
+                  <ul>
+                    {event.files.slice(0, 4).map((file) => (
+                      <li key={file}>{file}</li>
+                    ))}
+                    {event.files.length > 4 && (
+                      <li>+{event.files.length - 4} arquivos</li>
+                    )}
+                  </ul>
+                )}
+                {(event.findings !== undefined ||
+                  event.failed_groups !== undefined) && (
+                  <footer>
+                    {event.findings !== undefined && (
+                      <span>{event.findings} achados</span>
+                    )}
+                    {event.failed_groups !== undefined && (
+                      <span>{event.failed_groups} grupos com falha</span>
+                    )}
+                  </footer>
+                )}
+                {event.attempt !== undefined && (
+                  <footer>
+                    <span>
+                      Tentativa {event.attempt}/{event.max_attempts || "-"}
+                    </span>
+                  </footer>
+                )}
+              </div>
+            ))
+          ) : (
+            <span className="execution-node-empty">
+              Os logs desta etapa aparecerão aqui.
+            </span>
+          )}
+        </div>
+      )}
+      <Handle type="source" position={data.sourcePosition} />
+    </article>
+  );
+}
+
+const nodeTypes = { workflow: WorkflowNode };
+
+type Props = {
+  request: AdminRequest;
+  onAuthError: () => void;
+};
+
+export function ExecutionsFlow({ request, onAuthError }: Props) {
+  const [metrics, setMetrics] = useState<Metrics>(emptyMetrics);
+  const [progress, setProgress] = useState<ProgressResponse>({ active: false });
+  const [reviews, setReviews] = useState<ReviewLog[]>([]);
+  const [error, setError] = useState("");
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node<StageNodeData>>(
+    [],
+  );
+
+  const load = useCallback(
+    async (showRefreshing = false) => {
+      if (showRefreshing) setRefreshing(true);
+      try {
+        const [metricsResult, progressResult, reviewsResult] =
+          await Promise.all([
+            request<Metrics>("observability/metrics"),
+            request<ProgressResponse>("observability/progress"),
+            request<ReviewLog[]>("observability/reviews"),
+          ]);
+        setMetrics(metricsResult);
+        setProgress(progressResult);
+        setReviews(reviewsResult || []);
+        setUpdatedAt(new Date());
+        setError(metricsResult.queue_error || "");
+      } catch (failure) {
+        if (failure instanceof Error && failure.message === "AUTH")
+          return onAuthError();
+        setError(failure instanceof Error ? failure.message : String(failure));
+      } finally {
+        if (showRefreshing) setRefreshing(false);
+      }
+    },
+    [onAuthError, request],
+  );
+
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => void load(), 5000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+
+  const current = progress.review;
+  const events = useMemo(() => current?.events || [], [current?.events]);
+  const latestByStage = useMemo(
+    () =>
+      events.reduce<Record<string, ProgressEvent>>((result, event) => {
+        result[event.stage] = event;
+        return result;
+      }, {}),
+    [events],
+  );
+  const eventsByStage = useMemo(
+    () =>
+      events.reduce<Record<string, ProgressEvent[]>>((result, event) => {
+        (result[event.stage] ||= []).push(event);
+        return result;
+      }, {}),
+    [events],
+  );
+
+  const generatedNodes = useMemo<Node<StageNodeData>[]>(
+    () =>
+      workflowStages.map((stage, index) => {
+        const event = latestByStage[stage.id];
+        const isTopRow = index < 4;
+        const percent =
+          event?.status === "done"
+            ? 100
+            : Math.max(0, Math.min(100, event?.percent || 0));
+        return {
+          id: stage.id,
+          type: "workflow",
+          position: stagePositions[index],
+          data: {
+            title: stage.title,
+            subtitle: stage.subtitle,
+            status: event?.status || "pending",
+            percent,
+            message: event?.message,
+            events: eventsByStage[stage.id] || [],
+            active: progress.active && current?.stage === stage.id,
+            targetPosition:
+              index === 4
+                ? Position.Top
+                : isTopRow
+                  ? Position.Left
+                  : Position.Right,
+            sourcePosition:
+              index === 3
+                ? Position.Bottom
+                : isTopRow
+                  ? Position.Right
+                  : Position.Left,
+          },
+        };
+      }),
+    [current?.stage, eventsByStage, latestByStage, progress.active],
+  );
+
+  const edges = useMemo<Edge[]>(() => {
+    const connections: Edge[] = workflowStages
+      .slice(0, -1)
+      .map((stage, index) => {
+        const target = workflowStages[index + 1];
+        const reached = Boolean(latestByStage[target.id]);
+        const active = progress.active && current?.stage === target.id;
+        return {
+          id: `${stage.id}-${target.id}`,
+          source: stage.id,
+          target: target.id,
+          type: "default",
+          animated: active,
+          className: `execution-edge ${reached ? "reached" : ""} ${active ? "active" : ""}`,
+        };
+      });
+    const retryStage = workflowStages.find(
+      (stage) => latestByStage[stage.id]?.status === "retrying",
+    );
+    if (retryStage) {
+      connections.push({
+        id: `${retryStage.id}-retry`,
+        source: retryStage.id,
+        target: retryStage.id,
+        type: "default",
+        animated: true,
+        className: "execution-edge retry-loop active",
+        label: `Tentativa ${latestByStage[retryStage.id].attempt || "-"}/${latestByStage[retryStage.id].max_attempts || "-"}`,
+      });
+    }
+    return connections;
+  }, [current?.stage, latestByStage, progress.active]);
+
+  useEffect(() => {
+    setNodes((previous) =>
+      generatedNodes.map((node) => {
+        const existing = previous.find((item) => item.id === node.id);
+        return {
+          ...node,
+          position: existing?.position || node.position,
+          selected: existing?.selected,
+        };
+      }),
+    );
+  }, [generatedNodes, setNodes]);
+
+  const activeWorkers =
+    metrics.queue.workers?.filter((worker) => worker.state === "processing")
+      .length || 0;
+
+  return (
+    <section className="executions-view">
+      {error && <div className="banner error">{error}</div>}
+      <div className="execution-overview">
+        <article className="execution-current">
+          <div>
+            <span
+              className={`live-indicator ${progress.active ? "active" : ""}`}
+            >
+              <i />
+              {progress.active ? "Execução ao vivo" : "Última execução"}
+            </span>
+            <h2>{current?.name || "Nenhuma revisão registrada"}</h2>
+            <p>
+              {current?.message ||
+                "O pipeline será preenchido assim que uma revisão for iniciada."}
+            </p>
+          </div>
+          <div className="execution-total-progress">
+            <strong>{current?.percent || 0}%</strong>
+            <span>progresso geral</span>
+          </div>
+        </article>
+        <article className="execution-metric">
+          <span>
+            <Activity size={18} />
+          </span>
+          <div>
+            <small>Etapa atual</small>
+            <strong>{current ? stageName(current.stage) : "Aguardando"}</strong>
+          </div>
+        </article>
+        <article className="execution-metric">
+          <span>
+            <Clock3 size={18} />
+          </span>
+          <div>
+            <small>Jobs pendentes</small>
+            <strong>{metrics.queue.pending || 0}</strong>
+          </div>
+        </article>
+        <article className="execution-metric">
+          <span>
+            <ServerCog size={18} />
+          </span>
+          <div>
+            <small>Workers ativos</small>
+            <strong>{activeWorkers}</strong>
+          </div>
+        </article>
+      </div>
+
+      <article className="execution-flow-panel">
+        <header>
+          <div>
+            <span className="eyebrow">Pipeline em tempo real</span>
+            <h3>Etapas da revisão</h3>
+            <p>
+              Selecione uma etapa para inspecionar seus eventos mais recentes.
+            </p>
+          </div>
+          <div className="execution-flow-actions">
+            <span>
+              <i />
+              Sincronização a cada 5s
+            </span>
+            <button
+              className="secondary-button"
+              onClick={() => void load(true)}
+              disabled={refreshing}
+            >
+              <RefreshCw className={refreshing ? "spin" : ""} size={16} />
+              Atualizar
+            </button>
+          </div>
+        </header>
+        <div className="execution-flow-canvas">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            onNodesChange={onNodesChange}
+            nodesConnectable={false}
+            fitView
+            fitViewOptions={{ padding: 0.12, maxZoom: 0.95 }}
+            minZoom={0.45}
+            maxZoom={1.4}
+          >
+            <Background gap={24} size={1} />
+            <Controls showInteractive={false} />
+          </ReactFlow>
+        </div>
+      </article>
+
+      <footer className="execution-footnotes">
+        <span className={metrics.queue.connected ? "online" : "offline"}>
+          <i />
+          Redis {metrics.queue.connected ? "operacional" : "indisponível"}
+        </span>
+        <span>
+          <HardDrive size={13} />
+          {metrics.queue.stream_length || 0} jobs na stream
+        </span>
+        <span>
+          {metrics.reviews.total || 0} revisões ·{" "}
+          {formatSize(metrics.reviews.bytes || 0)}
+        </span>
+        {reviews[0] && <span>Último artefato: {reviews[0].name}</span>}
+        <span>
+          Atualizado às {updatedAt?.toLocaleTimeString("pt-BR") || "--:--:--"}
+        </span>
+      </footer>
+    </section>
+  );
+}
