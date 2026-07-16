@@ -34,6 +34,7 @@ type ReviewMetadata struct {
 
 type InlineComment struct {
 	Severity       string
+	Type           string
 	Path           string
 	NewPosition    int
 	Reference      string
@@ -188,12 +189,18 @@ func (c InlineComment) SummaryLine() string {
 		title = c.Reference
 	}
 	if title == "" {
+		title = c.DecisionReason
+	}
+	if title == "" {
 		title = "Comentario de review"
 	}
 	if c.Path == "" {
 		return fmt.Sprintf("- %s: %s", title, c.Body)
 	}
 
+	if c.Type != "" || c.Severity != "" {
+		return fmt.Sprintf("- %s [%s/%s]: %s - %s", c.Path, c.Severity, c.Type, title, c.Body)
+	}
 	return fmt.Sprintf("- %s: %s - %s", c.Path, title, c.Body)
 }
 
@@ -205,19 +212,58 @@ func ResolveFinalReviewCommentPositions(finalReview FinalReview, files []diff.Ch
 
 	for index := range finalReview.InlineComments {
 		comment := &finalReview.InlineComments[index]
-		if comment.Path == "" || comment.Reference == "" {
-			if comment.Reference == "" && comment.NewPosition > 0 {
-				continue
-			}
+		if comment.Path == "" {
 			comment.NewPosition = 0
 			continue
 		}
 
-		line := findAddedLineByReference(patchesByPath[comment.Path], comment.Reference)
-		comment.NewPosition = line
+		patch := patchesByPath[comment.Path]
+		if comment.Reference != "" {
+			comment.NewPosition = findAddedLineByReference(patch, comment.Reference)
+			continue
+		}
+		if !isAddedLineNumber(patch, comment.NewPosition) {
+			comment.NewPosition = 0
+		}
 	}
 
 	return finalReview
+}
+
+func isAddedLineNumber(patch string, target int) bool {
+	if patch == "" || target <= 0 {
+		return false
+	}
+
+	newLine := 0
+	for _, line := range strings.Split(patch, "\n") {
+		if strings.HasPrefix(line, "@@") {
+			newLine = parseHunkNewStart(line)
+			continue
+		}
+		if newLine <= 0 || len(line) == 0 {
+			continue
+		}
+
+		switch line[0] {
+		case '+':
+			if strings.HasPrefix(line, "+++") {
+				continue
+			}
+			if newLine == target {
+				return true
+			}
+			newLine++
+		case '-':
+			if strings.HasPrefix(line, "---") {
+				continue
+			}
+		default:
+			newLine++
+		}
+	}
+
+	return false
 }
 
 func findAddedLineByReference(patch string, reference string) int {
@@ -300,6 +346,8 @@ func applyInlineCommentField(comment *InlineComment, key string, value string) {
 	switch strings.ToUpper(key) {
 	case "SEVERIDADE":
 		comment.Severity = value
+	case "TIPO", "CATEGORY", "CATEGORIA":
+		comment.Type = value
 	case "PATH", "ARQUIVO":
 		comment.Path = value
 	case "NEW_POSITION", "LINHA_REFERENCIA":

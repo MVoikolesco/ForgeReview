@@ -6,18 +6,20 @@ import (
 	"strings"
 )
 
-var allowedSeverities = []string{"alta", "media", "baixa"}
-var allowedStatuses = []string{"aprovado", "aprovado_com_observacao", "reprovado", "comentario"}
+var allowedSeverities = []string{"critica", "alta", "media", "baixa"}
+var allowedStatuses = []string{"aprovado", "aprovado_com_observacao", "reprovado", "comentario", "comentado", "parcial"}
 
 type finalResponseJSON struct {
 	Comments    []finalCommentJSON `json:"comments"`
 	FinalReview finalReviewJSON    `json:"final_review"`
+	Metadata    json.RawMessage    `json:"metadata,omitempty"`
 }
 
 type finalCommentJSON struct {
 	File           string `json:"file"`
 	Line           int    `json:"line"`
 	Severity       string `json:"severity"`
+	Type           string `json:"type,omitempty"`
 	DecisionReason string `json:"decision_reason"`
 	Comment        string `json:"comment"`
 }
@@ -39,11 +41,11 @@ func ValidateFinalReviewResponse(content string) (FinalReview, error) {
 	if top == nil {
 		return FinalReview{}, fmt.Errorf("resposta deve ser um objeto JSON")
 	}
-	if len(top) != 2 {
-		return FinalReview{}, fmt.Errorf("propriedades de primeiro nivel devem ser exatamente comments e final_review")
+	if len(top) < 2 || len(top) > 3 {
+		return FinalReview{}, fmt.Errorf("propriedades de primeiro nivel devem ser comments, final_review e metadata opcional")
 	}
 	for key := range top {
-		if key != "comments" && key != "final_review" {
+		if key != "comments" && key != "final_review" && key != "metadata" {
 			return FinalReview{}, fmt.Errorf("propriedade desconhecida: %s", key)
 		}
 	}
@@ -100,6 +102,9 @@ func ValidateFinalReviewResponse(content string) (FinalReview, error) {
 			errors = append(errors, prefix+".comment vazio")
 		}
 	}
+	if response.FinalReview.GiteaEvent == "APPROVE" {
+		response.FinalReview.GiteaEvent = GiteaEventApproved
+	}
 	if !contains([]string{GiteaEventApproved, GiteaEventComment, GiteaEventRequestChanges}, response.FinalReview.GiteaEvent) {
 		errors = append(errors, "final_review.gitea_event nao permitido")
 	}
@@ -120,7 +125,7 @@ func ValidateFinalReviewResponse(content string) (FinalReview, error) {
 	}
 	for _, comment := range response.Comments {
 		parsed.InlineComments = append(parsed.InlineComments, InlineComment{
-			Severity: comment.Severity, Path: comment.File, NewPosition: comment.Line,
+			Severity: comment.Severity, Type: comment.Type, Path: comment.File, NewPosition: comment.Line,
 			DecisionReason: comment.DecisionReason, Body: comment.Comment,
 		})
 	}

@@ -56,6 +56,26 @@ func NewClient(cfg Config) *Client {
 func (c *Client) Model() string {
 	return c.model
 }
+func (c *Client) Unload(ctx context.Context, model string) error {
+	payload, err := json.Marshal(map[string]any{"model": model, "keep_alive": 0})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/generate", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("erro ao descarregar modelo ollama: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("ollama unload retornou status=%d", res.StatusCode)
+	}
+	return nil
+}
 
 func (c *Client) Chat(ctx context.Context, prompt string) (string, error) {
 	result, err := c.ChatWithMetadata(ctx, prompt)
@@ -65,6 +85,14 @@ func (c *Client) Chat(ctx context.Context, prompt string) (string, error) {
 	return result.Content, nil
 }
 
+func (c *Client) ChatWithMaxTokens(ctx context.Context, prompt string, maxOutputTokens int) (ChatResult, error) {
+	options := c.options
+	if maxOutputTokens > 0 {
+		options.NumPredict = maxOutputTokens
+	}
+	return c.chatWithOptions(ctx, prompt, options)
+}
+
 type ChatResult struct {
 	Content          string
 	PromptTokens     int
@@ -72,6 +100,10 @@ type ChatResult struct {
 }
 
 func (c *Client) ChatWithMetadata(ctx context.Context, prompt string) (ChatResult, error) {
+	return c.chatWithOptions(ctx, prompt, c.options)
+}
+
+func (c *Client) chatWithOptions(ctx context.Context, prompt string, options Options) (ChatResult, error) {
 	payload := chatRequest{
 		Model:     c.model,
 		Stream:    false,
@@ -79,7 +111,7 @@ func (c *Client) ChatWithMetadata(ctx context.Context, prompt string) (ChatResul
 		Messages: []chatMessage{
 			{Role: "user", Content: prompt},
 		},
-		Options: c.options,
+		Options: options,
 	}
 
 	body, err := json.Marshal(payload)

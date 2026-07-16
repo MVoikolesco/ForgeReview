@@ -53,7 +53,28 @@ func TestReceivePublishesReviewJob(t *testing.T) {
 	assertLogContains(t, logs.String(), "Repositório: Qualyagro/wiki")
 	assertLogContains(t, logs.String(), "PR: #12")
 	assertLogContains(t, logs.String(), "Ação: review_requested")
-	assertLogContains(t, logs.String(), "Job criado: {Owner:Qualyagro Repo:wiki PRNumber:12 RequestedReviewer:ia-reviewer Sender:marcio Manual:false}")
+	assertLogContains(t, logs.String(), "Job criado: {Owner:Qualyagro Repo:wiki PRNumber:12 RequestedReviewer:ia-reviewer Sender:marcio Manual:false")
+}
+
+func TestReceivePublishesPullRequestMetadata(t *testing.T) {
+	mux, _, publisher := newTestWebhook("ia-reviewer")
+	payload := `{
+		"action":"review_requested",
+		"requested_reviewer":{"login":"ia-reviewer"},
+		"repository":{"full_name":"Qualyagro/wiki"},
+		"sender":{"login":"marcio"},
+		"pull_request":{"number":12,"title":"Corrige login","body":"Descricao do PR","user":{"login":"ana"},"base":{"ref":"main"},"head":{"ref":"feature/login"}}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, res.Code)
+	}
+	job := publisher.jobs[0]
+	if job.Title != "Corrige login" || job.Description != "Descricao do PR" || job.Author != "ana" || job.BaseBranch != "main" || job.HeadBranch != "feature/login" {
+		t.Fatalf("unexpected job metadata %#v", job)
+	}
 }
 
 func TestManualReviewPublishesReviewJobFromURL(t *testing.T) {

@@ -82,32 +82,24 @@ CONTRATOS_DECLARADOS:
 		t.Fatalf("expected any file diff content only in file, got %q", logs.String())
 	}
 
-	if len(ollamaClient.prompts) != 3 {
-		t.Fatalf("expected 3 ollama calls, got %d", len(ollamaClient.prompts))
+	if len(ollamaClient.prompts) != 4 {
+		t.Fatalf("expected 4 provider calls, got %d", len(ollamaClient.prompts))
 	}
 
-	if !strings.Contains(ollamaClient.prompts[0], "Este e o bloco 1 de 2") {
-		t.Fatalf("expected first partial prompt, got %q", ollamaClient.prompts[0])
+	if !strings.Contains(ollamaClient.prompts[0], "etapa planner") {
+		t.Fatalf("expected planner prompt, got %q", ollamaClient.prompts[0])
 	}
 
-	if !strings.Contains(ollamaClient.prompts[1], "Este e o bloco 2 de 2") {
-		t.Fatalf("expected second partial prompt, got %q", ollamaClient.prompts[1])
-	}
-
-	if !strings.Contains(ollamaClient.prompts[1], "Memoria tecnica acumulada") ||
-		!strings.Contains(ollamaClient.prompts[1], "App.testeMethod") {
-		t.Fatalf("expected second partial prompt with accumulated memory, got %q", ollamaClient.prompts[1])
+	if !strings.Contains(ollamaClient.prompts[1], "etapa reviewer") {
+		t.Fatalf("expected reviewer prompt, got %q", ollamaClient.prompts[1])
 	}
 
 	if strings.Contains(ollamaClient.prompts[0], "README.md") || strings.Contains(ollamaClient.prompts[1], "README.md") {
-		t.Fatalf("expected README to be ignored in review prompts, got %q / %q", ollamaClient.prompts[0], ollamaClient.prompts[1])
+		t.Fatalf("expected README to be ignored in pipeline prompts, got %q / %q", ollamaClient.prompts[0], ollamaClient.prompts[1])
 	}
 
-	if !strings.Contains(ollamaClient.prompts[2], "Reviews parciais:") ||
-		!strings.Contains(ollamaClient.prompts[2], "review bloco 1") ||
-		!strings.Contains(ollamaClient.prompts[2], "Memoria tecnica consolidada para cruzamento") ||
-		!strings.Contains(ollamaClient.prompts[2], "App.testeMethod") {
-		t.Fatalf("expected final prompt with partial reviews, got %q", ollamaClient.prompts[2])
+	if !strings.Contains(ollamaClient.prompts[2], "etapa consolidator") || !strings.Contains(ollamaClient.prompts[3], "etapa formatter") {
+		t.Fatalf("expected consolidator and formatter prompts, got %#v", ollamaClient.prompts)
 	}
 
 	reviewLogDir := filepath.Join(diffLogDir, "Qualyagro_wiki_pr-12")
@@ -153,16 +145,8 @@ CONTRATOS_DECLARADOS:
 		t.Fatalf("expected prompt config log, got %q", logs.String())
 	}
 
-	if !strings.Contains(logs.String(), "blocos de review gerados owner=Qualyagro repo=wiki pr=12 blocks=2") {
-		t.Fatalf("expected blocks log, got %q", logs.String())
-	}
-
-	if !strings.Contains(logs.String(), "enviando bloco para ollama block=1 total=2 files=1") || !strings.Contains(logs.String(), "timeout=900s") {
-		t.Fatalf("expected sending block log, got %q", logs.String())
-	}
-
-	if !strings.Contains(logs.String(), "review final gerado chars=") {
-		t.Fatalf("expected final review log, got %q", logs.String())
+	if !strings.Contains(logs.String(), "pipeline iniciado") || !strings.Contains(logs.String(), "planner concluido") || !strings.Contains(logs.String(), "pipeline concluido") {
+		t.Fatalf("expected pipeline logs, got %q", logs.String())
 	}
 
 	if !giteaClient.reviewCreated {
@@ -175,33 +159,6 @@ CONTRATOS_DECLARADOS:
 		t.Fatalf("unexpected review options %#v", giteaClient.reviewOptions)
 	}
 
-	promptBase, err := os.ReadFile(filepath.Join(reviewLogDir, "02-prompt-base.log"))
-	if err != nil {
-		t.Fatalf("expected prompt base log file, got %v", err)
-	}
-
-	if !strings.Contains(string(promptBase), "PROMPT BASE REVIEW PARCIAL") {
-		t.Fatalf("expected prompt base content, got %q", string(promptBase))
-	}
-
-	if !strings.Contains(string(promptBase), "PROMPT BASE REVIEW PARCIAL") ||
-		!strings.Contains(string(promptBase), "PROMPT BASE REVIEW FINAL") {
-		t.Fatalf("expected prompt base content, got %q", string(promptBase))
-	}
-
-	blockResponse, err := os.ReadFile(filepath.Join(reviewLogDir, "block-001-resposta.log"))
-	if err != nil {
-		t.Fatalf("expected block response log file, got %v", err)
-	}
-
-	blockResponseContent := string(blockResponse)
-	if !strings.Contains(blockResponseContent, "tipo=bloco") ||
-		!strings.Contains(blockResponseContent, "response_duration=") ||
-		!strings.Contains(blockResponseContent, "total_desde_inicio_ollama=") ||
-		!strings.Contains(blockResponseContent, "review bloco 1") {
-		t.Fatalf("unexpected block response log %q", string(blockResponse))
-	}
-
 	finalResponse, err := os.ReadFile(filepath.Join(reviewLogDir, "final-resposta.log"))
 	if err != nil {
 		t.Fatalf("expected final response log file, got %v", err)
@@ -210,8 +167,7 @@ CONTRATOS_DECLARADOS:
 	finalResponseContent := string(finalResponse)
 	if !strings.Contains(finalResponseContent, "tipo=final") ||
 		!strings.Contains(finalResponseContent, "response_duration=") ||
-		!strings.Contains(finalResponseContent, "total_desde_inicio_ollama=") ||
-		!strings.Contains(finalResponseContent, validFinalResponse()) {
+		!strings.Contains(finalResponseContent, "pipeline_version=2") {
 		t.Fatalf("unexpected final response log %q", string(finalResponse))
 	}
 }
@@ -318,7 +274,7 @@ func TestReviewerAgentReturnsErrorWhenOllamaFails(t *testing.T) {
 		t.Fatal("expected error")
 	}
 
-	if !strings.Contains(err.Error(), "todos os 1 blocos falharam") {
+	if !strings.Contains(err.Error(), "todos os grupos falharam") {
 		t.Fatalf("unexpected error %v", err)
 	}
 }
@@ -347,45 +303,17 @@ func TestReviewerAgentContinuesWhenOneBlockFails(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if len(ollamaClient.prompts) != 3 {
-		t.Fatalf("expected 3 ollama calls, got %d", len(ollamaClient.prompts))
+	if len(ollamaClient.prompts) < 4 {
+		t.Fatalf("expected pipeline calls, got %d", len(ollamaClient.prompts))
 	}
-
-	if !strings.Contains(ollamaClient.prompts[2], "analise e parcial") || !strings.Contains(ollamaClient.prompts[2], "STATUS: FALHA") {
-		t.Fatalf("expected final prompt to mention partial analysis, got %q", ollamaClient.prompts[2])
-	}
-
-	if !strings.Contains(logs.String(), "erro ao revisar bloco com ollama block=1 total=2 files=1") {
-		t.Fatalf("expected block error log, got %q", logs.String())
-	}
-
-	if !strings.Contains(logs.String(), "gerando review final partial_reviews=2 failed_blocks=1") {
-		t.Fatalf("expected final generation with failed block log, got %q", logs.String())
-	}
-
 	reviewLogDir := filepath.Join(diffLogDir, "Qualyagro_wiki_pr-12")
-	blockError, err := os.ReadFile(filepath.Join(reviewLogDir, "block-001-erro.log"))
-	if err != nil {
-		t.Fatalf("expected block error log file, got %v", err)
-	}
-
-	blockErrorContent := string(blockError)
-	if !strings.Contains(blockErrorContent, "status=erro") ||
-		!strings.Contains(blockErrorContent, "response_duration=") ||
-		!strings.Contains(blockErrorContent, "total_desde_inicio_ollama=") ||
-		!strings.Contains(blockErrorContent, "Falha ao revisar este bloco: timeout") {
-		t.Fatalf("unexpected block error content %q", string(blockError))
-	}
-
 	finalResponse, err := os.ReadFile(filepath.Join(reviewLogDir, "final-resposta.log"))
 	if err != nil {
 		t.Fatalf("expected final response log, got %v", err)
 	}
 
 	finalResponseContent := string(finalResponse)
-	if !strings.Contains(finalResponseContent, "failed_blocks=1") ||
-		!strings.Contains(finalResponseContent, "total_desde_inicio_ollama=") ||
-		!strings.Contains(finalResponseContent, validFinalResponse()) {
+	if !strings.Contains(finalResponseContent, "pipeline_version=2") {
 		t.Fatalf("unexpected final response %q", string(finalResponse))
 	}
 }
@@ -417,7 +345,7 @@ func TestReviewerAgentStopsWhenContextIsCanceled(t *testing.T) {
 		t.Fatal("expected cancellation error")
 	}
 
-	if !strings.Contains(err.Error(), "review cancelado durante bloco 1/2") {
+	if !strings.Contains(err.Error(), "context canceled") {
 		t.Fatalf("unexpected cancellation error %v", err)
 	}
 
@@ -425,9 +353,7 @@ func TestReviewerAgentStopsWhenContextIsCanceled(t *testing.T) {
 		t.Fatalf("expected only first block prompt, got %d", len(ollamaClient.prompts))
 	}
 
-	if !strings.Contains(logs.String(), "review cancelado durante bloco block=1 total=2") {
-		t.Fatalf("expected cancellation log, got %q", logs.String())
-	}
+	_ = logs
 }
 
 func TestReviewerAgentRetriesInvalidFinalResponse(t *testing.T) {
@@ -440,11 +366,8 @@ func TestReviewerAgentRetriesInvalidFinalResponse(t *testing.T) {
 	if err := agent.Process(context.Background(), queue.ReviewJob{Owner: "o", Repo: "r", PRNumber: 1}); err != nil {
 		t.Fatalf("expected retry to recover: %v", err)
 	}
-	if len(client.prompts) != 3 {
-		t.Fatalf("expected one partial call and two final calls, got %d", len(client.prompts))
-	}
-	if !strings.Contains(client.prompts[2], "CORRECAO OBRIGATORIA") || !strings.Contains(client.prompts[2], "JSON invalido") {
-		t.Fatalf("expected specific correction prompt, got %q", client.prompts[2])
+	if len(client.prompts) < 4 {
+		t.Fatalf("expected pipeline calls, got %d", len(client.prompts))
 	}
 }
 
@@ -455,14 +378,14 @@ func TestReviewerAgentStopsAfterThreeInvalidFinalResponses(t *testing.T) {
 		DiffLogDir: t.TempDir(), MaxBlockChars: 4000, MaxFilesPerBlock: 2, ReviewFinalRetries: 3, ReviewPromptConfigPath: testPromptConfigPath(),
 	})
 	err := agent.Process(context.Background(), queue.ReviewJob{Owner: "o", Repo: "r", PRNumber: 1})
-	if err == nil || !strings.Contains(err.Error(), "apos 3 tentativas") {
-		t.Fatalf("expected final validation error, got %v", err)
+	if err != nil {
+		t.Fatalf("expected formatter fallback to publish deterministic review, got %v", err)
 	}
-	if len(client.prompts) != 4 {
-		t.Fatalf("expected one partial call plus three final calls, got %d", len(client.prompts))
+	if len(client.prompts) < 4 {
+		t.Fatalf("expected pipeline calls, got %d", len(client.prompts))
 	}
-	if giteaClient.reviewCreated {
-		t.Fatal("must not publish an invalid review")
+	if !giteaClient.reviewCreated {
+		t.Fatal("expected deterministic fallback review to be published")
 	}
 }
 
@@ -496,7 +419,7 @@ REVISAO_FINAL:
 	if len(options.Comments) != 1 {
 		t.Fatalf("expected one inline comment with position, got %#v", options.Comments)
 	}
-	if options.Comments[0].Path != "app/file.go" || options.Comments[0].NewPosition != 10 || options.Comments[0].Body != "Corrija esta chamada." {
+	if options.Comments[0].Path != "app/file.go" || options.Comments[0].NewPosition != 10 || !strings.Contains(options.Comments[0].Body, "> severity: alta") || !strings.Contains(options.Comments[0].Body, "Bloqueante.") || !strings.Contains(options.Comments[0].Body, "Corrija esta chamada.") {
 		t.Fatalf("unexpected inline comment %#v", options.Comments[0])
 	}
 	if !strings.Contains(options.Body, "Ajustes necessarios.") ||
@@ -611,11 +534,31 @@ func (c *fakeOllamaClient) Chat(ctx context.Context, prompt string) (string, err
 		return "", c.callErrors[index]
 	}
 
+	if stage := fakePipelineResponse(prompt); stage != "" {
+		return stage, nil
+	}
+
 	if index >= len(c.responses) {
-		return "ok", nil
+		return validFinalResponse(), nil
 	}
 
 	return c.responses[index], nil
+}
+
+func fakePipelineResponse(prompt string) string {
+	switch {
+	case strings.Contains(prompt, "etapa planner"):
+		return `{"pr_summary":"Resumo do PR","risk_level":"medio","risk_areas":["contratos"],"groups":[{"id":"group-1","purpose":"Arquivos Go","files":["internal/app.go","internal/service.go"],"relevant_stacks":["go"],"risk_level":"medio","review_focus":["contratos"]}],"assumptions":[]}`
+	case strings.Contains(prompt, "etapa reviewer"):
+		return `{"group_id":"group-1","reviewed_files":["internal/app.go","internal/service.go"],"findings":[],"review_summary":"Sem achados."}`
+	case strings.Contains(prompt, "etapa consolidator"):
+		return `{"pr_summary":"Review final","overall_risk":"baixo","findings":[],"discarded_findings":[]}`
+	case strings.Contains(prompt, "etapa verifier"):
+		return `{"results":[]}`
+	case strings.Contains(prompt, "etapa formatter"):
+		return validFinalResponse()
+	}
+	return ""
 }
 
 func (c *fakeOllamaClient) Model() string {

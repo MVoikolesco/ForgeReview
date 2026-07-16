@@ -68,6 +68,11 @@ func (h *Handler) Receive(w http.ResponseWriter, r *http.Request) {
 		PRNumber:          prNumber,
 		RequestedReviewer: reviewer,
 		Sender:            sender,
+		Title:             event.PullRequest.Title,
+		Description:       event.PullRequest.Body,
+		Author:            event.PullRequest.Author.LoginName(),
+		BaseBranch:        event.PullRequest.Base.BranchName(),
+		HeadBranch:        event.PullRequest.Head.BranchName(),
 	}
 
 	h.logger.Printf(
@@ -208,7 +213,12 @@ type ReviewRequestedEvent struct {
 	RequestedReviewer User   `json:"requested_reviewer"`
 	PullRequest       struct {
 		Number             int    `json:"number"`
+		Title              string `json:"title"`
+		Body               string `json:"body"`
+		Author             User   `json:"user"`
 		RequestedReviewers []User `json:"requested_reviewers"`
+		Base               Branch `json:"base"`
+		Head               Branch `json:"head"`
 	} `json:"pull_request"`
 	Repository struct {
 		FullName string `json:"full_name"`
@@ -247,6 +257,22 @@ func (e ReviewRequestedEvent) PRNumber() int {
 type User struct {
 	Login    string `json:"login"`
 	Username string `json:"username"`
+}
+
+type Branch struct {
+	Ref    string `json:"ref"`
+	Name   string `json:"name"`
+	Branch string `json:"branch"`
+}
+
+func (b Branch) BranchName() string {
+	if b.Ref != "" {
+		return b.Ref
+	}
+	if b.Name != "" {
+		return b.Name
+	}
+	return b.Branch
 }
 
 func (u User) LoginName() string {
