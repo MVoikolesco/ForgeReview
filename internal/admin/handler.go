@@ -156,7 +156,7 @@ func (h Handler) status(w http.ResponseWriter, r *http.Request) {
 		m[k] = n
 	}
 	var provider, model, profile sql.NullString
-	_ = h.db.QueryRowContext(r.Context(), `SELECT ap.display_name,am.display_name,rp.name FROM review_profiles rp JOIN ai_models am ON am.id=rp.model_id AND am.is_enabled=1 JOIN ai_connections ac ON ac.id=am.connection_id AND ac.is_enabled=1 JOIN ai_providers ap ON ap.id=ac.provider_id AND ap.is_enabled=1 JOIN model_parameters mp ON mp.model_id=am.id JOIN review_policies pol ON pol.profile_id=rp.id WHERE rp.is_default=1 AND rp.is_enabled=1 LIMIT 1`).Scan(&provider, &model, &profile)
+	_ = h.db.QueryRowContext(r.Context(), `SELECT ap.display_name,am.display_name,rp.name FROM review_profiles rp JOIN review_policies pol ON pol.profile_id=rp.id JOIN ai_providers ap ON ap.is_default=1 AND ap.is_enabled=1 JOIN ai_connections ac ON ac.provider_id=ap.id AND ac.is_default=1 AND ac.is_enabled=1 JOIN ai_models am ON am.connection_id=ac.id AND am.is_default=1 AND am.is_enabled=1 JOIN model_parameters mp ON mp.model_id=am.id WHERE rp.is_default=1 AND rp.is_enabled=1 LIMIT 1`).Scan(&provider, &model, &profile)
 	m["default_provider"] = provider.String
 	m["default_model"] = model.String
 	m["default_profile"] = profile.String
@@ -362,12 +362,21 @@ func (h Handler) setDefault(w http.ResponseWriter, r *http.Request, t string, id
 	resetQuery := ""
 	resetArgs := []any{}
 	switch t {
+	case "ai_providers":
+		var found int64
+		e = tx.QueryRowContext(r.Context(), "SELECT id FROM ai_providers WHERE id=? AND is_enabled=1", id).Scan(&found)
+		resetQuery = "UPDATE ai_providers SET is_default=0 WHERE is_default=1"
 	case "ai_models":
 		var connectionID int64
 		e = tx.QueryRowContext(r.Context(), "SELECT connection_id FROM ai_models WHERE id=? AND is_enabled=1", id).Scan(&connectionID)
 		resetQuery = "UPDATE ai_models SET is_default=0 WHERE connection_id=? AND is_default=1"
 		resetArgs = append(resetArgs, connectionID)
-	case "ai_connections", "review_profiles", "gitea_instances":
+	case "ai_connections":
+		var providerID int64
+		e = tx.QueryRowContext(r.Context(), "SELECT provider_id FROM ai_connections WHERE id=? AND is_enabled=1", id).Scan(&providerID)
+		resetQuery = "UPDATE ai_connections SET is_default=0 WHERE provider_id=? AND is_default=1"
+		resetArgs = append(resetArgs, providerID)
+	case "review_profiles", "gitea_instances":
 		var found int64
 		e = tx.QueryRowContext(r.Context(), "SELECT id FROM "+t+" WHERE id=? AND is_enabled=1", id).Scan(&found)
 		resetQuery = "UPDATE " + t + " SET is_default=0 WHERE is_default=1"

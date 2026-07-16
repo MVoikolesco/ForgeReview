@@ -45,3 +45,41 @@ INSERT INTO repositories(owner,name,full_name,review_profile_id) VALUES('acme','
 		t.Fatalf("expected default Ollama, got %s", c.Provider.Name)
 	}
 }
+
+func TestSQLiteProviderUsesDefaultProviderChainWhenProfileHasNoModel(t *testing.T) {
+	s, e := store.Open(config.Config{DatabaseDriver: "sqlite", DatabaseDSN: ":memory:"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	if e = s.Initialize(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	sql := `INSERT INTO ai_providers(id,name,display_name,base_url,auth_type,is_default) VALUES(1,'ollama','Ollama','http://ollama','none',1),(2,'openrouter','OpenRouter','https://openrouter.ai/api/v1','bearer',0);
+INSERT INTO ai_connections(id,provider_id,name,base_url,api_key_env_name,is_default) VALUES(1,1,'local','http://ollama','',1),(2,2,'cloud','https://openrouter.ai/api/v1','OPENROUTER_API_KEY',1);
+INSERT INTO ai_models(id,connection_id,provider_model_name,display_name,is_default) VALUES(1,1,'qwen','Qwen',1),(2,2,'openai/gpt','GPT',1);
+INSERT INTO model_parameters(model_id,temperature,top_p,keep_alive,timeout_seconds) VALUES(1,0.1,0.9,'5m',60),(2,0.2,0.8,'',60);
+INSERT INTO review_profiles(id,name,model_id,is_default) VALUES(1,'default',NULL,1);
+INSERT INTO review_policies(profile_id,max_block_chars,max_files_per_block,review_concurrency) VALUES(1,4000,2,1);`
+	if _, e = s.DB.Exec(sql); e != nil {
+		t.Fatal(e)
+	}
+	p := SQLiteProvider{Store: s}
+	c, e := p.GetConfig(context.Background(), "other/repo")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if c.Provider.Name != "ollama" || c.Model.Name != "qwen" || c.Connection.Name != "local" {
+		t.Fatalf("unexpected default chain config: %+v", c)
+	}
+	if _, e = s.DB.Exec("UPDATE ai_providers SET is_default=0; UPDATE ai_providers SET is_default=1 WHERE name='openrouter'"); e != nil {
+		t.Fatal(e)
+	}
+	c, e = p.GetConfig(context.Background(), "other/repo")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if c.Provider.Name != "openrouter" || c.Model.Name != "openai/gpt" || c.Connection.Name != "cloud" {
+		t.Fatalf("unexpected switched config: %+v", c)
+	}
+}

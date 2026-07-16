@@ -8,6 +8,7 @@ export const resources: Resource[] = [
     icon: "AI",
     group: "IA",
     seeded: true,
+    canDefault: true,
     fields: [
       { key: "display_name", label: "Nome de exibição", required: true },
       { key: "base_url", label: "URL base" },
@@ -125,9 +126,9 @@ export const resources: Resource[] = [
     fields: [
       {
         key: "model_id",
-        label: "Modelo",
+        label: "Modelo específico",
         type: "number",
-        required: true,
+        hint: "Opcional. Sem modelo específico, usa o provider padrão e o modelo padrão da conexão.",
         reference: {
           path: "ai/models",
           labelKeys: ["display_name", "provider_model_name"],
