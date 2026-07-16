@@ -1,0 +1,41 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "share": "manual",
+  "permission": {
+    "*": "ask",
+    "read": "allow",
+    "list": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "edit": "allow",
+    "write": "allow",
+    "skill": {
+      "*": "allow",
+      "experimental-*": "ask",
+      "internal-*": "deny"
+    },
+    "bash": {
+      "*": "ask",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "npm test*": "allow",
+      "npm run lint*": "allow",
+      "npm run build*": "allow",
+      "npm run typecheck*": "allow",
+      "npm run validate*": "allow",
+      "pnpm test*": "allow",
+      "pnpm lint*": "allow",
+      "rm *": "deny",
+      "rmdir *": "deny",
+      "del *": "deny",
+      "git reset --hard*": "deny",
+      "git clean -f*": "deny"
+    }
+  },
+  "instructions": [
+    "AGENTS.md",
+    "node_modules/@mvoikolesco/flowai/AGENTS.md",
+    "node_modules/@mvoikolesco/flowai/runtime/contract.md"
+  ]
+}

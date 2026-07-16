@@ -8,6 +8,15 @@ web-admin/dist/
 web-admin/.next/
 web-admin/out/
 web-admin/tsconfig.tsbuildinfo
+web-admin/web/out/
+web-admin/web/build/
+web-admin/web/.next/
+web-admin/web/.cache/
+
+node_modules
+.opencode
+.agents
+
 logs/
 
 *.exe
