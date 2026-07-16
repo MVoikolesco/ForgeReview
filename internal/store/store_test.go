@@ -26,4 +26,7 @@ func TestMigrationsAndSeedAreIdempotent(t *testing.T) {
 	if e = s.DB.QueryRow("SELECT count(*) FROM ai_providers").Scan(&n); e != nil || n != 4 {
 		t.Fatalf("providers=%d err=%v", n, e)
 	}
+	if e = s.DB.QueryRow("SELECT count(*) FROM ai_providers WHERE is_default=1 AND name='ollama'").Scan(&n); e != nil || n != 1 {
+		t.Fatalf("default providers=%d err=%v", n, e)
+	}
 }

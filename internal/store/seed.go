@@ -12,5 +12,8 @@ func (s *Store) Seed(ctx context.Context, _ config.Config) error {
 			return err
 		}
 	}
+	if _, err := s.DB.ExecContext(ctx, "UPDATE ai_providers SET is_default=1 WHERE name='ollama' AND NOT EXISTS (SELECT 1 FROM ai_providers WHERE is_default=1)"); err != nil {
+		return err
+	}
 	return nil
 }

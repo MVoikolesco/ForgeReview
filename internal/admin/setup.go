@@ -285,7 +285,9 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "Provider não está disponível")
 		return
 	}
-	_, _ = tx.ExecContext(r.Context(), "UPDATE ai_connections SET is_default=0 WHERE is_default=1")
+	_, _ = tx.ExecContext(r.Context(), "UPDATE ai_providers SET is_default=0 WHERE is_default=1")
+	_, _ = tx.ExecContext(r.Context(), "UPDATE ai_providers SET is_default=1,updated_at=CURRENT_TIMESTAMP WHERE id=?", providerID)
+	_, _ = tx.ExecContext(r.Context(), "UPDATE ai_connections SET is_default=0 WHERE provider_id=? AND is_default=1", providerID)
 	connectionResult, err := tx.ExecContext(r.Context(), `INSERT INTO ai_connections(provider_id,name,base_url,api_key_env_name,http_referer,app_title,is_default,is_enabled) VALUES(?,?,?,?,?,?,1,1)`, providerID, input.Connection.Name, input.Connection.BaseURL, input.Connection.APIKeyEnvName, input.Connection.HTTPReferer, input.Connection.AppTitle)
 	if err != nil {
 		writeError(w, 400, err.Error())
@@ -324,7 +326,7 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = tx.ExecContext(r.Context(), "UPDATE review_profiles SET is_default=0 WHERE is_default=1")
-	profileResult, err := tx.ExecContext(r.Context(), `INSERT INTO review_profiles(name,description,model_id,is_default,is_enabled) VALUES(?,?,?,1,1)`, input.Profile.Name, input.Profile.Description, modelID)
+	profileResult, err := tx.ExecContext(r.Context(), `INSERT INTO review_profiles(name,description,model_id,is_default,is_enabled) VALUES(?,?,NULL,1,1)`, input.Profile.Name, input.Profile.Description)
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
