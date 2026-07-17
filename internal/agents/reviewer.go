@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"gitea-agents/internal/review/pipeline"
 	"gitea-agents/internal/review/promptconfig"
 	"gitea-agents/internal/reviewconfig"
+	"gitea-agents/internal/reviewlog"
 )
 
 const ReviewerAgentName = "reviewer"
@@ -58,11 +60,11 @@ type ReviewerOptions struct {
 	OllamaTimeoutSeconds   int
 	ReviewFinalRetries     int
 	ReviewPromptConfigPath string
+	LogStore               reviewlog.Store
 	PublishManualReviews   bool
 	AllowAutonomousReject  bool
 	ConfigProvider         reviewconfig.Provider
 	GiteaResolver          GiteaClientResolver
-	LogSensitiveData       bool
 	UnloadAfterReview      bool
 	ContextWindow          int
 	MaxOutputTokens        int
@@ -80,9 +82,6 @@ type ReviewerAgent struct {
 func NewReviewerAgent(logger *log.Logger, giteaClient GiteaClient, ollamaClient AIReviewerClient, options ReviewerOptions) *ReviewerAgent {
 	// Directly constructed agents are used by local unit tests. Production always
 	// supplies ConfigProvider and then takes this flag from the SQLite policy.
-	if options.ConfigProvider == nil {
-		options.LogSensitiveData = true
-	}
 	if options.DiffLogDir == "" {
 		options.DiffLogDir = defaultDiffLogDir
 	}
@@ -147,7 +146,6 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 		runtime.options.ReviewFinalRetries = cfg.Policy.ReviewFinalRetries
 		runtime.options.PublishManualReviews = cfg.Policy.PublishManualReviews
 		runtime.options.AllowAutonomousReject = cfg.Policy.AllowAutonomousRejection
-		runtime.options.LogSensitiveData = cfg.Policy.LogSensitiveData
 		runtime.options.UnloadAfterReview = cfg.Policy.UnloadModelAfterReview || cfg.Parameters.UnloadModelAfterReview
 		runtime.options.ContextWindow = cfg.Model.ContextWindow
 		runtime.options.MaxOutputTokens = cfg.Model.MaxOutputTokens
@@ -303,7 +301,7 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 	}
 	a.logger.Printf("diff obtido owner=%s repo=%s pr=%d size=%d", job.Owner, job.Repo, job.PRNumber, len(rawDiff))
 
-	runLog, err := newReviewRunLog(a.options.DiffLogDir, job, a.options.LogSensitiveData)
+	runLog, err := newReviewRunLogWithStore(ctx, a.options.DiffLogDir, a.options.LogStore, job)
 	if err != nil {
 		return err
 	}
@@ -348,10 +346,9 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 		progress(pipeline.ProgressEvent{Stage: "preparacao", Status: "done", Percent: 100, Message: "Nenhum arquivo revisavel encontrado"})
 		finalReview := review.FinalReview{Event: review.GiteaEventComment, Status: "comentado", Summary: "Nenhum arquivo revisavel encontrado no diff.", Structured: true}
 		if job.Manual && !a.options.PublishManualReviews {
-			_, err := runLog.Write("final-review.md", formatManualReviewMarkdown(finalReview))
-			return err
+			return a.savePendingReview(runLog, job, finalReview, progress)
 		}
-		created, err := a.giteaClient.CreatePullRequestReview(ctx, job.Owner, job.Repo, job.PRNumber, buildCreatePullReviewOptions(finalReview, a.options.AllowAutonomousReject))
+		created, err := a.giteaClient.CreatePullRequestReview(ctx, job.Owner, job.Repo, job.PRNumber, review.BuildPullReviewOptions(finalReview, a.options.AllowAutonomousReject))
 		if err != nil {
 			return fmt.Errorf("erro ao publicar review no gitea: %w", err)
 		}
@@ -412,15 +409,10 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 	}
 	parsedFinalReview := review.ResolveFinalReviewCommentPositions(finalReview, files)
 	if job.Manual && !a.options.PublishManualReviews {
-		if _, err := runLog.Write("final-review.md", formatManualReviewMarkdown(parsedFinalReview)); err != nil {
-			return err
-		}
-		progress(pipeline.ProgressEvent{Stage: "publicacao", Status: "done", Percent: 100, Message: "Review manual salvo sem publicar"})
-		a.logger.Printf("review manual salvo sem publicar no gitea dir=%s", runLog.Dir())
-		return nil
+		return a.savePendingReview(runLog, job, parsedFinalReview, progress)
 	}
 	progress(pipeline.ProgressEvent{Stage: "publicacao", Status: "running", Percent: 98, Message: "Publicando review no Gitea"})
-	createReviewOptions := buildCreatePullReviewOptions(parsedFinalReview, a.options.AllowAutonomousReject)
+	createReviewOptions := review.BuildPullReviewOptions(parsedFinalReview, a.options.AllowAutonomousReject)
 	createdReview, err := a.giteaClient.CreatePullRequestReview(ctx, job.Owner, job.Repo, job.PRNumber, createReviewOptions)
 	if err != nil {
 		progress(pipeline.ProgressEvent{Stage: "publicacao", Status: "failed", Percent: 100, Message: err.Error()})
@@ -431,6 +423,22 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 	}
 	a.logger.Printf("review publicado no gitea owner=%s repo=%s pr=%d review_id=%d state=%s event=%s comments=%d", job.Owner, job.Repo, job.PRNumber, createdReview.ID, createdReview.State, createReviewOptions.Event, len(createReviewOptions.Comments))
 	progress(pipeline.ProgressEvent{Stage: "publicacao", Status: "done", Percent: 100, Message: fmt.Sprintf("Review publicado com %d comentarios", len(createReviewOptions.Comments))})
+	return nil
+}
+
+func (a *ReviewerAgent) savePendingReview(runLog *reviewRunLog, job queue.ReviewJob, finalReview review.FinalReview, progress pipeline.ProgressFunc) error {
+	if _, err := runLog.Write("final-review.md", formatManualReviewMarkdown(finalReview)); err != nil {
+		return err
+	}
+	pending, err := json.Marshal(review.PendingReview{Job: job, FinalReview: finalReview})
+	if err != nil {
+		return fmt.Errorf("erro ao serializar review pendente: %w", err)
+	}
+	if _, err := runLog.Write("pending-review.json", string(pending)); err != nil {
+		return err
+	}
+	progress(pipeline.ProgressEvent{Stage: "pre-publicacao", Status: "waiting", Percent: 98, Message: "Aguardando autorização para publicar"})
+	a.logger.Printf("review manual aguardando autorizacao dir=%s", runLog.Dir())
 	return nil
 }
 
@@ -456,6 +464,11 @@ func pipelineConfigFromEnv() pipeline.Config {
 	cfg.MediumSeverityEvent = getEnvStringLocal("REVIEW_MEDIUM_SEVERITY_EVENT", cfg.MediumSeverityEvent)
 	cfg.PartialEvent = getEnvStringLocal("REVIEW_PARTIAL_EVENT", cfg.PartialEvent)
 	return cfg
+}
+
+// Kept as a package-local seam for the existing reviewer contract tests.
+func buildCreatePullReviewOptions(finalReview review.FinalReview, allowAutonomousReject bool) gitea.CreatePullReviewOptions {
+	return review.BuildPullReviewOptions(finalReview, allowAutonomousReject)
 }
 
 func mergePipelineConfig(base, override pipeline.Config) pipeline.Config {
@@ -581,99 +594,6 @@ response_chars=%d
 response_duration=%s
 ===== RESPOSTA =====
 %s`, metadata.PipelineVersion, metadata.ReviewGroups, metadata.SuccessfulGroups, metadata.FailedGroups, metadata.RawFindings, metadata.ConsolidatedFindings, metadata.ConfirmedFindings, metadata.RejectedFindings, metadata.PartialReview, metadata.DiffTruncated, stageCount, inputChars, estimatedInputTokens, requestedOutputTokens, actualPromptTokens, actualCompletionTokens, len(response), duration, response)
-}
-
-func buildCreatePullReviewOptions(finalReview review.FinalReview, allowAutonomousReject bool) gitea.CreatePullReviewOptions {
-	event := finalReview.Event
-	if !allowAutonomousReject && (event == review.GiteaEventApproved || event == review.GiteaEventRequestChanges) {
-		event = review.GiteaEventComment
-	}
-	if event == review.GiteaEventRequestChanges && !hasBlockingComment(finalReview.InlineComments) {
-		event = review.GiteaEventComment
-	}
-
-	body := strings.TrimSpace(finalReview.ReviewBody())
-	if commentsWithoutPosition := finalReview.CommentsWithoutPosition(); len(commentsWithoutPosition) > 0 {
-		if body != "" {
-			body += "\n\n"
-		}
-		body += "Comentarios sem linha especifica:\n"
-		for _, comment := range commentsWithoutPosition {
-			body += comment.SummaryLine() + "\n"
-		}
-		body = strings.TrimSpace(body)
-	}
-
-	options := gitea.CreatePullReviewOptions{
-		Event: event,
-		Body:  body,
-	}
-	for _, comment := range finalReview.InlineComments {
-		if comment.Path == "" || comment.Body == "" {
-			continue
-		}
-		if comment.NewPosition <= 0 {
-			continue
-		}
-		options.Comments = append(options.Comments, gitea.CreatePullReviewComment{
-			Body:        formatInlineReviewComment(comment),
-			NewPosition: comment.NewPosition,
-			Path:        comment.Path,
-		})
-	}
-
-	return options
-}
-
-func formatInlineReviewComment(comment review.InlineComment) string {
-	var builder strings.Builder
-	severity := strings.TrimSpace(comment.Severity)
-	if severity == "" {
-		severity = "nao informada"
-	}
-	commentType := strings.TrimSpace(comment.Type)
-	if commentType == "" {
-		commentType = "semantica"
-	}
-	builder.WriteString("> severity: ")
-	builder.WriteString(severity)
-	builder.WriteString("\n> tipo: ")
-	builder.WriteString(commentType)
-
-	if reason := strings.TrimSpace(comment.DecisionReason); reason != "" {
-		builder.WriteString("\n\n")
-		builder.WriteString(reason)
-	}
-	if body := strings.TrimSpace(comment.Body); body != "" {
-		builder.WriteString("\n\n")
-		builder.WriteString(body)
-	}
-
-	return strings.TrimSpace(builder.String())
-}
-
-func hasBlockingComment(comments []review.InlineComment) bool {
-	for _, comment := range comments {
-		if strings.EqualFold(comment.Severity, "alta") || strings.EqualFold(comment.Severity, "media") {
-			return true
-		}
-		lowerReason := strings.ToLower(comment.DecisionReason)
-		if isExplicitlyNonBlockingReason(lowerReason) {
-			continue
-		}
-		if strings.Contains(lowerReason, "bloque") || strings.Contains(lowerReason, "request_changes") {
-			return true
-		}
-	}
-
-	return false
-}
-
-func isExplicitlyNonBlockingReason(reason string) bool {
-	reason = strings.ReplaceAll(reason, "\u00e3", "a")
-	return strings.Contains(reason, "nao bloque") ||
-		strings.Contains(reason, "nao-bloque") ||
-		strings.Contains(reason, "non-block")
 }
 
 func formatFullDiffLog(rawDiff string, files []diff.ChangedFile) string {

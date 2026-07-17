@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,39 +11,57 @@ import (
 
 	"gitea-agents/internal/queue"
 	"gitea-agents/internal/review/pipeline"
+	"gitea-agents/internal/reviewlog"
 )
 
 type reviewRunLog struct {
-	dir     string
-	enabled bool
+	dir   string
+	store reviewlog.Store
+	ctx   context.Context
 }
 
-func newReviewRunLog(rootDir string, job queue.ReviewJob, enabled bool) (*reviewRunLog, error) {
-	if !enabled {
-		return &reviewRunLog{enabled: false}, nil
+func newReviewRunLog(rootDir string, job queue.ReviewJob) (*reviewRunLog, error) {
+	return newReviewRunLogWithStore(context.Background(), rootDir, nil, job)
+}
+
+func newReviewRunLogWithStore(ctx context.Context, rootDir string, store reviewlog.Store, job queue.ReviewJob) (*reviewRunLog, error) {
+	baseName := sanitizeLogName(fmt.Sprintf("%s_%s_pr-%d", job.Owner, job.Repo, job.PRNumber))
+	if store != nil {
+		name, err := store.CreateRun(ctx, baseName)
+		if err != nil {
+			return nil, fmt.Errorf("erro ao criar registro de logs de review: %w", err)
+		}
+		return &reviewRunLog{dir: name, store: store, ctx: ctx}, nil
 	}
+
 	if rootDir == "" {
 		rootDir = defaultDiffLogDir
 	}
-
-	dir := filepath.Join(rootDir, sanitizeLogName(fmt.Sprintf("%s_%s_pr-%d", job.Owner, job.Repo, job.PRNumber)))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return nil, fmt.Errorf("erro ao criar diretorio de logs de review: %w", err)
 	}
 
-	return &reviewRunLog{dir: dir, enabled: true}, nil
+	for attempt := 0; ; attempt++ {
+		name := baseName
+		if attempt > 0 {
+			name = fmt.Sprintf("%s-run-%d", baseName, time.Now().UnixNano())
+		}
+		dir := filepath.Join(rootDir, name)
+		if err := os.Mkdir(dir, 0o755); err == nil {
+			return &reviewRunLog{dir: dir, ctx: ctx}, nil
+		} else if !os.IsExist(err) {
+			return nil, fmt.Errorf("erro ao criar diretorio de logs de review: %w", err)
+		}
+	}
 }
 
 func (l *reviewRunLog) Dir() string {
-	if !l.enabled {
-		return "disabled"
-	}
 	return l.dir
 }
 
 func (l *reviewRunLog) Write(name string, content string) (string, error) {
-	if !l.enabled {
-		return "", nil
+	if l.store != nil {
+		return name, l.store.Write(l.ctx, filepath.Base(l.dir), sanitizeLogName(name), content)
 	}
 	path := filepath.Join(l.dir, sanitizeLogName(name))
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -53,17 +72,17 @@ func (l *reviewRunLog) Write(name string, content string) (string, error) {
 }
 
 func (l *reviewRunLog) AppendProcess(format string, args ...any) error {
-	if !l.enabled {
-		return nil
-	}
 	path := filepath.Join(l.dir, "00-processo.log")
+	line := fmt.Sprintf(format, args...)
+	if l.store != nil {
+		return l.store.Append(l.ctx, filepath.Base(l.dir), "00-processo.log", fmt.Sprintf("%s %s\n", time.Now().Format(time.RFC3339), line))
+	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("erro ao abrir log de processo: %w", err)
 	}
 	defer file.Close()
 
-	line := fmt.Sprintf(format, args...)
 	if _, err := fmt.Fprintf(file, "%s %s\n", time.Now().Format(time.RFC3339), line); err != nil {
 		return fmt.Errorf("erro ao escrever log de processo: %w", err)
 	}
@@ -72,15 +91,15 @@ func (l *reviewRunLog) AppendProcess(format string, args ...any) error {
 }
 
 func (l *reviewRunLog) AppendProgress(event pipeline.ProgressEvent) error {
-	if !l.enabled {
-		return nil
-	}
 	if event.Timestamp == "" {
 		event.Timestamp = time.Now().Format(time.RFC3339)
 	}
 	data, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("erro ao serializar progresso: %w", err)
+	}
+	if l.store != nil {
+		return l.store.Append(l.ctx, filepath.Base(l.dir), "00-progress.jsonl", string(data)+"\n")
 	}
 	path := filepath.Join(l.dir, "00-progress.jsonl")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)

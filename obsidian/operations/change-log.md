@@ -10,6 +10,54 @@ Record meaningful changes using this structure:
 - **Notes updated:** Related vault notes.
 - **Limitations:** Remaining constraints or risks.
 
+## 2026-07-17 — Sincronizar cards entre execuções
+
+- **Outcome:** O fluxo troca corretamente os cards ao iniciar outra PR ou selecionar uma execução histórica; reexecuções da mesma PR não acumulam eventos da execução anterior.
+- **Scope:** `web-admin/src/components/executions/executions-flow.tsx`, `internal/agents/review_logs.go` e `internal/admin/observability.go`.
+- **Validation:** `gofmt`, `go test ./...`, `web-admin npm run lint`, `web-admin npm run build` e `git diff --check` passaram. O build mantém o aviso existente de múltiplos lockfiles do Next.js.
+- **Notes updated:** [[../architecture/overview|Architecture]] e [[../features/index|Features]].
+- **Limitations:** Não há suíte de testes de navegador; a validação visual final depende da execução do painel no ambiente configurado.
+
+## 2026-07-17 — Compatibilizar respostas de modelos Ollama
+
+- **Outcome:** Chamadas estruturadas desabilitam thinking e aceitam respostas no campo `response` quando o endpoint compatível não retorna `message.content`; respostas realmente vazias continuam falhando explicitamente.
+- **Scope:** `internal/ollama/client.go` e `internal/ollama/client_test.go`.
+- **Validation:** `gofmt`, testes direcionados de Ollama/agente/pipeline e `git diff --check` passaram.
+- **Notes updated:** [[../architecture/overview|Architecture]].
+- **Limitations:** Modelos ou servidores que retornem somente raciocínio sem conteúdo final continuam inválidos para os contratos JSON do pipeline.
+
+## 2026-07-17 — Armazenar artefatos temporários de review no Redis
+
+- **Outcome:** Progresso, logs, diff, prompts, respostas e decisões manuais deixam de depender de arquivos graváveis e passam a usar o Redis compartilhado com TTL de 12 horas.
+- **Scope:** `internal/reviewlog`, `internal/queue/redis`, agente reviewer, endpoints administrativos, Compose, entrypoint, `build-prod.sh` e documentação.
+- **Validation:** `gofmt`, `go test ./...`, `web-admin npm run lint`, `git diff --check` e validação do Compose passaram quando executados no ambiente.
+- **Notes updated:** [[../architecture/overview|Architecture]] e este Change Log.
+- **Limitations:** Artefatos expiram após 12 horas e não são destinados a auditoria permanente; o SQLite continua necessário para configuração.
+
+## 2026-07-17 — Corrigir resolução do modelo padrão
+
+- **Outcome:** O perfil padrão passa a usar a cadeia atual de provider, conexão e modelo padrão; a seleção de perfil por repositório também ficou determinística.
+- **Scope:** `internal/reviewconfig/provider.go` e `internal/reviewconfig/provider_test.go`.
+- **Validation:** `gofmt`, `go test ./...`, `web-admin npm run lint` e `git diff --check` passaram.
+- **Notes updated:** [[../architecture/overview|Architecture]], [[../features/index|Features]], [[../decisions/log|Decision Log]].
+- **Limitations:** Perfis específicos de repositório continuam usando o modelo explicitamente associado e não acompanham defaults globais.
+
+## 2026-07-17 — Aprovação manual antes da publicação de reviews
+
+- **Outcome:** Reviews manuais podem pausar em `Pré-publicação`; o operador visualiza o payload final e autoriza, nega ou solicita nova execução pelo modal do fluxo.
+- **Scope:** `internal/review`, `internal/agents`, `internal/admin/pending_review.go`, fluxo de execuções e política do console.
+- **Validation:** `gofmt`, `go test ./...`, `git diff --check`, `web-admin npm run lint` e `web-admin npm run build` passaram. O build mantém o aviso existente de múltiplos lockfiles do Next.js.
+- **Notes updated:** [[../architecture/overview|Architecture]], [[../features/index|Features]], [[../decisions/log|Decision Log]].
+- **Limitations:** A aprovação depende da execução ainda disponível no diretório de logs e não há suíte de testes de navegador.
+
+## 2026-07-17 — Pacote de produção com frontend estático
+
+- **Outcome:** `build-prod.sh` passou a compilar backend e Next.js, validar o frontend e gerar uma pasta `Prod/` autocontida para o Compose.
+- **Scope:** `build-prod.sh`, `README.md`, Dockerfile e Compose gerados, artefatos `web/`, entrypoint, persistência de dados/logs e notas de arquitetura.
+- **Validation:** `bash -n build-prod.sh`, execução do script com validação de artefatos, `docker compose config --quiet` quando Docker estiver disponível.
+- **Notes updated:** [[../architecture/overview|Architecture]] e este Change Log.
+- **Limitations:** A compilação da imagem ainda depende de Docker no ambiente de destino; o script não executa o deploy.
+
 ## 2026-07-17 — Classificação de segurança do endpoint Ollama
 
 - **Outcome:** Um nome `Ollama local` não habilita mais endpoint remoto sem chave. Apenas URLs loopback permitem modo sem Bearer; endpoints remotos exigem ciphertext e o worker falha fechado quando ele falta.
@@ -17,6 +65,48 @@ Record meaningful changes using this structure:
 - **Validation:** 2026-07-17: `gofmt`, `go test ./...`, `web-admin npm run lint`, `web-admin npm run build` e `git diff --check` passaram. O build mantém o aviso não bloqueante de múltiplos lockfiles do Next.js.
 - **Notes updated:** [[../architecture/overview|Architecture]], [[../decisions/log|Decision Log]].
 - **Limitations:** A migration não classifica loopback e exige reconfiguração de toda conexão legada; o runtime aceita somente URLs loopback verificáveis para novas conexões sem chave.
+
+## 2026-07-17 — Corrigir caminho de prompts no runtime de produção
+
+- **Outcome:** O worker passa a respeitar `REVIEW_PROMPT_CONFIG_PATH`, incluindo o caminho absoluto usado pelo Compose de produção; artefatos de prompts copiados para `Prod/` são normalizados como legíveis.
+- **Scope:** `internal/config/config.go`, `internal/config/config_test.go` e `build-prod.sh`.
+- **Validation:** `go test ./...`, `bash -n build-prod.sh docker-entrypoint.sh` e `git diff --check` passaram.
+- **Notes updated:** [[../architecture/overview|Architecture]] e este Change Log.
+
+## 2026-07-17 — Remover mounts de prompts no worker de produção
+
+- **Outcome:** O worker usa os prompts e o YAML incorporados à imagem, sem substituir `/app/config` e `/app/prompts` por bind mounts com permissões dependentes do host.
+- **Scope:** `build-prod.sh`, `Prod/compose.yaml` e nota de arquitetura.
+- **Validation:** `bash -n build-prod.sh docker-entrypoint.sh`, `docker compose config --quiet` quando Docker estiver disponível e `git diff --check`.
+- **Notes updated:** [[../architecture/overview|Architecture]] e este Change Log.
+
+## 2026-07-17 — Persistir logs físicos de todas as reviews
+
+- **Outcome:** A opção administrativa antiga que desabilitava artefatos foi removida; a persistência temporária de progresso, processo, diff, prompts e resposta é atualmente feita no Redis com TTL de 12 horas.
+- **Scope:** `internal/agents`, `internal/reviewconfig`, `internal/admin/setup.go`, contratos e wizard do painel, `README.md` e notas de arquitetura.
+- **Validation:** `gofmt`, `go test ./...`, `web-admin npm run lint` e `git diff --check`.
+- **Notes updated:** [[../architecture/overview|Architecture]] e este Change Log.
+
+## 2026-07-17 — Permitir decisão manual no volume de logs
+
+- **Outcome:** O serviço API pode gravar a decisão e o progresso ao aprovar ou recusar uma review manual pendente.
+- **Scope:** `build-prod.sh`, `Prod/compose.yaml` e nota de arquitetura.
+- **Validation:** `bash -n build-prod.sh`, `docker compose config --quiet` quando Docker estiver disponível e `git diff --check`.
+- **Notes updated:** [[../architecture/overview|Architecture]] e este Change Log.
+
+## 2026-07-17 — Corrigir aprovação de jobs legados sem instância
+
+- **Outcome:** A aprovação manual resolve a instância Gitea pelo repositório ou pela instância habilitada padrão quando o job pendente não contém `GiteaInstanceID`.
+- **Scope:** `internal/admin/pending_review.go` e nota de arquitetura.
+- **Validation:** `gofmt` e `go test ./internal/admin ./internal/agents ./internal/gitea` passaram.
+- **Notes updated:** [[../architecture/overview|Architecture]] e este Change Log.
+
+## 2026-07-17 — Uniformizar entrada manual da API
+
+- **Outcome:** O endpoint administrativo de envio manual também resolve a instância Gitea pelo repositório ou padrão quando `instance_id` não é enviado; o job é enfileirado já com a instância resolvida.
+- **Scope:** `internal/admin/manual_review.go`, `internal/admin/pending_review.go` e regressão de admin.
+- **Validation:** `gofmt` e `go test ./...`.
+- **Notes updated:** [[../architecture/overview|Architecture]] e este Change Log.
 
 ## 2026-07-17 — Migração fail-closed e erros remotos sanitizados
 

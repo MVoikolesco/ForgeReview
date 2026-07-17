@@ -69,6 +69,9 @@ func TestClientChatSendsPayloadAndReturnsContent(t *testing.T) {
 	if got.Stream {
 		t.Fatal("expected stream false")
 	}
+	if got.Think {
+		t.Fatal("expected thinking to be disabled for structured review output")
+	}
 
 	if got.KeepAlive != "5m" {
 		t.Fatalf("unexpected keep_alive %q", got.KeepAlive)
@@ -80,6 +83,22 @@ func TestClientChatSendsPayloadAndReturnsContent(t *testing.T) {
 
 	if got.Options.Temperature != 0.1 || got.Options.TopP != 0.85 || got.Options.RepeatPenalty != 1.1 || got.Options.NumCtx != 4096 || got.Options.NumThread != 2 || got.Options.NumPredict != 400 {
 		t.Fatalf("unexpected options %#v", got.Options)
+	}
+}
+
+func TestClientChatAcceptsGenerateStyleResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"response":"compatibility output"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{URL: server.URL, Model: "test"})
+	content, err := client.Chat(context.Background(), "prompt")
+	if err != nil {
+		t.Fatalf("expected compatibility response, got %v", err)
+	}
+	if content != "compatibility output" {
+		t.Fatalf("unexpected content %q", content)
 	}
 }
 

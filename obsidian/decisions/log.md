@@ -82,6 +82,24 @@ Record durable decisions using this structure:
 - **Affected paths:** `internal/secrets`, `internal/store/migrations/009_ai_connection_secret.sql`, `internal/admin`, `internal/reviewconfig`, `internal/agents`, `web-admin/src/components/connections`.
 - **Related notes:** [[../architecture/overview|Architecture]], [[../operations/change-log|Change Log]]
 
+## 2026-07-17 — Pausar reviews manuais antes da publicação
+
+- **Context:** Operadores precisam conferir a revisão gerada antes de enviá-la ao Gitea e escolher entre publicar, descartar ou pedir uma nova execução.
+- **Decision:** Reusar a flag de política como `Publicar revisões automaticamente`; quando desativada, persistir a revisão estruturada, emitir a etapa `pre-publicacao` em espera e expor ações administrativas autenticadas e idempotentes para concluir o fluxo.
+- **Rationale:** O artefato JSON permite renderizar e publicar exatamente o mesmo conteúdo sem manter o worker bloqueado, e a decisão permanece auditável nos logs da execução.
+- **Consequences:** A autorização depende do artefato local e da credencial Gitea configurada; reexecução substitui o artefato pendente quando o novo job concluir.
+- **Affected paths:** `internal/review`, `internal/agents/reviewer.go`, `internal/admin/pending_review.go`, `web-admin/src/components/executions`, `web-admin/src/components/pre-review`.
+- **Related notes:** [[../architecture/overview|Architecture]], [[../features/index|Features]], [[../operations/change-log|Change Log]]
+
+## 2026-07-17 — Resolver o perfil padrão pela cadeia de defaults
+
+- **Context:** O perfil padrão mantinha um `model_id` antigo e podia impedir que uma nova conexão ou modelo padrão fosse usado no próximo review.
+- **Decision:** O perfil padrão não fixa modelo na resolução; cada review consulta provider padrão, conexão padrão desse provider e modelo padrão dessa conexão. Perfis vinculados a repositórios continuam usando seu modelo explícito.
+- **Rationale:** Mantém a configuração padrão dinâmica sem alterar o comportamento intencional de perfis específicos.
+- **Consequences:** Trocas de defaults passam a valer para novos reviews; configurações de repositório continuam exigindo alteração explícita do perfil.
+- **Affected paths:** `internal/reviewconfig/provider.go`, `internal/reviewconfig/provider_test.go`.
+- **Related notes:** [[../architecture/overview|Architecture]], [[../features/index|Features]], [[../operations/change-log|Change Log]]
+
 ## 2026-07-17 — Classificar autenticação por conexão de IA
 
 - **Context:** `ai_providers.auth_type` classifica o provider Ollama como sem autenticação e não distingue sua rota local da rota Cloud, permitindo que worker e catálogo omitisse a chave Cloud.

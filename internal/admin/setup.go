@@ -59,7 +59,6 @@ type setupPolicy struct {
 	ReviewOwnPullRequests    bool `json:"review_own_pull_requests"`
 	PublishManualReviews     bool `json:"publish_manual_reviews"`
 	AllowAutonomousRejection bool `json:"allow_autonomous_rejection"`
-	LogSensitiveData         bool `json:"log_sensitive_data"`
 	UnloadModelAfterReview   bool `json:"unload_model_after_review"`
 }
 type completeSetupRequest struct {
@@ -396,7 +395,7 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 		policy.MaxFilesPerBlock = requirePositive(policy.MaxFilesPerBlock, 4)
 		policy.ReviewConcurrency = requirePositive(policy.ReviewConcurrency, 1)
 		policy.ReviewFinalRetries = requirePositive(policy.ReviewFinalRetries, 5)
-		_, err = tx.ExecContext(r.Context(), `INSERT INTO review_policies(profile_id,max_block_chars,max_files_per_block,review_concurrency,review_wip_pull_requests,review_own_pull_requests,log_sensitive_data,unload_model_after_review,review_final_retries,publish_manual_reviews,allow_autonomous_rejection) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, profileID, policy.MaxBlockChars, policy.MaxFilesPerBlock, policy.ReviewConcurrency, boolInt(policy.ReviewWIPPullRequests), boolInt(policy.ReviewOwnPullRequests), boolInt(policy.LogSensitiveData), boolInt(policy.UnloadModelAfterReview), policy.ReviewFinalRetries, boolInt(policy.PublishManualReviews), boolInt(policy.AllowAutonomousRejection))
+		_, err = tx.ExecContext(r.Context(), `INSERT INTO review_policies(profile_id,max_block_chars,max_files_per_block,review_concurrency,review_wip_pull_requests,review_own_pull_requests,unload_model_after_review,review_final_retries,publish_manual_reviews,allow_autonomous_rejection) VALUES(?,?,?,?,?,?,?,?,?,?)`, profileID, policy.MaxBlockChars, policy.MaxFilesPerBlock, policy.ReviewConcurrency, boolInt(policy.ReviewWIPPullRequests), boolInt(policy.ReviewOwnPullRequests), boolInt(policy.UnloadModelAfterReview), policy.ReviewFinalRetries, boolInt(policy.PublishManualReviews), boolInt(policy.AllowAutonomousRejection))
 	}
 	if err != nil {
 		writeError(w, 400, err.Error())

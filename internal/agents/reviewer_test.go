@@ -225,6 +225,37 @@ func TestReviewerAgentSavesManualReviewWithoutPublishing(t *testing.T) {
 	if !strings.Contains(string(finalReview), "# Review final") {
 		t.Fatalf("expected markdown heading, got %q", finalReview)
 	}
+	pending, err := os.ReadFile(filepath.Join(diffLogDir, "Qualyagro_wiki_pr-12", "pending-review.json"))
+	if err != nil || !strings.Contains(string(pending), `"final_review"`) {
+		t.Fatalf("expected structured pending review, got %v / %q", err, pending)
+	}
+	progress, err := os.ReadFile(filepath.Join(diffLogDir, "Qualyagro_wiki_pr-12", "00-progress.jsonl"))
+	if err != nil || !strings.Contains(string(progress), `"stage":"pre-publicacao"`) || !strings.Contains(string(progress), `"status":"waiting"`) {
+		t.Fatalf("expected pre-publication wait event, got %v / %q", err, progress)
+	}
+}
+
+func TestNewReviewRunLogCreatesSeparateDirectoryForRepeatedPR(t *testing.T) {
+	root := t.TempDir()
+	job := queue.ReviewJob{Owner: "Qualyagro", Repo: "wiki", PRNumber: 12}
+
+	first, err := newReviewRunLog(root, job)
+	if err != nil {
+		t.Fatalf("create first run log: %v", err)
+	}
+	second, err := newReviewRunLog(root, job)
+	if err != nil {
+		t.Fatalf("create second run log: %v", err)
+	}
+	if first.Dir() == second.Dir() {
+		t.Fatalf("expected repeated PR to get a new directory, got %q", first.Dir())
+	}
+	if filepath.Base(first.Dir()) != "Qualyagro_wiki_pr-12" {
+		t.Fatalf("unexpected first run directory %q", first.Dir())
+	}
+	if !strings.HasPrefix(filepath.Base(second.Dir()), "Qualyagro_wiki_pr-12-run-") {
+		t.Fatalf("unexpected repeated run directory %q", second.Dir())
+	}
 }
 
 func TestReviewerAgentPublishesManualReviewWhenEnabled(t *testing.T) {

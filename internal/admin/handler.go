@@ -14,6 +14,7 @@ import (
 
 	"gitea-agents/internal/ai"
 	"gitea-agents/internal/queue"
+	"gitea-agents/internal/reviewlog"
 	"gitea-agents/internal/secrets"
 	"gitea-agents/internal/store"
 )
@@ -25,6 +26,7 @@ type Handler struct {
 	observer           queue.Observer
 	publisher          queue.Publisher
 	logDir             string
+	logStore           reviewlog.Store
 }
 
 var resources = map[string]string{
@@ -44,6 +46,9 @@ func Register(mux *http.ServeMux, s *store.Store, username, password string, opt
 		}
 		if dir, ok := value.(string); ok && dir != "" {
 			h.logDir = dir
+		}
+		if logs, ok := value.(reviewlog.Store); ok {
+			h.logStore = logs
 		}
 	}
 	mux.HandleFunc("/api/admin/", h.authorize(h.route))
@@ -79,6 +84,10 @@ func (h Handler) route(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "reviews/manual" && r.Method == http.MethodPost {
 		h.manualReview(w, r)
+		return
+	}
+	if strings.HasPrefix(path, "reviews/pending") {
+		h.pendingReviewRoute(w, r, strings.Trim(strings.TrimPrefix(path, "reviews/pending"), "/"))
 		return
 	}
 	key, table, rest := matchResource(path)

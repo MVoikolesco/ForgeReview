@@ -97,7 +97,6 @@ export type SetupDraft = {
     review_own_pull_requests: boolean;
     publish_manual_reviews: boolean;
     allow_autonomous_rejection: boolean;
-    log_sensitive_data: boolean;
     unload_model_after_review: boolean;
   };
 };

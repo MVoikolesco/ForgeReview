@@ -129,6 +129,7 @@ func runWorker(ctx context.Context, cfg config.Config, logger *log.Logger, revie
 		AllowAutonomousReject:  false,
 		OllamaTimeoutSeconds:   900,
 		ReviewPromptConfigPath: cfg.ReviewPromptConfigPath,
+		LogStore:               reviewQueue,
 		GiteaResolver:          giteaResolver,
 		ConfigProvider:         reviewconfig.SQLiteProvider{Store: configurationStore},
 	}))

@@ -29,7 +29,7 @@ O formato publicado permanece compatível com o contrato atual:
 }
 ```
 
-`metadata` é opcional para consumidores. Prompts, diffs completos e respostas brutas não são persistidos quando `log_sensitive_data` está desabilitado.
+`metadata` é opcional para consumidores. Prompts, diffs completos, respostas brutas e decisões de publicação são persistidos temporariamente no Redis para alimentar a observabilidade das reviews.
 
 Configurações operacionais principais:
 
@@ -126,8 +126,7 @@ Não use `docker compose down -v` se quiser preservar as configurações já cad
 
 - O SQLite não possui tabelas para diff, código analisado, prompt final montado ou resposta completa do modelo.
 - API keys e tokens são referenciados pelo nome da variável de ambiente.
-- `log_sensitive_data` é falso por padrão. Quando falso, o worker não grava diff, prompts ou respostas em disco e não imprime a resposta completa no console.
-- Habilitar `log_sensitive_data` cria arquivos sob `/logs/diffs`; faça isso somente durante diagnóstico controlado.
+- O worker grava o progresso, diff, prompts, respostas e decisões de cada review no Redis com TTL de 12 horas para permitir a visualização no painel. O SQLite continua reservado à configuração; os artefatos temporários não são gravados no filesystem.
 - A autenticação do painel é Basic Auth. Use HTTPS por meio de um proxy reverso em ambientes expostos.
 
 ## Endpoints principais
@@ -176,6 +175,16 @@ Build completo:
 ```sh
 docker compose build
 ```
+
+Pacote de producao:
+
+```sh
+./build-prod.sh
+cd Prod
+docker compose up -d --build
+```
+
+O script exige Go, Node.js e npm, compila o servidor Linux estatico, valida o TypeScript, gera o export estatico do Next.js e monta em `Prod/` o binario, o painel em `web/`, prompts, configuracao, entrypoint, Compose e o `.env` preservado. O diretorio `Prod/data` fica fora da imagem para manter o SQLite entre atualizacoes; os artefatos temporarios de review ficam no Redis.
 
 Estrutura principal:
 

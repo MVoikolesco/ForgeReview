@@ -30,6 +30,9 @@ INSERT INTO repositories(owner,name,full_name,review_profile_id) VALUES('acme','
 	if _, e = s.DB.Exec(sql); e != nil {
 		t.Fatal(e)
 	}
+	if _, e = s.DB.Exec(`UPDATE ai_providers SET is_default=CASE WHEN id=1 THEN 1 ELSE 0 END; UPDATE ai_connections SET is_default=1; UPDATE ai_models SET is_default=1`); e != nil {
+		t.Fatal(e)
+	}
 	p := SQLiteProvider{Store: s}
 	c, e := p.GetConfig(context.Background(), "acme/portal")
 	if e != nil {
@@ -65,7 +68,7 @@ func TestSQLiteProviderUsesDefaultProviderChainWhenProfileHasNoModel(t *testing.
 INSERT INTO ai_connections(id,provider_id,name,base_url,api_key_ciphertext,is_default) VALUES(1,1,'local','http://localhost:11434','',1),(2,2,'cloud','https://openrouter.ai/api/v1',%q,1);
 INSERT INTO ai_models(id,connection_id,provider_model_name,display_name,is_default) VALUES(1,1,'qwen','Qwen',1),(2,2,'openai/gpt','GPT',1);
 INSERT INTO model_parameters(model_id,temperature,top_p,keep_alive,timeout_seconds) VALUES(1,0.1,0.9,'5m',60),(2,0.2,0.8,'',60);
-INSERT INTO review_profiles(id,name,model_id,is_default) VALUES(1,'default',NULL,1);
+INSERT INTO review_profiles(id,name,model_id,is_default) VALUES(1,'default',1,1);
 INSERT INTO review_policies(profile_id,max_block_chars,max_files_per_block,review_concurrency) VALUES(1,4000,2,1);`, key)
 	if _, e = s.DB.Exec(sql); e != nil {
 		t.Fatal(e)

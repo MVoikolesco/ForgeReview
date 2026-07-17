@@ -243,17 +243,12 @@ export const resources: Resource[] = [
       },
       {
         key: "publish_manual_reviews",
-        label: "Publicar reviews manuais",
+        label: "Publicar revisões automaticamente",
         type: "boolean",
       },
       {
         key: "allow_autonomous_rejection",
         label: "Permitir decisão autônoma",
-        type: "boolean",
-      },
-      {
-        key: "log_sensitive_data",
-        label: "Registrar dados sensíveis",
         type: "boolean",
       },
       {

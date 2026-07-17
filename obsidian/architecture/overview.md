@@ -9,6 +9,7 @@ ForgeReview exposes an authenticated admin API and Next.js console for AI and Gi
 - `internal/gitea` owns authenticated Gitea API calls for connection checks, organizations, and repositories.
 - `internal/admin` owns validated admin endpoints and secret handling; Gitea tokens and AI connection keys use shared AES-256-GCM storage.
 - `internal/gitea` resolves a worker client by job instance, repository selection, or the enabled default instance (then lowest enabled id); jobs without a configured instance fall back to `GITEA_URL`/`GITEA_TOKEN`.
+- Manual API submission and approval use the same repository/default instance fallback when `GiteaInstanceID` is absent.
 - `web-admin/src/components/gitea` provides the admin wizard and repository selection flow.
 - Gitea editing reuses the stepper visual language; the API rejects a second instance and deletes an instance together with its repository mappings.
 - `web-admin/src/components/stepper/stepper-modal.tsx` owns the shared stepper shell; wizard content and footers remain flow-specific.
@@ -18,9 +19,13 @@ ForgeReview exposes an authenticated admin API and Next.js console for AI and Gi
 - `web-admin/src/types.ts` owns the shared resource-schema contract used by `web-admin/src/config/resources.ts`; it remains separate from API data contracts in `web-admin/src/lib/contracts.ts`.
 - `internal/admin` exposes authenticated manual-review enqueue and Gitea pull-request catalog endpoints; selected open PRs become `Manual` jobs carrying `GiteaInstanceID`.
 - `web-admin/src/components/manual-review` uses `StepperModal` for instance, organization, repository, and open-PR selection. The console mounts accessible dispatch feedback while retaining Gitea connection management.
-- `observability/progress?name=...` reads a selected historical run without polling it; the executions view polls only the live pipeline and offers an explicit return action.
-- `internal/ai` defines the shared chat metadata contract used by Ollama and OpenRouter; `internal/ollama` supports unauthenticated local endpoints and Bearer-authenticated Ollama Cloud endpoints.
+- `observability/progress?name=...` reads a selected historical run without polling it; the executions view polls only the live pipeline, remounts the flow when its run changes, and offers an explicit return action. Repeated executions of the same PR receive separate log directories with a `-run-<timestamp>` suffix.
+- Manual reviews with automatic publication disabled persist `pending-review.json`, pause at `pre-publicacao`, and are completed through authenticated admin actions that publish, reject, or enqueue the same job again.
+- `internal/reviewconfig` resolves the default profile through the enabled default provider, its default connection, and that connection's default model; repository profiles remain explicitly model-bound.
+- `internal/ai` defines the shared chat metadata contract used by Ollama and OpenRouter; `internal/ollama` supports unauthenticated local endpoints and Bearer-authenticated Ollama Cloud endpoints, disables model thinking for structured review calls, and accepts both chat `message.content` and compatibility `response` output.
 - `internal/review/promptconfig` valida e carrega quatro Markdown editáveis para o pipeline; `internal/review/pipeline` apenas intercala esses textos com dados delimitados, respostas intermediárias e o diff canônico.
+- API e worker compartilham o `reviewlog.Store` implementado no Redis; progresso, processo, diff, prompts, respostas, pendências e decisões de cada execução usam chaves com TTL de 12 horas.
+- O SQLite permanece como armazenamento de configuração. O runtime não precisa montar `/logs` nem abrir arquivos de execução, evitando falhas em volumes read-only.
 
 ## Data Flow
 
@@ -35,6 +40,7 @@ O pipeline entrega o mesmo diff canônico, já truncado e sinalizado quando apli
 ## Runtime and Deployment
 
 The API and worker must receive the same `GITEA_TOKEN_ENCRYPTION_KEY` to use persisted credentials. AI authentication is database-only: missing or undecryptable keys fail closed; no AI `.env` fallback exists.
+- `build-prod.sh` produces a self-contained `Prod/` context with the Linux server binary, exported Next.js `web/`, prompts, review config, entrypoint, Compose, and a preserved `.env`; only `Prod/data` and `Prod/logs` are bind-mounted persistence. The worker reads the prompt configuration from the image at `REVIEW_PROMPT_CONFIG_PATH`, which production sets to `/app/config/review-prompts.yaml`, avoiding host permission differences on read-only prompt mounts.
 
 ## Related Notes
 

@@ -32,8 +32,8 @@ type ModelParameters struct {
 	UnloadModelAfterReview                         bool
 }
 type ReviewPolicyConfig struct {
-	MaxBlockChars, MaxFilesPerBlock, ReviewConcurrency, ReviewFinalRetries                                                                 int
-	ReviewWIPPullRequests, ReviewOwnPullRequests, LogSensitiveData, UnloadModelAfterReview, PublishManualReviews, AllowAutonomousRejection bool
+	MaxBlockChars, MaxFilesPerBlock, ReviewConcurrency, ReviewFinalRetries                                               int
+	ReviewWIPPullRequests, ReviewOwnPullRequests, UnloadModelAfterReview, PublishManualReviews, AllowAutonomousRejection bool
 }
 type ReviewPipelineConfig struct {
 	PlannerEnabled, ConsolidatorEnabled, VerifierEnabled, FormatterEnabled       bool
@@ -54,8 +54,10 @@ type SQLiteProvider struct{ Store *store.Store }
 func (p SQLiteProvider) GetConfig(ctx context.Context, repo string) (*ReviewConfig, error) {
 	var c ReviewConfig
 	var modelID sql.NullInt64
-	var f, g, h bool
-	err := p.Store.DB.QueryRowContext(ctx, `SELECT rp.model_id,pol.max_block_chars,pol.max_files_per_block,pol.review_concurrency,pol.review_wip_pull_requests,pol.review_own_pull_requests,pol.log_sensitive_data,pol.unload_model_after_review,pol.review_final_retries,pol.publish_manual_reviews,pol.allow_autonomous_rejection,pol.review_planner_enabled,pol.review_consolidator_enabled,pol.review_verifier_enabled,pol.review_formatter_enabled,pol.review_planner_max_output_tokens,pol.review_group_max_output_tokens,pol.review_consolidator_max_output_tokens,pol.review_verifier_max_output_tokens,pol.review_formatter_max_output_tokens,pol.review_context_safety_margin_tokens,pol.review_min_publish_confidence,pol.review_max_parallel_groups,pol.review_medium_severity_event,pol.review_partial_event FROM review_profiles rp JOIN review_policies pol ON pol.profile_id=rp.id LEFT JOIN repositories r ON r.review_profile_id=rp.id AND r.full_name=? AND r.is_enabled=1 WHERE rp.is_enabled=1 AND (r.id IS NOT NULL OR rp.is_default=1) ORDER BY r.id DESC, rp.is_default DESC LIMIT 1`, repo).Scan(&modelID, &c.Policy.MaxBlockChars, &c.Policy.MaxFilesPerBlock, &c.Policy.ReviewConcurrency, &f, &g, &h, &c.Policy.UnloadModelAfterReview, &c.Policy.ReviewFinalRetries, &c.Policy.PublishManualReviews, &c.Policy.AllowAutonomousRejection, &c.Pipeline.PlannerEnabled, &c.Pipeline.ConsolidatorEnabled, &c.Pipeline.VerifierEnabled, &c.Pipeline.FormatterEnabled, &c.Pipeline.PlannerMaxOutputTokens, &c.Pipeline.GroupMaxOutputTokens, &c.Pipeline.ConsolidatorMaxOutputTokens, &c.Pipeline.VerifierMaxOutputTokens, &c.Pipeline.FormatterMaxOutputTokens, &c.Pipeline.ContextSafetyMarginTokens, &c.Pipeline.MinimumPublishConfidence, &c.Pipeline.MaxParallelGroups, &c.Pipeline.MediumSeverityEvent, &c.Pipeline.PartialEvent)
+	var f, g bool
+	// The default profile follows the active provider/connection/model chain.
+	// Repository-specific profiles retain their explicit model selection.
+	err := p.Store.DB.QueryRowContext(ctx, `SELECT CASE WHEN rp.is_default=1 THEN NULL ELSE rp.model_id END,pol.max_block_chars,pol.max_files_per_block,pol.review_concurrency,pol.review_wip_pull_requests,pol.review_own_pull_requests,pol.unload_model_after_review,pol.review_final_retries,pol.publish_manual_reviews,pol.allow_autonomous_rejection,pol.review_planner_enabled,pol.review_consolidator_enabled,pol.review_verifier_enabled,pol.review_formatter_enabled,pol.review_planner_max_output_tokens,pol.review_group_max_output_tokens,pol.review_consolidator_max_output_tokens,pol.review_verifier_max_output_tokens,pol.review_formatter_max_output_tokens,pol.review_context_safety_margin_tokens,pol.review_min_publish_confidence,pol.review_max_parallel_groups,pol.review_medium_severity_event,pol.review_partial_event FROM review_profiles rp JOIN review_policies pol ON pol.profile_id=rp.id LEFT JOIN repositories r ON r.review_profile_id=rp.id AND r.full_name=? AND r.is_enabled=1 WHERE rp.is_enabled=1 AND (r.id IS NOT NULL OR rp.is_default=1) ORDER BY CASE WHEN r.id IS NOT NULL THEN 1 ELSE 0 END DESC, rp.is_default DESC LIMIT 1`, repo).Scan(&modelID, &c.Policy.MaxBlockChars, &c.Policy.MaxFilesPerBlock, &c.Policy.ReviewConcurrency, &f, &g, &c.Policy.UnloadModelAfterReview, &c.Policy.ReviewFinalRetries, &c.Policy.PublishManualReviews, &c.Policy.AllowAutonomousRejection, &c.Pipeline.PlannerEnabled, &c.Pipeline.ConsolidatorEnabled, &c.Pipeline.VerifierEnabled, &c.Pipeline.FormatterEnabled, &c.Pipeline.PlannerMaxOutputTokens, &c.Pipeline.GroupMaxOutputTokens, &c.Pipeline.ConsolidatorMaxOutputTokens, &c.Pipeline.VerifierMaxOutputTokens, &c.Pipeline.FormatterMaxOutputTokens, &c.Pipeline.ContextSafetyMarginTokens, &c.Pipeline.MinimumPublishConfidence, &c.Pipeline.MaxParallelGroups, &c.Pipeline.MediumSeverityEvent, &c.Pipeline.PartialEvent)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrConfigNotFound
@@ -64,7 +66,6 @@ func (p SQLiteProvider) GetConfig(ctx context.Context, repo string) (*ReviewConf
 	}
 	c.Policy.ReviewWIPPullRequests = f
 	c.Policy.ReviewOwnPullRequests = g
-	c.Policy.LogSensitiveData = h
 	if err = p.loadModelConfig(ctx, &c, modelID); err != nil {
 		return nil, err
 	}
