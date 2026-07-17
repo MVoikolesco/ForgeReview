@@ -26,7 +26,7 @@ WORKDIR /app
 COPY --from=builder /app/bin/server /app/server
 COPY --from=builder /app/prompts /app/prompts
 COPY --from=builder /app/config /app/config
-COPY --from=web-builder /web-admin/dist /app/web
+COPY --from=web-builder /web-admin/out /app/web
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \

@@ -117,6 +117,7 @@ func (q *Queue) Publish(ctx context.Context, job queue.ReviewJob) error {
 	_, err := q.client.XAdd(ctx, &redis.XAddArgs{
 		Stream: q.stream,
 		Values: map[string]any{
+			"gitea_instance_id":  job.GiteaInstanceID,
 			"owner":              job.Owner,
 			"repo":               job.Repo,
 			"pr_number":          job.PRNumber,
@@ -183,6 +184,7 @@ func decodeJob(values map[string]any) (queue.ReviewJob, error) {
 	}
 
 	return queue.ReviewJob{
+		GiteaInstanceID:   valueAsInt64(values["gitea_instance_id"]),
 		Owner:             valueAsString(values["owner"]),
 		Repo:              valueAsString(values["repo"]),
 		PRNumber:          prNumber,
@@ -195,6 +197,14 @@ func decodeJob(values map[string]any) (queue.ReviewJob, error) {
 		BaseBranch:        valueAsString(values["base_branch"]),
 		HeadBranch:        valueAsString(values["head_branch"]),
 	}, nil
+}
+
+func valueAsInt64(value any) int64 {
+	parsed, err := strconv.ParseInt(valueAsString(value), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
 }
 
 func valueAsString(value any) string {

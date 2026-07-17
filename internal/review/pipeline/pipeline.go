@@ -19,6 +19,7 @@ type Runner struct {
 	Chat       ChatFunc
 	StackRules func(context.Context, []string) (string, []string, error)
 	Progress   ProgressFunc
+	ProcessLog func(string, ...any)
 }
 
 func (r Runner) Run(ctx context.Context, input Input) (string, basereview.FinalReview, Metadata, error) {
@@ -175,15 +176,33 @@ func (r Runner) reviewGroups(ctx context.Context, cfg Config, input Input, plan 
 				return
 			}
 			started := time.Now()
-			raw, _, err := r.Chat(ctx, "reviewer", prompt, max)
-			if err != nil {
-				res.err = err
-				results <- res
-				return
-			}
 			var review GroupReview
-			if err := parseJSONStage("reviewer", raw, &review); err != nil {
-				res.err = err
+			attemptPrompt := prompt
+			for attempt := 1; attempt <= cfg.ContractMaxAttempts; attempt++ {
+				raw, _, err := r.Chat(ctx, "reviewer", attemptPrompt, max)
+				if err != nil {
+					res.err = err
+					break
+				}
+				review = GroupReview{}
+				contractErr := parseJSONStage("reviewer", raw, &review)
+				if contractErr == nil {
+					break
+				}
+
+				r.logf("review group contrato invalido group=%s tentativa=%d/%d err=%v", group.ID, attempt, cfg.ContractMaxAttempts, contractErr)
+				r.processLogf("review group contrato invalido group=%s tentativa=%d/%d err=%v", group.ID, attempt, cfg.ContractMaxAttempts, contractErr)
+				if attempt == cfg.ContractMaxAttempts {
+					res.err = fmt.Errorf("contrato invalido apos %d tentativas: %w", cfg.ContractMaxAttempts, contractErr)
+					r.progress(ProgressEvent{Stage: "revisao", Status: "failed", Percent: reviewGroupPercent(index, len(plan.Groups), false), Message: fmt.Sprintf("Contrato inválido no grupo %s após %d tentativas", group.ID, cfg.ContractMaxAttempts), GroupID: group.ID, GroupIndex: index + 1, TotalGroups: len(plan.Groups), Files: group.Files, Attempt: attempt, MaxAttempts: cfg.ContractMaxAttempts})
+					break
+				}
+
+				nextAttempt := attempt + 1
+				r.progress(ProgressEvent{Stage: "revisao", Status: "retrying", Percent: reviewGroupPercent(index, len(plan.Groups), false), Message: fmt.Sprintf("Contrato inválido no grupo %s. Retentando %d/%d", group.ID, nextAttempt, cfg.ContractMaxAttempts), GroupID: group.ID, GroupIndex: index + 1, TotalGroups: len(plan.Groups), Files: group.Files, Attempt: nextAttempt, MaxAttempts: cfg.ContractMaxAttempts})
+				attemptPrompt = prompt + fmt.Sprintf("\n\nA resposta anterior foi rejeitada porque não respeitou o contrato JSON: %s. Esta é a tentativa %d de %d. Retorne somente JSON válido, exatamente com os campos definidos no contrato, sem campos adicionais e sem texto fora do JSON.", contractErr, nextAttempt, cfg.ContractMaxAttempts)
+			}
+			if res.err != nil {
 				results <- res
 				return
 			}
@@ -360,6 +379,9 @@ func normalizeConfig(cfg Config) Config {
 	if cfg.MaxFilesPerGroup == 0 {
 		cfg.MaxFilesPerGroup = d.MaxFilesPerGroup
 	}
+	if cfg.ContractMaxAttempts <= 0 {
+		cfg.ContractMaxAttempts = d.ContractMaxAttempts
+	}
 	return cfg
 }
 
@@ -377,6 +399,12 @@ func (r Runner) progress(event ProgressEvent) {
 		event.Timestamp = time.Now().Format(time.RFC3339)
 	}
 	r.Progress(event)
+}
+
+func (r Runner) processLogf(format string, args ...any) {
+	if r.ProcessLog != nil {
+		r.ProcessLog(format, args...)
+	}
 }
 
 func reviewGroupPercent(index, total int, done bool) int {

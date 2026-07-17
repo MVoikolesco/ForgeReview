@@ -84,7 +84,7 @@ func (h *Handler) Receive(w http.ResponseWriter, r *http.Request) {
 		prNumber,
 		event.Action,
 	)
-	h.logger.Printf("Job criado: %+v", job)
+	h.logger.Printf("Job criado: {Owner:%s Repo:%s PRNumber:%d RequestedReviewer:%s Sender:%s Manual:%t GiteaInstanceID:%d}", job.Owner, job.Repo, job.PRNumber, job.RequestedReviewer, job.Sender, job.Manual, job.GiteaInstanceID)
 
 	if err := h.publisher.Publish(r.Context(), job); err != nil {
 		h.logger.Printf("erro ao publicar job no redis: %v", err)
@@ -137,7 +137,7 @@ func (h *Handler) ManualReview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.Printf("Review manual solicitado: %s/%s PR #%d", owner, repo, prNumber)
-	h.logger.Printf("Job criado: %+v", job)
+	h.logger.Printf("Job criado: {Owner:%s Repo:%s PRNumber:%d RequestedReviewer:%s Sender:%s Manual:%t GiteaInstanceID:%d}", job.Owner, job.Repo, job.PRNumber, job.RequestedReviewer, job.Sender, job.Manual, job.GiteaInstanceID)
 
 	if err := h.publisher.Publish(r.Context(), job); err != nil {
 		h.logger.Printf("erro ao publicar job manual no redis: %v", err)

@@ -41,9 +41,6 @@ func (c Config) Validate() error {
 	if c.AppMode == "api" && (c.AdminUsername == "" || c.AdminPassword == "") {
 		return fmt.Errorf("ADMIN_USERNAME and ADMIN_PASSWORD are required")
 	}
-	if c.AppMode == "worker" && (c.GiteaURL == "" || c.GiteaToken == "") {
-		return fmt.Errorf("GITEA_URL and GITEA_TOKEN are required for worker")
-	}
 	return nil
 }
 func (c Config) DebugEnabled() bool { return c.LogLevel == "debug" }

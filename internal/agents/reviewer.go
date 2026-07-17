@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"gitea-agents/internal/ai"
 	"gitea-agents/internal/diff"
 	"gitea-agents/internal/gitea"
 	"gitea-agents/internal/ollama"
@@ -28,17 +29,21 @@ type GiteaClient interface {
 	CreatePullRequestReview(ctx context.Context, owner string, repo string, prNumber int, options gitea.CreatePullReviewOptions) (gitea.PullReview, error)
 }
 
+type GiteaClientResolver interface {
+	Resolve(ctx context.Context, instanceID int64, owner, repo string) (*gitea.Client, error)
+}
+
 type AIReviewerClient interface {
 	Chat(ctx context.Context, prompt string) (string, error)
 	Model() string
 }
 
 type ollamaMetadataClient interface {
-	ChatWithMetadata(ctx context.Context, prompt string) (ollama.ChatResult, error)
+	ChatWithMetadata(ctx context.Context, prompt string) (ai.ChatResult, error)
 }
 
 type ollamaMaxTokenClient interface {
-	ChatWithMaxTokens(ctx context.Context, prompt string, maxOutputTokens int) (ollama.ChatResult, error)
+	ChatWithMaxTokens(ctx context.Context, prompt string, maxOutputTokens int) (ai.ChatResult, error)
 }
 
 type textMaxTokenClient interface {
@@ -56,6 +61,7 @@ type ReviewerOptions struct {
 	PublishManualReviews   bool
 	AllowAutonomousReject  bool
 	ConfigProvider         reviewconfig.Provider
+	GiteaResolver          GiteaClientResolver
 	LogSensitiveData       bool
 	UnloadAfterReview      bool
 	ContextWindow          int
@@ -117,6 +123,14 @@ func (a *ReviewerAgent) Name() string {
 
 func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error {
 	if a.options.ConfigProvider != nil {
+		runtime := *a
+		if a.options.GiteaResolver != nil {
+			client, err := a.options.GiteaResolver.Resolve(ctx, job.GiteaInstanceID, job.Owner, job.Repo)
+			if err != nil {
+				return err
+			}
+			runtime.giteaClient = client
+		}
 		cfg, err := a.options.ConfigProvider.GetConfig(ctx, job.Owner+"/"+job.Repo)
 		if err != nil {
 			return fmt.Errorf("review configuration is required for %s/%s: %w", job.Owner, job.Repo, err)
@@ -125,7 +139,6 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 		if err != nil {
 			return err
 		}
-		runtime := *a
 		runtime.ollamaClient = client
 		runtime.options.MaxBlockChars = cfg.Policy.MaxBlockChars
 		runtime.options.MaxFilesPerBlock = cfg.Policy.MaxFilesPerBlock
@@ -157,13 +170,29 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 		runtime.options.PipelineConfigSet = true
 		return runtime.process(ctx, job)
 	}
+	if a.options.GiteaResolver != nil {
+		runtime := *a
+		client, err := a.options.GiteaResolver.Resolve(ctx, job.GiteaInstanceID, job.Owner, job.Repo)
+		if err != nil {
+			return err
+		}
+		runtime.giteaClient = client
+		return runtime.process(ctx, job)
+	}
 	return a.process(ctx, job)
 }
 
 func reviewerClientFromConfig(cfg *reviewconfig.ReviewConfig) (AIReviewerClient, error) {
 	switch cfg.Provider.Name {
 	case "ollama":
-		return ollama.NewClient(ollama.Config{URL: cfg.Connection.BaseURL, Model: cfg.Model.Name, Options: ollama.Options{Temperature: cfg.Parameters.Temperature, TopP: cfg.Parameters.TopP, RepeatPenalty: cfg.Parameters.RepeatPenalty, NumCtx: cfg.Parameters.NumCtx, NumThread: cfg.Parameters.NumThreads, NumPredict: cfg.Parameters.NumPredict}, KeepAlive: cfg.Parameters.KeepAlive, TimeoutSeconds: cfg.Parameters.TimeoutSeconds}), nil
+		var key string
+		if cfg.Connection.APIKeyEnvName != "" {
+			key = os.Getenv(cfg.Connection.APIKeyEnvName)
+			if key == "" {
+				return nil, fmt.Errorf("Ollama secret environment variable %q is not set", cfg.Connection.APIKeyEnvName)
+			}
+		}
+		return ollama.NewClient(ollama.Config{URL: cfg.Connection.BaseURL, Model: cfg.Model.Name, APIKey: key, Options: ollama.Options{Temperature: cfg.Parameters.Temperature, TopP: cfg.Parameters.TopP, RepeatPenalty: cfg.Parameters.RepeatPenalty, NumCtx: cfg.Parameters.NumCtx, NumThread: cfg.Parameters.NumThreads, NumPredict: cfg.Parameters.NumPredict}, KeepAlive: cfg.Parameters.KeepAlive, TimeoutSeconds: cfg.Parameters.TimeoutSeconds}), nil
 	case "openrouter":
 		if cfg.Connection.APIKeyEnvName == "" {
 			return nil, fmt.Errorf("OpenRouter connection has no API key environment variable configured")
@@ -228,13 +257,13 @@ func formatManualReviewMarkdown(finalReview review.FinalReview) string {
 	return strings.TrimSpace(builder.String()) + "\n"
 }
 
-func (a *ReviewerAgent) requestValidatedFinalReview(ctx context.Context, prompt string, runLog *reviewRunLog) (string, review.FinalReview, ollama.ChatResult, error) {
+func (a *ReviewerAgent) requestValidatedFinalReview(ctx context.Context, prompt string, runLog *reviewRunLog) (string, review.FinalReview, ai.ChatResult, error) {
 	currentPrompt := prompt
 	var validationErrors []string
 	for attempt := 1; attempt <= a.options.ReviewFinalRetries; attempt++ {
 		response, usage, err := a.chatWithMetadata(ctx, currentPrompt)
 		if err != nil {
-			return "", review.FinalReview{}, ollama.ChatResult{}, fmt.Errorf("erro ao consolidar review com ollama: %w", err)
+			return "", review.FinalReview{}, ai.ChatResult{}, fmt.Errorf("erro ao consolidar review com ollama: %w", err)
 		}
 		parsed, validationErr := review.ValidateFinalReviewResponse(response)
 		if validationErr == nil {
@@ -243,7 +272,7 @@ func (a *ReviewerAgent) requestValidatedFinalReview(ctx context.Context, prompt 
 
 		validationErrors = append(validationErrors, validationErr.Error())
 		if appendErr := runLog.AppendProcess("resposta final invalida tentativa=%d de %d erros=%s", attempt, a.options.ReviewFinalRetries, validationErr.Error()); appendErr != nil {
-			return "", review.FinalReview{}, ollama.ChatResult{}, appendErr
+			return "", review.FinalReview{}, ai.ChatResult{}, appendErr
 		}
 		if attempt == a.options.ReviewFinalRetries {
 			break
@@ -251,16 +280,16 @@ func (a *ReviewerAgent) requestValidatedFinalReview(ctx context.Context, prompt 
 		currentPrompt = prompt + "\n\nCORRECAO OBRIGATORIA DA TENTATIVA ANTERIOR:\nA ultima resposta nao veio no padrao obrigatorio. Refaça a resposta completa e retorne exclusivamente um objeto JSON valido, sem Markdown e sem qualquer texto antes ou depois. Preserve exatamente as propriedades comments e final_review, incluindo todos os campos obrigatorios. Utilize somente os valores de severidade, status e evento definidos pelo projeto. Erros detectados: " + validationErr.Error()
 	}
 
-	return "", review.FinalReview{}, ollama.ChatResult{}, fmt.Errorf("review final invalido apos %d tentativas: %s", a.options.ReviewFinalRetries, strings.Join(validationErrors, " | "))
+	return "", review.FinalReview{}, ai.ChatResult{}, fmt.Errorf("review final invalido apos %d tentativas: %s", a.options.ReviewFinalRetries, strings.Join(validationErrors, " | "))
 }
 
-func (a *ReviewerAgent) chatWithMetadata(ctx context.Context, prompt string) (string, ollama.ChatResult, error) {
+func (a *ReviewerAgent) chatWithMetadata(ctx context.Context, prompt string) (string, ai.ChatResult, error) {
 	if client, ok := a.ollamaClient.(ollamaMetadataClient); ok {
 		result, err := client.ChatWithMetadata(ctx, prompt)
 		return result.Content, result, err
 	}
 	content, err := a.ollamaClient.Chat(ctx, prompt)
-	return content, ollama.ChatResult{Content: content}, err
+	return content, ai.ChatResult{Content: content}, err
 }
 
 func (a *ReviewerAgent) chatStageWithMetadata(ctx context.Context, stage string, prompt string, maxOutputTokens int) (string, pipeline.StageUsage, error) {
@@ -364,11 +393,16 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 	}
 	cfg.MaxGroupChars = a.options.MaxBlockChars
 	cfg.MaxFilesPerGroup = a.options.MaxFilesPerBlock
+	cfg.ContractMaxAttempts = a.options.ReviewFinalRetries
 	if cfg.MaxParallelReviewGroups <= 0 {
 		cfg.MaxParallelReviewGroups = 1
 	}
 
-	runner := pipeline.Runner{Config: cfg, Logger: a.logger, Chat: a.chatStageWithMetadata, Progress: progress, StackRules: func(ctx context.Context, files []string) (string, []string, error) {
+	runner := pipeline.Runner{Config: cfg, Logger: a.logger, Chat: a.chatStageWithMetadata, Progress: progress, ProcessLog: func(format string, args ...any) {
+		if err := runLog.AppendProcess(format, args...); err != nil {
+			a.logger.Printf("erro ao gravar log de processo do review: %v", err)
+		}
+	}, StackRules: func(ctx context.Context, files []string) (string, []string, error) {
 		resolved, err := promptResolver.ResolvePartialPrompt(ctx, job.Owner, job.Repo, files)
 		if err != nil {
 			return "", nil, err

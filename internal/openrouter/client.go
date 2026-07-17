@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"gitea-agents/internal/ai"
 )
 
 type Config struct {
@@ -22,6 +24,8 @@ type Client struct {
 	contextWindow, maxTokens               int
 	http                                   *http.Client
 }
+
+var _ ai.Client = (*Client)(nil)
 
 func NewClient(c Config) *Client {
 	t := time.Duration(c.TimeoutSeconds) * time.Second
@@ -69,26 +73,31 @@ func (c *Client) effectiveMaxTokens(prompt string, requestedMaxTokens int) (int,
 }
 
 func (c *Client) Chat(ctx context.Context, prompt string) (string, error) {
-	return c.chat(ctx, prompt, 0)
+	result, err := c.chatWithMetadata(ctx, prompt, 0)
+	return result.Content, err
 }
 
-func (c *Client) ChatWithMaxTokens(ctx context.Context, prompt string, maxOutputTokens int) (string, error) {
-	return c.chat(ctx, prompt, maxOutputTokens)
+func (c *Client) ChatWithMaxTokens(ctx context.Context, prompt string, maxOutputTokens int) (ai.ChatResult, error) {
+	return c.chatWithMetadata(ctx, prompt, maxOutputTokens)
 }
 
-func (c *Client) chat(ctx context.Context, prompt string, requestedMaxTokens int) (string, error) {
+func (c *Client) ChatWithMetadata(ctx context.Context, prompt string) (ai.ChatResult, error) {
+	return c.chatWithMetadata(ctx, prompt, 0)
+}
+
+func (c *Client) chatWithMetadata(ctx context.Context, prompt string, requestedMaxTokens int) (ai.ChatResult, error) {
 	if c.key == "" {
-		return "", fmt.Errorf("OpenRouter API key is empty")
+		return ai.ChatResult{}, fmt.Errorf("OpenRouter API key is empty")
 	}
 	maxTokens, err := c.effectiveMaxTokens(prompt, requestedMaxTokens)
 	if err != nil {
-		return "", err
+		return ai.ChatResult{}, err
 	}
 	payload := map[string]any{"model": c.model, "messages": []map[string]string{{"role": "user", "content": prompt}}, "temperature": c.temperature, "top_p": c.topP, "max_tokens": maxTokens}
 	b, _ := json.Marshal(payload)
 	r, e := http.NewRequestWithContext(ctx, http.MethodPost, c.url+"/chat/completions", bytes.NewReader(b))
 	if e != nil {
-		return "", e
+		return ai.ChatResult{}, e
 	}
 	r.Header.Set("Authorization", "Bearer "+c.key)
 	r.Header.Set("Content-Type", "application/json")
@@ -100,12 +109,12 @@ func (c *Client) chat(ctx context.Context, prompt string, requestedMaxTokens int
 	}
 	res, e := c.http.Do(r)
 	if e != nil {
-		return "", e
+		return ai.ChatResult{}, e
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		x, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-		return "", fmt.Errorf("OpenRouter status=%d: %s", res.StatusCode, strings.TrimSpace(string(x)))
+		return ai.ChatResult{}, fmt.Errorf("OpenRouter status=%d: %s", res.StatusCode, strings.TrimSpace(string(x)))
 	}
 	var out struct {
 		Choices []struct {
@@ -115,10 +124,10 @@ func (c *Client) chat(ctx context.Context, prompt string, requestedMaxTokens int
 		} `json:"choices"`
 	}
 	if e = json.NewDecoder(res.Body).Decode(&out); e != nil {
-		return "", e
+		return ai.ChatResult{}, e
 	}
 	if len(out.Choices) == 0 || out.Choices[0].Message.Content == "" {
-		return "", fmt.Errorf("OpenRouter returned an empty response")
+		return ai.ChatResult{}, fmt.Errorf("OpenRouter returned an empty response")
 	}
-	return out.Choices[0].Message.Content, nil
+	return ai.ChatResult{Content: out.Choices[0].Message.Content}, nil
 }

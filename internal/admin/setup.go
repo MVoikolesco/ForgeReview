@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -67,6 +68,12 @@ type completeSetupRequest struct {
 	Profile    setupProfile    `json:"profile"`
 	Policy     setupPolicy     `json:"policy"`
 }
+type addModelRequest struct {
+	ConnectionID int64           `json:"connection_id"`
+	Model        catalogModel    `json:"model"`
+	Parameters   setupParameters `json:"parameters"`
+	MakeDefault  bool            `json:"make_default"`
+}
 
 func (h Handler) setupRoute(w http.ResponseWriter, r *http.Request, action string) {
 	if r.Method != http.MethodPost {
@@ -78,16 +85,21 @@ func (h Handler) setupRoute(w http.ResponseWriter, r *http.Request, action strin
 		h.providerCatalog(w, r)
 	case "complete":
 		h.completeSetup(w, r)
+	case "add-model":
+		h.addModel(w, r, 0)
 	default:
 		http.NotFound(w, r)
 	}
 }
 
 func normalizeConnection(provider string, c setupConnection) setupConnection {
+	cloudOllama := provider == "ollama-cloud" || (provider == "ollama" && strings.TrimSpace(c.APIKeyEnvName) != "")
 	c.BaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
 	if c.Name == "" {
 		if provider == "openrouter" {
 			c.Name = "OpenRouter principal"
+		} else if cloudOllama {
+			c.Name = "Ollama Cloud"
 		} else {
 			c.Name = "Ollama local"
 		}
@@ -95,6 +107,8 @@ func normalizeConnection(provider string, c setupConnection) setupConnection {
 	if c.BaseURL == "" {
 		if provider == "openrouter" {
 			c.BaseURL = "https://openrouter.ai/api/v1"
+		} else if cloudOllama {
+			c.BaseURL = "https://ollama.com"
 		} else {
 			c.BaseURL = "http://host.docker.internal:11434"
 		}
@@ -102,7 +116,17 @@ func normalizeConnection(provider string, c setupConnection) setupConnection {
 	if provider == "openrouter" && c.APIKeyEnvName == "" {
 		c.APIKeyEnvName = "OPENROUTER_API_KEY"
 	}
+	if cloudOllama && c.APIKeyEnvName == "" {
+		c.APIKeyEnvName = "OLLAMA_API_KEY"
+	}
 	return c
+}
+
+func setupProviderName(provider string) string {
+	if provider == "ollama-cloud" {
+		return "ollama"
+	}
+	return provider
 }
 
 func (h Handler) providerCatalog(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +136,7 @@ func (h Handler) providerCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Connection = normalizeConnection(input.Provider, input.Connection)
-	switch input.Provider {
+	switch setupProviderName(input.Provider) {
 	case "openrouter":
 		h.openRouterCatalog(w, r, input.Connection)
 	case "ollama":
@@ -206,7 +230,15 @@ func (h Handler) openRouterCatalog(w http.ResponseWriter, r *http.Request, c set
 }
 
 func (h Handler) ollamaCatalog(w http.ResponseWriter, r *http.Request, c setupConnection) {
-	req, _ := providerRequest(r.Context(), http.MethodGet, c.BaseURL+"/api/tags", "", c)
+	key := ""
+	if c.APIKeyEnvName != "" {
+		key = os.Getenv(c.APIKeyEnvName)
+		if key == "" {
+			writeError(w, 400, fmt.Sprintf("A variável %s não está definida no ambiente da API", c.APIKeyEnvName))
+			return
+		}
+	}
+	req, _ := providerRequest(r.Context(), http.MethodGet, c.BaseURL+"/api/tags", key, c)
 	res, err := h.http.Do(req)
 	if err != nil {
 		writeError(w, 502, "Não foi possível acessar o Ollama: "+err.Error())
@@ -265,11 +297,12 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "JSON inválido")
 		return
 	}
-	if input.Provider != "ollama" && input.Provider != "openrouter" {
+	if input.Provider != "ollama" && input.Provider != "ollama-cloud" && input.Provider != "openrouter" {
 		writeError(w, 400, "Provider não suportado pelo wizard")
 		return
 	}
 	input.Connection = normalizeConnection(input.Provider, input.Connection)
+	providerName := setupProviderName(input.Provider)
 	if input.Model.ID == "" || input.Profile.Name == "" {
 		writeError(w, 400, "Modelo e profile são obrigatórios")
 		return
@@ -281,12 +314,10 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	var providerID int64
-	if err = tx.QueryRowContext(r.Context(), "SELECT id FROM ai_providers WHERE name=? AND is_enabled=1", input.Provider).Scan(&providerID); err != nil {
+	if err = tx.QueryRowContext(r.Context(), "SELECT id FROM ai_providers WHERE name=? AND is_enabled=1", providerName).Scan(&providerID); err != nil {
 		writeError(w, 400, "Provider não está disponível")
 		return
 	}
-	_, _ = tx.ExecContext(r.Context(), "UPDATE ai_providers SET is_default=0 WHERE is_default=1")
-	_, _ = tx.ExecContext(r.Context(), "UPDATE ai_providers SET is_default=1,updated_at=CURRENT_TIMESTAMP WHERE id=?", providerID)
 	_, _ = tx.ExecContext(r.Context(), "UPDATE ai_connections SET is_default=0 WHERE provider_id=? AND is_default=1", providerID)
 	connectionResult, err := tx.ExecContext(r.Context(), `INSERT INTO ai_connections(provider_id,name,base_url,api_key_env_name,http_referer,app_title,is_default,is_enabled) VALUES(?,?,?,?,?,?,1,1)`, providerID, input.Connection.Name, input.Connection.BaseURL, input.Connection.APIKeyEnvName, input.Connection.HTTPReferer, input.Connection.AppTitle)
 	if err != nil {
@@ -295,7 +326,7 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	connectionID, _ := connectionResult.LastInsertId()
 	maxTokens := 0
-	if input.Provider == "openrouter" {
+	if providerName == "openrouter" {
 		// max_completion_tokens from the catalog is a model capability, not a
 		// sensible amount to request on every completion. Keep the operational
 		// review limit independent from that capability.
@@ -325,19 +356,24 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
-	_, _ = tx.ExecContext(r.Context(), "UPDATE review_profiles SET is_default=0 WHERE is_default=1")
-	profileResult, err := tx.ExecContext(r.Context(), `INSERT INTO review_profiles(name,description,model_id,is_default,is_enabled) VALUES(?,?,NULL,1,1)`, input.Profile.Name, input.Profile.Description)
-	if err != nil {
-		writeError(w, 400, err.Error())
-		return
+	var profileID int64
+	err = tx.QueryRowContext(r.Context(), "SELECT id FROM review_profiles WHERE is_default=1 LIMIT 1").Scan(&profileID)
+	if err == nil {
+		_, err = tx.ExecContext(r.Context(), "UPDATE review_profiles SET model_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", modelID, profileID)
+	} else if err == sql.ErrNoRows {
+		profileResult, insertErr := tx.ExecContext(r.Context(), `INSERT INTO review_profiles(name,description,model_id,is_default,is_enabled) VALUES(?,?,?,1,1)`, input.Profile.Name, input.Profile.Description, modelID)
+		if insertErr != nil {
+			writeError(w, 400, insertErr.Error())
+			return
+		}
+		profileID, _ = profileResult.LastInsertId()
+		policy := input.Policy
+		policy.MaxBlockChars = requirePositive(policy.MaxBlockChars, 12000)
+		policy.MaxFilesPerBlock = requirePositive(policy.MaxFilesPerBlock, 4)
+		policy.ReviewConcurrency = requirePositive(policy.ReviewConcurrency, 1)
+		policy.ReviewFinalRetries = requirePositive(policy.ReviewFinalRetries, 5)
+		_, err = tx.ExecContext(r.Context(), `INSERT INTO review_policies(profile_id,max_block_chars,max_files_per_block,review_concurrency,review_wip_pull_requests,review_own_pull_requests,log_sensitive_data,unload_model_after_review,review_final_retries,publish_manual_reviews,allow_autonomous_rejection) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, profileID, policy.MaxBlockChars, policy.MaxFilesPerBlock, policy.ReviewConcurrency, boolInt(policy.ReviewWIPPullRequests), boolInt(policy.ReviewOwnPullRequests), boolInt(policy.LogSensitiveData), boolInt(policy.UnloadModelAfterReview), policy.ReviewFinalRetries, boolInt(policy.PublishManualReviews), boolInt(policy.AllowAutonomousRejection))
 	}
-	profileID, _ := profileResult.LastInsertId()
-	policy := input.Policy
-	policy.MaxBlockChars = requirePositive(policy.MaxBlockChars, 12000)
-	policy.MaxFilesPerBlock = requirePositive(policy.MaxFilesPerBlock, 4)
-	policy.ReviewConcurrency = requirePositive(policy.ReviewConcurrency, 1)
-	policy.ReviewFinalRetries = requirePositive(policy.ReviewFinalRetries, 5)
-	_, err = tx.ExecContext(r.Context(), `INSERT INTO review_policies(profile_id,max_block_chars,max_files_per_block,review_concurrency,review_wip_pull_requests,review_own_pull_requests,log_sensitive_data,unload_model_after_review,review_final_retries,publish_manual_reviews,allow_autonomous_rejection) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, profileID, policy.MaxBlockChars, policy.MaxFilesPerBlock, policy.ReviewConcurrency, boolInt(policy.ReviewWIPPullRequests), boolInt(policy.ReviewOwnPullRequests), boolInt(policy.LogSensitiveData), boolInt(policy.UnloadModelAfterReview), policy.ReviewFinalRetries, boolInt(policy.PublishManualReviews), boolInt(policy.AllowAutonomousRejection))
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
@@ -347,4 +383,76 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "connection_id": connectionID, "model_id": modelID, "profile_id": profileID})
+}
+
+func (h Handler) addModel(w http.ResponseWriter, r *http.Request, pathID int64) {
+	var input addModelRequest
+	if json.NewDecoder(r.Body).Decode(&input) != nil {
+		writeError(w, 400, "JSON inválido")
+		return
+	}
+	if input.ConnectionID == 0 {
+		input.ConnectionID = pathID
+	}
+	if input.ConnectionID <= 0 || input.Model.ID == "" {
+		writeError(w, 400, "Conexão e modelo são obrigatórios")
+		return
+	}
+	tx, err := h.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	var provider string
+	if err = tx.QueryRowContext(r.Context(), `SELECT p.name FROM ai_connections c JOIN ai_providers p ON p.id=c.provider_id WHERE c.id=? AND c.is_enabled=1`, input.ConnectionID).Scan(&provider); err != nil {
+		writeError(w, 404, "conexão não encontrada ou inativa")
+		return
+	}
+	_ = provider
+	var modelID int64
+	err = tx.QueryRowContext(r.Context(), "SELECT id FROM ai_models WHERE connection_id=? AND provider_model_name=?", input.ConnectionID, input.Model.ID).Scan(&modelID)
+	if err == nil {
+		writeError(w, 409, "Este modelo já está cadastrado nesta conexão")
+		return
+	}
+	if err != sql.ErrNoRows {
+		writeError(w, 500, err.Error())
+		return
+	}
+	maxTokens := input.Parameters.MaxOutputTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
+	if input.Model.MaxCompletionTokens > 0 && maxTokens > input.Model.MaxCompletionTokens {
+		maxTokens = input.Model.MaxCompletionTokens
+	}
+	if input.Model.ContextLength > 0 && maxTokens >= input.Model.ContextLength {
+		maxTokens = requirePositive(input.Model.ContextLength/4, 1)
+	}
+	result, err := tx.ExecContext(r.Context(), `INSERT INTO ai_models(connection_id,provider_model_name,display_name,context_window,max_output_tokens,supports_json,supports_tools,supports_streaming,is_default,is_enabled) VALUES(?,?,?,?,?,?,?,?,0,1)`, input.ConnectionID, input.Model.ID, input.Model.Name, input.Model.ContextLength, maxTokens, boolInt(contains(input.Model.SupportedParameters, "response_format") || contains(input.Model.SupportedParameters, "structured_outputs")), boolInt(contains(input.Model.SupportedParameters, "tools")), 1)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	modelID, _ = result.LastInsertId()
+	p := input.Parameters
+	p.TimeoutSeconds = requirePositive(p.TimeoutSeconds, 900)
+	if _, err = tx.ExecContext(r.Context(), `INSERT INTO model_parameters(model_id,temperature,top_p,repeat_penalty,num_ctx,num_threads,num_predict,keep_alive,timeout_seconds,unload_model_after_review) VALUES(?,?,?,?,?,?,?,?,?,?)`, modelID, p.Temperature, p.TopP, p.RepeatPenalty, p.NumCtx, p.NumThreads, p.NumPredict, p.KeepAlive, p.TimeoutSeconds, boolInt(p.UnloadModelAfterReview)); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	if input.MakeDefault {
+		if _, err = tx.ExecContext(r.Context(), "UPDATE ai_models SET is_default=0 WHERE connection_id=?", input.ConnectionID); err == nil {
+			_, err = tx.ExecContext(r.Context(), "UPDATE ai_models SET is_default=1,updated_at=CURRENT_TIMESTAMP WHERE id=?", modelID)
+		}
+	}
+	if err != nil || tx.Commit() != nil {
+		if err == nil {
+			err = fmt.Errorf("could not save model")
+		}
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "model_id": modelID})
 }

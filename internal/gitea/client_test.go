@@ -103,3 +103,49 @@ func TestCreatePullRequestReview(t *testing.T) {
 		t.Fatalf("unexpected review %#v", review)
 	}
 }
+
+func TestListPullRequestsRequestsOpenState(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/repos/acme/app/pulls" || r.URL.Query().Get("state") != "open" {
+			t.Fatalf("path=%s query=%s", r.URL.Path, r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`[{"number":7,"title":"Improve API","state":"open"}]`))
+	}))
+	defer server.Close()
+	prs, err := NewClient(server.URL, "token").ListPullRequests(context.Background(), "acme", "app")
+	if err != nil || len(prs) != 1 || prs[0].Number != 7 {
+		t.Fatalf("prs=%+v err=%v", prs, err)
+	}
+}
+
+func TestAuthenticatedCatalogRequests(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "token secret-token" {
+			t.Fatalf("missing auth")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/user/orgs":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"acme","full_name":"Acme"}]`))
+		case "/api/v1/orgs/acme/repos":
+			_, _ = w.Write([]byte(`[{"id":2,"name":"app","full_name":"acme/app","owner":{"login":"acme"}}]`))
+		case "/api/v1/user":
+			_, _ = w.Write([]byte(`{"login":"bot"}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, "secret-token")
+	if err := client.TestConnection(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	orgs, err := client.ListOrganizations(context.Background())
+	if err != nil || len(orgs) != 1 {
+		t.Fatalf("orgs=%#v err=%v", orgs, err)
+	}
+	repos, err := client.ListRepositories(context.Background(), "acme")
+	if err != nil || len(repos) != 1 {
+		t.Fatalf("repos=%#v err=%v", repos, err)
+	}
+}

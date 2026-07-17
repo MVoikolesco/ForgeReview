@@ -119,6 +119,7 @@ func runWorker(ctx context.Context, cfg config.Config, logger *log.Logger, revie
 	}
 
 	giteaClient := gitea.NewClient(cfg.GiteaURL, cfg.GiteaToken)
+	giteaResolver := gitea.NewClientResolver(configurationStore.DB, cfg.GiteaURL, cfg.GiteaToken)
 	registry := agents.NewRegistry()
 	registry.Register(agents.NewReviewerAgent(logger, giteaClient, nil, agents.ReviewerOptions{
 		DiffLogDir:    cfg.DiffLogDir,
@@ -128,6 +129,7 @@ func runWorker(ctx context.Context, cfg config.Config, logger *log.Logger, revie
 		AllowAutonomousReject:  false,
 		OllamaTimeoutSeconds:   900,
 		ReviewPromptConfigPath: cfg.ReviewPromptConfigPath,
+		GiteaResolver:          giteaResolver,
 		ConfigProvider:         reviewconfig.SQLiteProvider{Store: configurationStore},
 	}))
 

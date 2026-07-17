@@ -24,6 +24,7 @@ type Handler struct {
 	username, password string
 	http               *http.Client
 	observer           queue.Observer
+	publisher          queue.Publisher
 	logDir             string
 }
 
@@ -38,6 +39,9 @@ func Register(mux *http.ServeMux, s *store.Store, username, password string, opt
 	for _, value := range optional {
 		if observer, ok := value.(queue.Observer); ok {
 			h.observer = observer
+		}
+		if publisher, ok := value.(queue.Publisher); ok {
+			h.publisher = publisher
 		}
 		if dir, ok := value.(string); ok && dir != "" {
 			h.logDir = dir
@@ -71,6 +75,13 @@ func (h Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.observabilityRoute(w, r, strings.TrimPrefix(path, "observability/"))
 		return
 	}
+	if strings.HasPrefix(path, "gitea/instances") && h.giteaRoute(w, r, strings.TrimPrefix(path, "gitea/instances")) {
+		return
+	}
+	if path == "reviews/manual" && r.Method == http.MethodPost {
+		h.manualReview(w, r)
+		return
+	}
 	key, table, rest := matchResource(path)
 	if table == "" {
 		http.NotFound(w, r)
@@ -98,6 +109,10 @@ func (h Handler) route(w http.ResponseWriter, r *http.Request) {
 	}
 	if action == "set-default" && r.Method == http.MethodPost {
 		h.setDefault(w, r, table, id)
+		return
+	}
+	if key == "ai/models" && action == "add" && r.Method == http.MethodPost {
+		h.addModel(w, r, id)
 		return
 	}
 	switch r.Method {
@@ -225,6 +240,9 @@ func scanSingle(row *sql.Row, cols []string) (map[string]any, error) {
 func rowMap(cols []string, v []any) map[string]any {
 	m := map[string]any{}
 	for i, c := range cols {
+		if c == "token_ciphertext" {
+			continue
+		}
 		if b, ok := v[i].([]byte); ok {
 			m[c] = string(b)
 		} else {
@@ -264,6 +282,10 @@ func (h Handler) update(w http.ResponseWriter, r *http.Request, t string, id int
 func (h Handler) write(w http.ResponseWriter, r *http.Request, t string, id int64, m map[string]any) {
 	delete(m, "id")
 	delete(m, "api_key_ciphertext")
+	delete(m, "token_ciphertext")
+	if t == "gitea_instances" {
+		delete(m, "token")
+	}
 	delete(m, "created_at")
 	delete(m, "updated_at")
 	cols, e := h.columns(r, t)
@@ -336,6 +358,14 @@ func (h Handler) delete(w http.ResponseWriter, r *http.Request, t string, id int
 		writeError(w, 400, "id required")
 		return
 	}
+	if t == "ai_models" {
+		h.deleteModel(w, r, id)
+		return
+	}
+	if t == "ai_connections" {
+		h.deleteConnection(w, r, id)
+		return
+	}
 	res, e := h.db.ExecContext(r.Context(), "DELETE FROM "+t+" WHERE id=?", id)
 	if e != nil {
 		writeError(w, 400, e.Error())
@@ -347,6 +377,116 @@ func (h Handler) delete(w http.ResponseWriter, r *http.Request, t string, id int
 		return
 	}
 	w.WriteHeader(204)
+}
+
+func (h Handler) deleteModel(w http.ResponseWriter, r *http.Request, id int64) {
+	tx, err := h.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	var connectionID, isDefault int64
+	if err = tx.QueryRowContext(r.Context(), "SELECT connection_id,is_default FROM ai_models WHERE id=?", id).Scan(&connectionID, &isDefault); err != nil {
+		if err == sql.ErrNoRows {
+			writeError(w, 404, "not found")
+		} else {
+			writeError(w, 500, err.Error())
+		}
+		return
+	}
+	var replacement int64
+	_ = tx.QueryRowContext(r.Context(), "SELECT id FROM ai_models WHERE connection_id=? AND id<>? AND is_enabled=1 ORDER BY is_default DESC,id LIMIT 1", connectionID, id).Scan(&replacement)
+	var refs int
+	if err = tx.QueryRowContext(r.Context(), "SELECT count(*) FROM review_profiles WHERE model_id=?", id).Scan(&refs); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if refs > 0 && replacement == 0 {
+		writeError(w, http.StatusConflict, "não é possível remover o modelo: um perfil de revisão ainda o utiliza e não há outro modelo ativo para promover")
+		return
+	}
+	if refs > 0 {
+		if _, err = tx.ExecContext(r.Context(), "UPDATE review_profiles SET model_id=?,updated_at=CURRENT_TIMESTAMP WHERE model_id=?", replacement, id); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+	}
+	if _, err = tx.ExecContext(r.Context(), "DELETE FROM model_parameters WHERE model_id=?", id); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	if _, err = tx.ExecContext(r.Context(), "DELETE FROM ai_models WHERE id=?", id); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	if isDefault == 1 && replacement != 0 {
+		_, err = tx.ExecContext(r.Context(), "UPDATE ai_models SET is_default=1,updated_at=CURRENT_TIMESTAMP WHERE id=?", replacement)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h Handler) deleteConnection(w http.ResponseWriter, r *http.Request, id int64) {
+	tx, err := h.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	var providerID, isDefault int64
+	if err = tx.QueryRowContext(r.Context(), "SELECT provider_id,is_default FROM ai_connections WHERE id=?", id).Scan(&providerID, &isDefault); err != nil {
+		if err == sql.ErrNoRows {
+			writeError(w, 404, "not found")
+		} else {
+			writeError(w, 500, err.Error())
+		}
+		return
+	}
+	var replacementConnection int64
+	_ = tx.QueryRowContext(r.Context(), "SELECT id FROM ai_connections WHERE provider_id=? AND id<>? AND is_enabled=1 ORDER BY is_default DESC,id LIMIT 1", providerID, id).Scan(&replacementConnection)
+	var replacementModel int64
+	if replacementConnection != 0 {
+		_ = tx.QueryRowContext(r.Context(), "SELECT id FROM ai_models WHERE connection_id=? AND is_enabled=1 ORDER BY is_default DESC,id LIMIT 1", replacementConnection).Scan(&replacementModel)
+	}
+	var refs int
+	if err = tx.QueryRowContext(r.Context(), "SELECT count(*) FROM review_profiles p JOIN ai_models m ON m.id=p.model_id WHERE m.connection_id=?", id).Scan(&refs); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if refs > 0 && replacementModel == 0 {
+		writeError(w, http.StatusConflict, "não é possível remover a conexão: perfis de revisão dependem dos modelos e não há modelo ativo para promover")
+		return
+	}
+	if refs > 0 {
+		if _, err = tx.ExecContext(r.Context(), "UPDATE review_profiles SET model_id=?,updated_at=CURRENT_TIMESTAMP WHERE model_id IN (SELECT id FROM ai_models WHERE connection_id=?)", replacementModel, id); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+	}
+	if _, err = tx.ExecContext(r.Context(), "DELETE FROM model_parameters WHERE model_id IN (SELECT id FROM ai_models WHERE connection_id=?)", id); err == nil {
+		_, err = tx.ExecContext(r.Context(), "DELETE FROM ai_models WHERE connection_id=?", id)
+	}
+	if err == nil {
+		_, err = tx.ExecContext(r.Context(), "DELETE FROM ai_connections WHERE id=?", id)
+	}
+	if err == nil && isDefault == 1 && replacementConnection != 0 {
+		_, err = tx.ExecContext(r.Context(), "UPDATE ai_connections SET is_default=1,updated_at=CURRENT_TIMESTAMP WHERE id=?", replacementConnection)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 func (h Handler) setDefault(w http.ResponseWriter, r *http.Request, t string, id int64) {
 	if id <= 0 {

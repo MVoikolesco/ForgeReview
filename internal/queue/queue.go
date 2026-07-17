@@ -6,6 +6,7 @@ import (
 )
 
 type ReviewJob struct {
+	GiteaInstanceID   int64
 	Owner             string
 	Repo              string
 	PRNumber          int

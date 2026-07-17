@@ -6,9 +6,43 @@ import (
 	"gitea-agents/internal/store"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
+
+func TestOllamaCatalogUsesConfiguredBearerOnlyForCloud(t *testing.T) {
+	for _, test := range []struct {
+		name, key, envName, wantAuth string
+	}{
+		{name: "local"},
+		{name: "cloud", key: "cloud-secret", envName: "TEST_OLLAMA_KEY", wantAuth: "Bearer cloud-secret"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.envName != "" {
+				t.Setenv(test.envName, test.key)
+			} else {
+				_ = os.Unsetenv("TEST_OLLAMA_KEY")
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/tags" {
+					t.Fatalf("path=%s", r.URL.Path)
+				}
+				if got := r.Header.Get("Authorization"); got != test.wantAuth {
+					t.Fatalf("authorization=%q want=%q", got, test.wantAuth)
+				}
+				_, _ = w.Write([]byte(`{"models":[{"name":"qwen"}]}`))
+			}))
+			defer server.Close()
+			h := Handler{http: server.Client()}
+			w := httptest.NewRecorder()
+			h.ollamaCatalog(w, httptest.NewRequest(http.MethodGet, "/", nil), setupConnection{BaseURL: server.URL, APIKeyEnvName: test.envName})
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
 
 func TestCompleteSetupCreatesAtomicReviewConfiguration(t *testing.T) {
 	s, err := store.Open(config.Config{DatabaseDriver: "sqlite", DatabaseDSN: ":memory:"})
@@ -39,6 +73,10 @@ func TestCompleteSetupCreatesAtomicReviewConfiguration(t *testing.T) {
 			t.Fatalf("%s=%d want=%d err=%v", table, got, want, err)
 		}
 	}
+	var profileModelID int
+	if err = s.DB.QueryRow("SELECT model_id FROM review_profiles WHERE is_default=1").Scan(&profileModelID); err != nil || profileModelID == 0 {
+		t.Fatalf("default profile model_id=%d err=%v", profileModelID, err)
+	}
 	req = httptest.NewRequest(http.MethodGet, "/api/admin/status", nil)
 	req.SetBasicAuth("admin", "secret")
 	res = httptest.NewRecorder()
@@ -52,6 +90,44 @@ func TestCompleteSetupCreatesAtomicReviewConfiguration(t *testing.T) {
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusForbidden {
 		t.Fatalf("prompt write status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestCompleteSetupReusesDefaultProfileForAnotherConnection(t *testing.T) {
+	s, err := store.Open(config.Config{DatabaseDriver: "sqlite", DatabaseDSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Seed(context.Background(), config.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	Register(mux, s, "admin", "secret")
+
+	for _, body := range []string{
+		`{"provider":"ollama","connection":{"name":"Local A"},"model":{"id":"model:a","name":"A"},"profile":{"name":"Padrão"},"parameters":{},"policy":{}}`,
+		`{"provider":"ollama","connection":{"name":"Local B"},"model":{"id":"model:b","name":"B"},"profile":{"name":"Padrão"},"parameters":{},"policy":{}}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/admin/setup/complete", strings.NewReader(body))
+		req.SetBasicAuth("admin", "secret")
+		res := httptest.NewRecorder()
+		mux.ServeHTTP(res, req)
+		if res.Code != http.StatusCreated {
+			t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+		}
+	}
+
+	var profiles, policies int
+	var activeModel string
+	_ = s.DB.QueryRow("SELECT count(*) FROM review_profiles").Scan(&profiles)
+	_ = s.DB.QueryRow("SELECT count(*) FROM review_policies").Scan(&policies)
+	err = s.DB.QueryRow(`SELECT m.provider_model_name FROM review_profiles p JOIN ai_models m ON m.id=p.model_id WHERE p.is_default=1`).Scan(&activeModel)
+	if err != nil || profiles != 1 || policies != 1 || activeModel != "model:b" {
+		t.Fatalf("profiles=%d policies=%d active_model=%q err=%v", profiles, policies, activeModel, err)
 	}
 }
 
