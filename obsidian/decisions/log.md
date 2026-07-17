@@ -64,3 +64,30 @@ Record durable decisions using this structure:
 - **Affected paths:** `internal/ai`, `internal/ollama`, `internal/openrouter`, `internal/agents/reviewer.go`, `internal/admin/setup.go`, `web-admin/src/components/connections/connection-wizard.tsx`.
 - **Related notes:** [[../architecture/overview|Architecture]], [[../architecture/feature-map|Feature Map]], [[../operations/change-log|Change Log]]
 
+## 2026-07-17 — Externalizar instruções da pipeline sem stacks
+
+- **Context:** A pipeline stateless dependia de regras hardcoded e de composição de prompts por stack, dificultando edição e permitindo contexto desigual entre estágios.
+- **Decision:** Exigir quatro Markdown configurados em YAML e enviar o mesmo diff canônico a todos os estágios LLM; remover seleção/composição por stack e templates legados.
+- **Rationale:** Centraliza instruções, schemas e regras editáveis, preservando no Go somente a intercalação de dados dinâmicos e os controles determinísticos.
+- **Consequences:** Arquivo ausente ou vazio interrompe a execução explicitamente; divergências de importação precisam de prova de importação e uso alterados no diff. O formatter não pode publicar comentário de importação ou alias sem achado validado correspondente no mesmo arquivo e linha.
+- **Affected paths:** `config/review-prompts.yaml`, `prompts/*.md`, `internal/review/promptconfig`, `internal/review/pipeline`.
+- **Related notes:** [[../architecture/overview|Architecture]], [[../architecture/feature-map|Feature Map]]
+
+## 2026-07-17 — Persistir chaves de IA exclusivamente no SQLite
+
+- **Context:** Chaves de IA em variáveis de ambiente impediam rotação segura e criavam comportamento implícito entre API e worker.
+- **Decision:** Até v1.0, `ai_connections.api_key_ciphertext` substitui o contrato legado. Chaves são write-only, AES-256-GCM com AAD por conexão/campo e usam a mesma `GITEA_TOKEN_ENCRYPTION_KEY` dos tokens Gitea. Não há leitura, migração automática ou fallback de `.env` para IA.
+- **Rationale:** Uma única fonte de verdade evita substituição de ciphertext entre conexões e falha explicitamente quando a credencial não é utilizável.
+- **Consequences:** Backup do SQLite é obrigatório antes do rollout; API deve migrar e receber/rotacionar chaves antes do worker, que usa a mesma chave mestra. Conexões autenticadas antigas sem chave persistida são desabilitadas; Ollama local continua sem chave.
+- **Affected paths:** `internal/secrets`, `internal/store/migrations/009_ai_connection_secret.sql`, `internal/admin`, `internal/reviewconfig`, `internal/agents`, `web-admin/src/components/connections`.
+- **Related notes:** [[../architecture/overview|Architecture]], [[../operations/change-log|Change Log]]
+
+## 2026-07-17 — Classificar autenticação por conexão de IA
+
+- **Context:** `ai_providers.auth_type` classifica o provider Ollama como sem autenticação e não distingue sua rota local da rota Cloud, permitindo que worker e catálogo omitisse a chave Cloud.
+- **Decision:** Persistir `ai_connections.requires_auth` como classificação imutável e definida pelo servidor. Setup marca Ollama Cloud e OpenRouter; a migration 009 também deriva autenticação de todo `ai_providers.auth_type` diferente de `none` (incluindo Gemini e Groq), com metadados de endpoint/nome somente para distinguir Ollama Cloud do local. Catálogo, teste administrativo e worker usam exclusivamente esse campo para decriptar e enviar Bearer; o catálogo local do Ollama descarta qualquer chave submetida.
+- **Rationale:** A decisão por conexão preserva Ollama local sem credencial e elimina a inferência insegura por `auth_type` do provider.
+- **Consequences:** Uma conexão autenticada com ciphertext ausente ou inválido é rejeitada antes da chamada ao provider; operadores de conexões legadas precisam informar a chave e reativá-las. Ollama local não aceita nem transmite Bearer, mesmo quando o cliente envia uma chave.
+- **Affected paths:** `internal/store/migrations/009_ai_connection_secret.sql`, `internal/admin`, `internal/reviewconfig`, `web-admin/src/components/connections/connection-wizard.tsx`.
+- **Related notes:** [[../architecture/overview|Architecture]], [[../architecture/feature-map|Feature Map]]
+
