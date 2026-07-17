@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"gitea-agents/internal/diff"
+	"gitea-agents/internal/review/promptconfig"
 )
 
 const Version = "2"
@@ -44,8 +45,7 @@ type Input struct {
 	BaseBranch        string
 	HeadBranch        string
 	Files             []diff.ChangedFile
-	Stacks            []string
-	GlobalRules       string
+	Prompts           promptconfig.PromptSet
 }
 
 type ReviewPlan struct {
@@ -57,12 +57,11 @@ type ReviewPlan struct {
 }
 
 type ReviewGroup struct {
-	ID             string   `json:"id"`
-	Purpose        string   `json:"purpose"`
-	Files          []string `json:"files"`
-	RelevantStacks []string `json:"relevant_stacks"`
-	RiskLevel      string   `json:"risk_level"`
-	ReviewFocus    []string `json:"review_focus"`
+	ID          string   `json:"id"`
+	Purpose     string   `json:"purpose"`
+	Files       []string `json:"files"`
+	RiskLevel   string   `json:"risk_level"`
+	ReviewFocus []string `json:"review_focus"`
 }
 
 type ReviewFinding struct {

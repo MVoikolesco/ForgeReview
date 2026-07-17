@@ -78,16 +78,34 @@ Record durable decisions using this structure:
 - **Context:** Chaves de IA em variáveis de ambiente impediam rotação segura e criavam comportamento implícito entre API e worker.
 - **Decision:** Até v1.0, `ai_connections.api_key_ciphertext` substitui o contrato legado. Chaves são write-only, AES-256-GCM com AAD por conexão/campo e usam a mesma `GITEA_TOKEN_ENCRYPTION_KEY` dos tokens Gitea. Não há leitura, migração automática ou fallback de `.env` para IA.
 - **Rationale:** Uma única fonte de verdade evita substituição de ciphertext entre conexões e falha explicitamente quando a credencial não é utilizável.
-- **Consequences:** Backup do SQLite é obrigatório antes do rollout; API deve migrar e receber/rotacionar chaves antes do worker, que usa a mesma chave mestra. Conexões autenticadas antigas sem chave persistida são desabilitadas; Ollama local continua sem chave.
+- **Consequences:** Backup do SQLite é obrigatório antes do rollout; API deve migrar e receber/rotacionar chaves antes do worker, que usa a mesma chave mestra. Toda conexão legada sem chave persistida é desabilitada e precisa ser reconfigurada; novas conexões Ollama loopback continuam sem chave.
 - **Affected paths:** `internal/secrets`, `internal/store/migrations/009_ai_connection_secret.sql`, `internal/admin`, `internal/reviewconfig`, `internal/agents`, `web-admin/src/components/connections`.
 - **Related notes:** [[../architecture/overview|Architecture]], [[../operations/change-log|Change Log]]
 
 ## 2026-07-17 — Classificar autenticação por conexão de IA
 
 - **Context:** `ai_providers.auth_type` classifica o provider Ollama como sem autenticação e não distingue sua rota local da rota Cloud, permitindo que worker e catálogo omitisse a chave Cloud.
-- **Decision:** Persistir `ai_connections.requires_auth` como classificação imutável e definida pelo servidor. Setup marca Ollama Cloud e OpenRouter; a migration 009 também deriva autenticação de todo `ai_providers.auth_type` diferente de `none` (incluindo Gemini e Groq), com metadados de endpoint/nome somente para distinguir Ollama Cloud do local. Catálogo, teste administrativo e worker usam exclusivamente esse campo para decriptar e enviar Bearer; o catálogo local do Ollama descarta qualquer chave submetida.
+- **Decision:** Persistir `ai_connections.requires_auth` como classificação imutável e definida pelo servidor. Setup marca Ollama Cloud e OpenRouter; a migration 009 marca e desabilita toda conexão legada sem ciphertext, pois SQL não replica com segurança a classificação Go de URL/IP. Catálogo, teste administrativo e worker usam exclusivamente esse campo para decriptar e enviar Bearer; o catálogo local do Ollama descarta qualquer chave submetida.
 - **Rationale:** A decisão por conexão preserva Ollama local sem credencial e elimina a inferência insegura por `auth_type` do provider.
 - **Consequences:** Uma conexão autenticada com ciphertext ausente ou inválido é rejeitada antes da chamada ao provider; operadores de conexões legadas precisam informar a chave e reativá-las. Ollama local não aceita nem transmite Bearer, mesmo quando o cliente envia uma chave.
 - **Affected paths:** `internal/store/migrations/009_ai_connection_secret.sql`, `internal/admin`, `internal/reviewconfig`, `web-admin/src/components/connections/connection-wizard.tsx`.
 - **Related notes:** [[../architecture/overview|Architecture]], [[../architecture/feature-map|Feature Map]]
+
+## 2026-07-17 — Autorizar Ollama sem chave somente em loopback
+
+- **Context:** A classificação anterior aceitava o nome `Ollama local` como exceção, permitindo que um endpoint remoto ficasse sem ciphertext ao mudar apenas o nome.
+- **Decision:** Classificar Ollama sem autenticação exclusivamente por URL HTTP(S) com host `localhost`, `127.0.0.0/8` ou `::1`; toda outra URL exige ciphertext. Create/update, setup, catálogo, teste administrativo e worker usam a mesma classificação, sem fallback de `.env`.
+- **Rationale:** O host analisado é verificável pelo servidor e não depende de metadados controláveis pelo operador.
+- **Consequences:** Toda conexão legada sem chave falha fechada até reconfiguração; o endpoint padrão local para novas conexões é `http://localhost:11434`.
+- **Affected paths:** `internal/ai/auth.go`, `internal/admin`, `internal/reviewconfig`, `internal/store/migrations/009_ai_connection_secret.sql`, `web-admin/src/components/connections/connection-wizard.tsx`.
+- **Related notes:** [[../architecture/overview|Architecture]], [[../operations/change-log|Change Log]]
+
+## 2026-07-17 — Falhar fechada na migração de conexões de IA sem segredo
+
+- **Context:** A migration SQL 009 tentava classificar loopback por padrões `GLOB`, divergindo do classificador verificável `net.ParseIP(...).IsLoopback()` do runtime e aceitando hosts spoofados.
+- **Decision:** Não reproduzir parsing de URL/IP em SQL. Toda conexão legada sem ciphertext é marcada como autenticada e desabilitada; o operador precisa cadastrar uma chave quando aplicável e reativar a conexão. Os erros remotos de catálogo e teste retornam apenas contexto sanitizado e status HTTP.
+- **Rationale:** A migração não pode chamar com segurança o classificador Go. Desabilitar evita que uma URL remota ou spoofada fique ativa sem segredo, e não refletir bodies evita vazamento de `Authorization` ou ciphertext por providers maliciosos.
+- **Consequences:** Até mesmo Ollama loopback legado precisa ser reconfigurado/reabilitado após o upgrade. O diagnóstico administrativo mantém o status remoto, mas não o body.
+- **Affected paths:** `internal/store/migrations/009_ai_connection_secret.sql`, `internal/ai/auth.go`, `internal/admin/handler.go`, `internal/admin/setup.go`.
+- **Related notes:** [[../architecture/overview|Architecture]], [[../operations/change-log|Change Log]]
 

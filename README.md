@@ -10,7 +10,7 @@ O worker usa o pipeline v2 de múltiplas etapas:
 diff do PR -> planner -> reviewer por grupo -> consolidator -> verifier -> formatter -> Gitea
 ```
 
-Cada etapa é uma chamada independente ao provider e troca dados internos em JSON. O pipeline não mantém conversa crescente nem busca contexto adicional no Gitea; usa apenas o diff recebido, arquivos alterados, stacks detectadas por `config/review-prompts.yaml`, configurações e respostas intermediárias do job em memória.
+Cada etapa é uma chamada independente ao provider e troca dados internos em JSON. Todas recebem o mesmo diff canônico (truncado e marcado uma única vez quando necessário), as instruções editáveis e as respostas intermediárias aplicáveis. O pipeline não mantém conversa crescente nem busca contexto adicional no Gitea.
 
 O formato publicado permanece compatível com o contrato atual:
 
@@ -54,7 +54,7 @@ O limite de contexto do modelo é tratado separadamente do limite de saída. Ant
 
 1. Copie `.env.example` para `.env`.
 2. Configure `GITEA_URL`, `GITEA_TOKEN`, `GITEA_BOT_USERNAME` e altere `ADMIN_PASSWORD`.
-3. Se usar OpenRouter, preencha `OPENROUTER_API_KEY`; para Ollama Cloud, `OLLAMA_API_KEY`. O painel armazena somente o nome da variável, nunca o segredo.
+3. Defina uma `GITEA_TOKEN_ENCRYPTION_KEY` com exatamente 32 bytes e mantenha o mesmo valor para API e worker. Configure chaves de IA no painel; elas são write-only e cifradas no SQLite.
 4. Execute:
 
 ```sh
@@ -85,9 +85,13 @@ Abra **Configurar IA** no painel. O assistente executa um fluxo linear:
 
 A conclusão usa uma única transação SQLite: conexão, modelo, parâmetros, profile e policy são gravados juntos ou nenhum registro é alterado. Os cadastros individuais continuam disponíveis em **Avançado**.
 
-Os prompts não fazem parte do cadastro administrativo. O worker usa diretamente `config/review-prompts.yaml`, `prompts/base/review_partial.md`, `prompts/base/review_final.md` e os complementos versionados em `prompts/stacks`. Alterações de prompts ficam reservadas para uma evolução futura do produto.
+Os prompts não fazem parte do cadastro administrativo. O worker carrega `config/review-prompts.yaml`, que exige quatro arquivos não vazios: `prompts/technical-review.md`, `prompts/security-performance.md`, `prompts/import-divergence.md` e `prompts/final-response.md`. Não há seleção ou composição por stack. A configuração mantém somente filtros de arquivos revisáveis.
 
-Para Ollama local, o endereço padrão é `http://host.docker.internal:11434` e os modelos vêm de `/api/tags`. Ollama Cloud usa o endpoint compatível `https://ollama.com`, Bearer com a chave da variável configurada e os mesmos endpoints `/api/tags` e `/api/chat`. Para OpenRouter, a API valida `OPENROUTER_API_KEY` em `/api/v1/key` e carrega os modelos de `/api/v1/models`.
+Para Ollama local, o endereço padrão é `http://host.docker.internal:11434` e os modelos vêm de `/api/tags`, sem chave. Ollama Cloud usa o endpoint compatível `https://ollama.com`, Bearer com a chave cifrada da conexão e os mesmos endpoints `/api/tags` e `/api/chat`. Para OpenRouter, a API valida a chave informada no assistente em `/api/v1/key` e carrega os modelos de `/api/v1/models`.
+
+### Rollout de chaves de IA
+
+Faça backup do SQLite antes da atualização. Suba a API primeiro para executar a migração e cadastre/rote as chaves no console; só então suba o worker com a mesma `GITEA_TOKEN_ENCRYPTION_KEY`. Não há leitura, fallback ou migração automática de chaves de IA do `.env`. Para rollback, restaure o backup do SQLite e a versão anterior da aplicação.
 
 ## Seleção de provider e modelo
 

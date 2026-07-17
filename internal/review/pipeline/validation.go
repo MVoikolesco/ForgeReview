@@ -56,7 +56,7 @@ func validateFindings(findings []ReviewFinding, input Input, groupID string) []R
 		if strings.TrimSpace(finding.ID) == "" || strings.TrimSpace(finding.DecisionReason) == "" || strings.TrimSpace(finding.Comment) == "" || !finding.IntroducedByPR {
 			continue
 		}
-		if unsupportedByDiffOnly(finding.DecisionReason) {
+		if unsupportedByDiffOnly(finding.DecisionReason) || unsupportedImportDivergence(finding, input) {
 			continue
 		}
 		key := dedupeKey(finding)
@@ -67,6 +67,57 @@ func validateFindings(findings []ReviewFinding, input Input, groupID string) []R
 		valid = append(valid, finding)
 	}
 	return valid
+}
+
+func unsupportedImportDivergence(finding ReviewFinding, input Input) bool {
+	text := importDivergenceText(finding)
+	if !isImportDivergenceFinding(finding) {
+		return false
+	}
+	for _, phrase := range []string{"nao existe", "não existe", "ausente", "nao encontrado", "não encontrado", "nao declarado", "não declarado", "fora do diff", "diff nao mostra", "diff não mostra", "sem contexto"} {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	file, ok := filesByPath(input.Files)[finding.File]
+	if !ok {
+		return true
+	}
+	return !evidenceProvesChangedImportUseMismatch(finding.Evidence, file.Patch)
+}
+
+func isImportDivergenceFinding(finding ReviewFinding) bool {
+	return strings.Contains(importDivergenceText(finding), "import") || strings.Contains(importDivergenceText(finding), "alias")
+}
+
+func importDivergenceText(finding ReviewFinding) string {
+	return strings.ToLower(strings.Join([]string{finding.Category, finding.Title, finding.DecisionReason, finding.Comment, finding.Evidence}, " "))
+}
+
+func evidenceProvesChangedImportUseMismatch(evidence, patch string) bool {
+	evidence = strings.ToLower(evidence)
+	if strings.TrimSpace(evidence) == "" {
+		return false
+	}
+	hasImport, hasUse := false, false
+	for _, line := range strings.Split(patch, "\n") {
+		if !strings.HasPrefix(line, "+") || strings.HasPrefix(line, "+++") {
+			continue
+		}
+		changed := strings.TrimSpace(line[1:])
+		if changed == "" || !strings.Contains(evidence, strings.ToLower(changed)) {
+			continue
+		}
+		lower := strings.ToLower(changed)
+		if strings.Contains(lower, "import ") || strings.HasPrefix(lower, "from ") || strings.Contains(lower, "require(") {
+			hasImport = true
+			continue
+		}
+		if strings.Contains(changed, ".") || strings.Contains(changed, "(") {
+			hasUse = true
+		}
+	}
+	return hasImport && hasUse
 }
 
 func filterExistingPaths(values []string, allowed []string) []string {

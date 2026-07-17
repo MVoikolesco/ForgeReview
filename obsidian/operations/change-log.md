@@ -10,11 +10,27 @@ Record meaningful changes using this structure:
 - **Notes updated:** Related vault notes.
 - **Limitations:** Remaining constraints or risks.
 
+## 2026-07-17 — Classificação de segurança do endpoint Ollama
+
+- **Outcome:** Um nome `Ollama local` não habilita mais endpoint remoto sem chave. Apenas URLs loopback permitem modo sem Bearer; endpoints remotos exigem ciphertext e o worker falha fechado quando ele falta.
+- **Scope:** `internal/ai/auth.go`, create/update/setup/catalog/test em `internal/admin`, `internal/reviewconfig`, migration 009, wizard e regressões Go.
+- **Validation:** 2026-07-17: `gofmt`, `go test ./...`, `web-admin npm run lint`, `web-admin npm run build` e `git diff --check` passaram. O build mantém o aviso não bloqueante de múltiplos lockfiles do Next.js.
+- **Notes updated:** [[../architecture/overview|Architecture]], [[../decisions/log|Decision Log]].
+- **Limitations:** A migration não classifica loopback e exige reconfiguração de toda conexão legada; o runtime aceita somente URLs loopback verificáveis para novas conexões sem chave.
+
+## 2026-07-17 — Migração fail-closed e erros remotos sanitizados
+
+- **Outcome:** A migration 009 não usa mais heurística SQL para reconhecer loopback: toda conexão legada sem chave cifrada fica desabilitada até reconfiguração. Catálogo e teste de conexão não refletem bodies de erro de providers.
+- **Scope:** `internal/store/migrations/009_ai_connection_secret.sql`, `internal/ai/auth_test.go`, `internal/admin/handler.go`, `internal/admin/setup.go`, e regressões de store/admin.
+- **Validation:** 2026-07-17: `gofmt`, `go test ./...`, `web-admin npm run lint`, `web-admin npm run build` e `git diff --check` passaram. O build mantém o aviso não bloqueante de múltiplos lockfiles do Next.js.
+- **Notes updated:** [[../architecture/overview|Architecture]], [[../decisions/log|Decision Log]].
+- **Limitations:** Operadores precisam reabilitar explicitamente conexões legadas, inclusive Ollama local; respostas sanitizadas preservam somente contexto e status HTTP.
+
 ## 2026-07-17 — Falha fechada na criação genérica de conexões de IA
 
 - **Outcome:** A criação genérica agora classifica autenticação pelo `auth_type` persistido do provider, com exceção explícita apenas para Ollama local. Gemini e Groq sem chave são rejeitados antes de criar conexão ativa.
 - **Scope:** `internal/admin/handler.go`, `internal/admin/handler_test.go`.
-- **Validation:** Pendente da validação direcionada admin/store, suíte Go completa e verificação de diff.
+- **Validation:** 2026-07-17: `gofmt -w internal/admin/handler.go internal/admin/handler_test.go`, `go test -count=1 ./internal/admin ./internal/store`, `go test -count=1 ./...` e `git diff --check` passaram.
 - **Notes updated:** [[../architecture/overview|Architecture]].
 - **Limitations:** A distinção de Ollama local continua limitada aos endpoints locais e ao nome `Ollama local` aceitos pelo contrato atual.
 
@@ -28,19 +44,19 @@ Record meaningful changes using this structure:
 
 ## 2026-07-17 — Cobertura de autenticação para conexões legadas
 
-- **Outcome:** A migração 009 agora desabilita toda conexão legada autenticada sem ciphertext, com base no `auth_type` do provider; Gemini e Groq são incluídos. O catálogo local do Ollama descarta uma API key fornecida e não transmite Bearer.
+- **Outcome:** A migração 009 desabilita toda conexão legada sem ciphertext, sem tentar inferir loopback por SQL; Gemini, Groq e Ollama legado são incluídos. O catálogo local do Ollama descarta uma API key fornecida e não transmite Bearer.
 - **Scope:** `internal/store/migrations/009_ai_connection_secret.sql`, `internal/store/store_test.go`, `internal/admin/setup.go`, `internal/admin/setup_test.go`.
 - **Validation:** 2026-07-17: `gofmt` nos Go afetados, `go test ./...`, `web-admin npm run lint`, `web-admin npm run build` e `git diff --check` passaram. O build mantém o aviso não bloqueante de múltiplos lockfiles e raiz inferida pelo Next.js.
 - **Notes updated:** [[../architecture/overview|Architecture]], [[../decisions/log|Decision Log]].
-- **Limitations:** A identificação de Ollama Cloud legado continua dependente do endpoint `https://ollama.com` ou do nome histórico `Ollama Cloud`.
+- **Limitations:** Conexões legadas, incluindo Ollama local, exigem reconfiguração explícita antes de reativação.
 
 ## 2026-07-17 — Falha fechada por autenticação de conexão de IA
 
-- **Outcome:** Ollama Cloud e OpenRouter agora usam uma classificação explícita por conexão, decriptam a chave SQLite e enviam Bearer; Ollama local permanece sem chave. Conexões autenticadas legadas sem ciphertext são desabilitadas e ciphertext inválido é rejeitado.
+- **Outcome:** Ollama Cloud e OpenRouter usam uma classificação explícita por conexão, decriptam a chave SQLite e enviam Bearer; novas conexões Ollama loopback permanecem sem chave. Toda conexão legada sem ciphertext é desabilitada e ciphertext inválido é rejeitado.
 - **Scope:** `internal/store/migrations/009_ai_connection_secret.sql`, `internal/admin`, `internal/reviewconfig`, wizard de conexões e testes de regressão.
 - **Validation:** 2026-07-17: `gofmt` nos Go alterados, `go test -count=1 ./...`, `go vet ./...`, `web-admin npm run lint`, `web-admin npm run build` e `git diff --check` passaram. Busca estática em Go encontrou `api_key_env_name` somente nos fixtures de migração de `internal/store/store_test.go`; não há uso runtime. Os testes cobrem ciphertext SQLite e Bearer para Ollama Cloud/OpenRouter e a ausência de segredo para Ollama local. O build mantém o aviso não bloqueante de dois lockfiles e da raiz inferida pelo Next.js.
 - **Notes updated:** [[../architecture/overview|Architecture]], [[../architecture/feature-map|Feature Map]], [[../decisions/log|Decision Log]].
-- **Limitations:** A classificação de conexões Cloud legadas depende do endpoint `https://ollama.com` ou do nome histórico `Ollama Cloud`; conexões desabilitadas exigem cadastro/rotação da chave.
+- **Limitations:** Conexões legadas desabilitadas exigem reconfiguração e reativação explícitas; não há fallback de ambiente para IA.
 
 ## 2026-07-16 — AI connection model lifecycle
 

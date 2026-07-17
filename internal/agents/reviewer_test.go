@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +15,29 @@ import (
 	"gitea-agents/internal/gitea"
 	"gitea-agents/internal/queue"
 	"gitea-agents/internal/review"
+	"gitea-agents/internal/reviewconfig"
 )
+
+func TestReviewerClientFromCloudConfigSendsBearer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" || r.Header.Get("Authorization") != "Bearer cloud-key" {
+			t.Fatalf("path=%q authorization=%q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		_, _ = w.Write([]byte(`{"message":{"content":"ok"}}`))
+	}))
+	defer server.Close()
+	client, err := reviewerClientFromConfig(&reviewconfig.ReviewConfig{
+		Provider:   reviewconfig.ProviderConfig{Name: "ollama"},
+		Connection: reviewconfig.ConnectionConfig{BaseURL: server.URL, APIKey: "cloud-key"},
+		Model:      reviewconfig.ModelConfig{Name: "cloud-model"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.Chat(context.Background(), "review"); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestReviewerAgentFetchesPullRequestDiff(t *testing.T) {
 	var logs bytes.Buffer
@@ -86,11 +110,11 @@ CONTRATOS_DECLARADOS:
 		t.Fatalf("expected 4 provider calls, got %d", len(ollamaClient.prompts))
 	}
 
-	if !strings.Contains(ollamaClient.prompts[0], "etapa planner") {
+	if !strings.Contains(ollamaClient.prompts[0], "<etapa>planner</etapa>") {
 		t.Fatalf("expected planner prompt, got %q", ollamaClient.prompts[0])
 	}
 
-	if !strings.Contains(ollamaClient.prompts[1], "etapa reviewer") {
+	if !strings.Contains(ollamaClient.prompts[1], "<etapa>reviewer</etapa>") {
 		t.Fatalf("expected reviewer prompt, got %q", ollamaClient.prompts[1])
 	}
 
@@ -98,7 +122,7 @@ CONTRATOS_DECLARADOS:
 		t.Fatalf("expected README to be ignored in pipeline prompts, got %q / %q", ollamaClient.prompts[0], ollamaClient.prompts[1])
 	}
 
-	if !strings.Contains(ollamaClient.prompts[2], "etapa consolidator") || !strings.Contains(ollamaClient.prompts[3], "etapa formatter") {
+	if !strings.Contains(ollamaClient.prompts[2], "<etapa>consolidator</etapa>") || !strings.Contains(ollamaClient.prompts[3], "<etapa>formatter</etapa>") {
 		t.Fatalf("expected consolidator and formatter prompts, got %#v", ollamaClient.prompts)
 	}
 
@@ -547,15 +571,15 @@ func (c *fakeOllamaClient) Chat(ctx context.Context, prompt string) (string, err
 
 func fakePipelineResponse(prompt string) string {
 	switch {
-	case strings.Contains(prompt, "etapa planner"):
-		return `{"pr_summary":"Resumo do PR","risk_level":"medio","risk_areas":["contratos"],"groups":[{"id":"group-1","purpose":"Arquivos Go","files":["internal/app.go","internal/service.go"],"relevant_stacks":["go"],"risk_level":"medio","review_focus":["contratos"]}],"assumptions":[]}`
-	case strings.Contains(prompt, "etapa reviewer"):
+	case strings.Contains(prompt, "<etapa>planner</etapa>"):
+		return `{"pr_summary":"Resumo do PR","risk_level":"medio","risk_areas":["contratos"],"groups":[{"id":"group-1","purpose":"Arquivos Go","files":["internal/app.go","internal/service.go"],"risk_level":"medio","review_focus":["contratos"]}],"assumptions":[]}`
+	case strings.Contains(prompt, "<etapa>reviewer</etapa>"):
 		return `{"group_id":"group-1","reviewed_files":["internal/app.go","internal/service.go"],"findings":[],"review_summary":"Sem achados."}`
-	case strings.Contains(prompt, "etapa consolidator"):
+	case strings.Contains(prompt, "<etapa>consolidator</etapa>"):
 		return `{"pr_summary":"Review final","overall_risk":"baixo","findings":[],"discarded_findings":[]}`
-	case strings.Contains(prompt, "etapa verifier"):
+	case strings.Contains(prompt, "<etapa>verifier</etapa>"):
 		return `{"results":[]}`
-	case strings.Contains(prompt, "etapa formatter"):
+	case strings.Contains(prompt, "<etapa>formatter</etapa>"):
 		return validFinalResponse()
 	}
 	return ""

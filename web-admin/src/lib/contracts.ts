@@ -13,7 +13,7 @@ export type Connection = {
   provider_id: number;
   name: string;
   base_url: string;
-  api_key_env_name: string;
+  api_key_configured: boolean;
   organization_id: string;
   project_id: string;
   http_referer?: string;
@@ -70,7 +70,7 @@ export type SetupDraft = {
   connection: {
     name: string;
     base_url: string;
-    api_key_env_name: string;
+    api_key: string;
     http_referer: string;
     app_title: string;
   };

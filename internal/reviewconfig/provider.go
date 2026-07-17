@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"gitea-agents/internal/ai"
+	"gitea-agents/internal/secrets"
 	"gitea-agents/internal/store"
 )
 
@@ -17,7 +19,7 @@ type ReviewConfig struct {
 	Pipeline   ReviewPipelineConfig
 }
 type ProviderConfig struct{ Name, BaseURL, AuthType string }
-type ConnectionConfig struct{ Name, BaseURL, APIKeyEnvName, HTTPReferer, AppTitle string }
+type ConnectionConfig struct{ Name, BaseURL, APIKey, HTTPReferer, AppTitle string }
 type ModelConfig struct {
 	Name                                           string
 	ContextWindow, MaxOutputTokens                 int
@@ -76,15 +78,18 @@ func (p SQLiteProvider) GetConfig(ctx context.Context, repo string) (*ReviewConf
 }
 
 func (p SQLiteProvider) loadModelConfig(ctx context.Context, c *ReviewConfig, modelID sql.NullInt64) error {
-	q := `SELECT ap.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ap.auth_type, ac.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ac.api_key_env_name,ac.http_referer,ac.app_title,am.provider_model_name,am.context_window,am.max_output_tokens,am.supports_json,am.supports_tools,am.supports_streaming,COALESCE(mp.temperature,0),COALESCE(mp.top_p,0),COALESCE(mp.repeat_penalty,0),COALESCE(mp.num_ctx,0),COALESCE(mp.num_threads,0),COALESCE(mp.num_predict,0),mp.keep_alive,mp.timeout_seconds,mp.unload_model_after_review FROM ai_models am JOIN ai_connections ac ON ac.id=am.connection_id AND ac.is_enabled=1 JOIN ai_providers ap ON ap.id=ac.provider_id AND ap.is_enabled=1 JOIN model_parameters mp ON mp.model_id=am.id WHERE am.is_enabled=1 AND am.id=?`
+	q := `SELECT ap.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ap.auth_type, ac.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ac.api_key_ciphertext,ac.requires_auth,ac.id,ac.http_referer,ac.app_title,am.provider_model_name,am.context_window,am.max_output_tokens,am.supports_json,am.supports_tools,am.supports_streaming,COALESCE(mp.temperature,0),COALESCE(mp.top_p,0),COALESCE(mp.repeat_penalty,0),COALESCE(mp.num_ctx,0),COALESCE(mp.num_threads,0),COALESCE(mp.num_predict,0),mp.keep_alive,mp.timeout_seconds,mp.unload_model_after_review FROM ai_models am JOIN ai_connections ac ON ac.id=am.connection_id AND ac.is_enabled=1 JOIN ai_providers ap ON ap.id=ac.provider_id AND ap.is_enabled=1 JOIN model_parameters mp ON mp.model_id=am.id WHERE am.is_enabled=1 AND am.id=?`
 	args := []any{}
 	if modelID.Valid {
 		args = append(args, modelID.Int64)
 	} else {
-		q = `SELECT ap.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ap.auth_type, ac.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ac.api_key_env_name,ac.http_referer,ac.app_title,am.provider_model_name,am.context_window,am.max_output_tokens,am.supports_json,am.supports_tools,am.supports_streaming,COALESCE(mp.temperature,0),COALESCE(mp.top_p,0),COALESCE(mp.repeat_penalty,0),COALESCE(mp.num_ctx,0),COALESCE(mp.num_threads,0),COALESCE(mp.num_predict,0),mp.keep_alive,mp.timeout_seconds,mp.unload_model_after_review FROM ai_providers ap JOIN ai_connections ac ON ac.provider_id=ap.id AND ac.is_enabled=1 AND ac.is_default=1 JOIN ai_models am ON am.connection_id=ac.id AND am.is_enabled=1 AND am.is_default=1 JOIN model_parameters mp ON mp.model_id=am.id WHERE ap.is_enabled=1 AND ap.is_default=1 LIMIT 1`
+		q = `SELECT ap.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ap.auth_type, ac.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ac.api_key_ciphertext,ac.requires_auth,ac.id,ac.http_referer,ac.app_title,am.provider_model_name,am.context_window,am.max_output_tokens,am.supports_json,am.supports_tools,am.supports_streaming,COALESCE(mp.temperature,0),COALESCE(mp.top_p,0),COALESCE(mp.repeat_penalty,0),COALESCE(mp.num_ctx,0),COALESCE(mp.num_threads,0),COALESCE(mp.num_predict,0),mp.keep_alive,mp.timeout_seconds,mp.unload_model_after_review FROM ai_providers ap JOIN ai_connections ac ON ac.provider_id=ap.id AND ac.is_enabled=1 AND ac.is_default=1 JOIN ai_models am ON am.connection_id=ac.id AND am.is_enabled=1 AND am.is_default=1 JOIN model_parameters mp ON mp.model_id=am.id WHERE ap.is_enabled=1 AND ap.is_default=1 LIMIT 1`
 	}
 	var a, b, d, e bool
-	err := p.Store.DB.QueryRowContext(ctx, q, args...).Scan(&c.Provider.Name, &c.Provider.BaseURL, &c.Provider.AuthType, &c.Connection.Name, &c.Connection.BaseURL, &c.Connection.APIKeyEnvName, &c.Connection.HTTPReferer, &c.Connection.AppTitle, &c.Model.Name, &c.Model.ContextWindow, &c.Model.MaxOutputTokens, &a, &b, &d, &c.Parameters.Temperature, &c.Parameters.TopP, &c.Parameters.RepeatPenalty, &c.Parameters.NumCtx, &c.Parameters.NumThreads, &c.Parameters.NumPredict, &c.Parameters.KeepAlive, &c.Parameters.TimeoutSeconds, &e)
+	var ciphertext string
+	var requiresAuth bool
+	var connectionID int64
+	err := p.Store.DB.QueryRowContext(ctx, q, args...).Scan(&c.Provider.Name, &c.Provider.BaseURL, &c.Provider.AuthType, &c.Connection.Name, &c.Connection.BaseURL, &ciphertext, &requiresAuth, &connectionID, &c.Connection.HTTPReferer, &c.Connection.AppTitle, &c.Model.Name, &c.Model.ContextWindow, &c.Model.MaxOutputTokens, &a, &b, &d, &c.Parameters.Temperature, &c.Parameters.TopP, &c.Parameters.RepeatPenalty, &c.Parameters.NumCtx, &c.Parameters.NumThreads, &c.Parameters.NumPredict, &c.Parameters.KeepAlive, &c.Parameters.TimeoutSeconds, &e)
 	if err == sql.ErrNoRows && !modelID.Valid {
 		return ErrConfigNotFound
 	}
@@ -93,6 +98,12 @@ func (p SQLiteProvider) loadModelConfig(ctx context.Context, c *ReviewConfig, mo
 	}
 	if err != nil {
 		return fmt.Errorf("load model config: %w", err)
+	}
+	if ai.ConnectionRequiresAuthentication(c.Provider.Name, c.Provider.AuthType, c.Connection.BaseURL) {
+		c.Connection.APIKey, err = secrets.Decrypt(ciphertext, secrets.ConnectionKeyAAD(connectionID))
+		if err != nil || c.Connection.APIKey == "" {
+			return fmt.Errorf("stored API key is unavailable")
+		}
 	}
 	c.Model.SupportsJSON = a
 	c.Model.SupportsTools = b

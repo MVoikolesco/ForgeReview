@@ -5,18 +5,20 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
 	"strings"
+
+	"gitea-agents/internal/ai"
+	"gitea-agents/internal/secrets"
 )
 
 type setupConnection struct {
-	Name          string `json:"name"`
-	BaseURL       string `json:"base_url"`
-	APIKeyEnvName string `json:"api_key_env_name"`
-	HTTPReferer   string `json:"http_referer"`
-	AppTitle      string `json:"app_title"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	BaseURL     string `json:"base_url"`
+	APIKey      string `json:"api_key"`
+	HTTPReferer string `json:"http_referer"`
+	AppTitle    string `json:"app_title"`
 }
 type catalogModel struct {
 	ID                  string   `json:"id"`
@@ -93,7 +95,7 @@ func (h Handler) setupRoute(w http.ResponseWriter, r *http.Request, action strin
 }
 
 func normalizeConnection(provider string, c setupConnection) setupConnection {
-	cloudOllama := provider == "ollama-cloud" || (provider == "ollama" && strings.TrimSpace(c.APIKeyEnvName) != "")
+	cloudOllama := provider == "ollama-cloud"
 	c.BaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
 	if c.Name == "" {
 		if provider == "openrouter" {
@@ -110,14 +112,8 @@ func normalizeConnection(provider string, c setupConnection) setupConnection {
 		} else if cloudOllama {
 			c.BaseURL = "https://ollama.com"
 		} else {
-			c.BaseURL = "http://host.docker.internal:11434"
+			c.BaseURL = "http://localhost:11434"
 		}
-	}
-	if provider == "openrouter" && c.APIKeyEnvName == "" {
-		c.APIKeyEnvName = "OPENROUTER_API_KEY"
-	}
-	if cloudOllama && c.APIKeyEnvName == "" {
-		c.APIKeyEnvName = "OLLAMA_API_KEY"
 	}
 	return c
 }
@@ -129,6 +125,10 @@ func setupProviderName(provider string) string {
 	return provider
 }
 
+func setupRequiresAuthentication(provider, baseURL string) bool {
+	return ai.ConnectionRequiresAuthentication(setupProviderName(provider), map[string]string{"openrouter": "bearer"}[setupProviderName(provider)], baseURL)
+}
+
 func (h Handler) providerCatalog(w http.ResponseWriter, r *http.Request) {
 	var input catalogRequest
 	if json.NewDecoder(r.Body).Decode(&input) != nil {
@@ -136,11 +136,36 @@ func (h Handler) providerCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Connection = normalizeConnection(input.Provider, input.Connection)
+	ollamaCloud := setupRequiresAuthentication(input.Provider, input.Connection.BaseURL)
+	if input.Connection.ID > 0 {
+		var providerName, authType, ciphertext, baseURL string
+		if err := h.db.QueryRowContext(r.Context(), "SELECT p.name,p.auth_type,COALESCE(NULLIF(c.base_url,''),p.base_url),c.api_key_ciphertext FROM ai_connections c JOIN ai_providers p ON p.id=c.provider_id WHERE c.id=? AND c.is_enabled=1", input.Connection.ID).Scan(&providerName, &authType, &baseURL, &ciphertext); err != nil {
+			writeError(w, 400, "conexão armazenada ausente ou inativa")
+			return
+		}
+		input.Connection.BaseURL = baseURL
+		ollamaCloud = ai.ConnectionRequiresAuthentication(providerName, authType, baseURL)
+		if ollamaCloud {
+			ollamaCloud = true
+			if input.Connection.APIKey == "" {
+				key, err := secrets.Decrypt(ciphertext, secrets.ConnectionKeyAAD(input.Connection.ID))
+				if err != nil || key == "" {
+					writeError(w, 400, "API key armazenada ausente ou inválida")
+					return
+				}
+				input.Connection.APIKey = key
+			}
+		}
+	}
+	if ollamaCloud && strings.TrimSpace(input.Connection.APIKey) == "" {
+		writeError(w, 400, "API key é obrigatória para esta conexão")
+		return
+	}
 	switch setupProviderName(input.Provider) {
 	case "openrouter":
 		h.openRouterCatalog(w, r, input.Connection)
 	case "ollama":
-		h.ollamaCatalog(w, r, input.Connection)
+		h.ollamaCatalog(w, r, input.Connection, ollamaCloud)
 	default:
 		writeError(w, 400, "O wizard oferece suporte a Ollama e OpenRouter")
 	}
@@ -162,34 +187,21 @@ func providerRequest(ctx context.Context, method, url, key string, c setupConnec
 	}
 	return req, nil
 }
-func responseError(res *http.Response) string {
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-	var payload struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if json.Unmarshal(body, &payload) == nil && payload.Error.Message != "" {
-		return payload.Error.Message
-	}
-	return strings.TrimSpace(string(body))
-}
-
 func (h Handler) openRouterCatalog(w http.ResponseWriter, r *http.Request, c setupConnection) {
-	key := os.Getenv(c.APIKeyEnvName)
+	key := c.APIKey
 	if key == "" {
-		writeError(w, 400, fmt.Sprintf("A variável %s não está definida no ambiente da API", c.APIKeyEnvName))
+		writeError(w, 400, "API key é obrigatória para OpenRouter")
 		return
 	}
 	keyReq, _ := providerRequest(r.Context(), http.MethodGet, c.BaseURL+"/key", key, c)
 	keyRes, err := h.http.Do(keyReq)
 	if err != nil {
-		writeError(w, 502, err.Error())
+		writeError(w, 502, "não foi possível validar a chave com OpenRouter")
 		return
 	}
 	defer keyRes.Body.Close()
 	if keyRes.StatusCode < 200 || keyRes.StatusCode >= 300 {
-		writeError(w, 502, fmt.Sprintf("OpenRouter recusou a chave (%d): %s", keyRes.StatusCode, responseError(keyRes)))
+		writeError(w, 502, fmt.Sprintf("OpenRouter recusou a chave (HTTP %d)", keyRes.StatusCode))
 		return
 	}
 	var keyInfo map[string]any
@@ -199,12 +211,12 @@ func (h Handler) openRouterCatalog(w http.ResponseWriter, r *http.Request, c set
 	modelsReq, _ := providerRequest(r.Context(), http.MethodGet, c.BaseURL+"/models?output_modalities=text", key, c)
 	modelsRes, err := h.http.Do(modelsReq)
 	if err != nil {
-		writeError(w, 502, err.Error())
+		writeError(w, 502, "não foi possível consultar modelos OpenRouter")
 		return
 	}
 	defer modelsRes.Body.Close()
 	if modelsRes.StatusCode < 200 || modelsRes.StatusCode >= 300 {
-		writeError(w, 502, fmt.Sprintf("Falha ao consultar modelos OpenRouter (%d): %s", modelsRes.StatusCode, responseError(modelsRes)))
+		writeError(w, 502, fmt.Sprintf("Falha ao consultar modelos OpenRouter (HTTP %d)", modelsRes.StatusCode))
 		return
 	}
 	var payload struct {
@@ -219,7 +231,7 @@ func (h Handler) openRouterCatalog(w http.ResponseWriter, r *http.Request, c set
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(modelsRes.Body).Decode(&payload); err != nil {
-		writeError(w, 502, err.Error())
+		writeError(w, 502, "OpenRouter retornou um catálogo de modelos inválido")
 		return
 	}
 	models := make([]catalogModel, 0, len(payload.Data))
@@ -229,24 +241,20 @@ func (h Handler) openRouterCatalog(w http.ResponseWriter, r *http.Request, c set
 	writeJSON(w, 200, map[string]any{"provider": "openrouter", "connection_ok": true, "models": models, "account": keyInfo["data"]})
 }
 
-func (h Handler) ollamaCatalog(w http.ResponseWriter, r *http.Request, c setupConnection) {
+func (h Handler) ollamaCatalog(w http.ResponseWriter, r *http.Request, c setupConnection, cloud bool) {
 	key := ""
-	if c.APIKeyEnvName != "" {
-		key = os.Getenv(c.APIKeyEnvName)
-		if key == "" {
-			writeError(w, 400, fmt.Sprintf("A variável %s não está definida no ambiente da API", c.APIKeyEnvName))
-			return
-		}
+	if cloud {
+		key = c.APIKey
 	}
 	req, _ := providerRequest(r.Context(), http.MethodGet, c.BaseURL+"/api/tags", key, c)
 	res, err := h.http.Do(req)
 	if err != nil {
-		writeError(w, 502, "Não foi possível acessar o Ollama: "+err.Error())
+		writeError(w, 502, "não foi possível acessar o Ollama")
 		return
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		writeError(w, 502, fmt.Sprintf("Ollama respondeu HTTP %d: %s", res.StatusCode, responseError(res)))
+		writeError(w, 502, fmt.Sprintf("Ollama respondeu HTTP %d", res.StatusCode))
 		return
 	}
 	var payload struct {
@@ -256,7 +264,7 @@ func (h Handler) ollamaCatalog(w http.ResponseWriter, r *http.Request, c setupCo
 		}
 	}
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
-		writeError(w, 502, err.Error())
+		writeError(w, 502, "Ollama retornou um catálogo de modelos inválido")
 		return
 	}
 	models := make([]catalogModel, 0, len(payload.Models))
@@ -307,6 +315,11 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "Modelo e profile são obrigatórios")
 		return
 	}
+	requiresAuth := setupRequiresAuthentication(input.Provider, input.Connection.BaseURL)
+	if requiresAuth && strings.TrimSpace(input.Connection.APIKey) == "" {
+		writeError(w, 400, "API key é obrigatória para esta conexão")
+		return
+	}
 	tx, err := h.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, 500, err.Error())
@@ -319,12 +332,23 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = tx.ExecContext(r.Context(), "UPDATE ai_connections SET is_default=0 WHERE provider_id=? AND is_default=1", providerID)
-	connectionResult, err := tx.ExecContext(r.Context(), `INSERT INTO ai_connections(provider_id,name,base_url,api_key_env_name,http_referer,app_title,is_default,is_enabled) VALUES(?,?,?,?,?,?,1,1)`, providerID, input.Connection.Name, input.Connection.BaseURL, input.Connection.APIKeyEnvName, input.Connection.HTTPReferer, input.Connection.AppTitle)
+	connectionResult, err := tx.ExecContext(r.Context(), `INSERT INTO ai_connections(provider_id,name,base_url,requires_auth,http_referer,app_title,is_default,is_enabled) VALUES(?,?,?,?,?,?,1,1)`, providerID, input.Connection.Name, input.Connection.BaseURL, boolInt(requiresAuth), input.Connection.HTTPReferer, input.Connection.AppTitle)
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
 	}
 	connectionID, _ := connectionResult.LastInsertId()
+	if requiresAuth && input.Connection.APIKey != "" {
+		ciphertext, cryptErr := secrets.Encrypt(input.Connection.APIKey, secrets.ConnectionKeyAAD(connectionID))
+		if cryptErr != nil {
+			writeError(w, 400, "não foi possível proteger a API key")
+			return
+		}
+		if _, err = tx.ExecContext(r.Context(), "UPDATE ai_connections SET api_key_ciphertext=? WHERE id=?", ciphertext, connectionID); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+	}
 	maxTokens := 0
 	if providerName == "openrouter" {
 		// max_completion_tokens from the catalog is a model capability, not a

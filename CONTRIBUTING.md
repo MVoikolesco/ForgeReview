@@ -34,6 +34,7 @@ docker run --rm -v "${PWD}:/app" -w /app golang:1.22-alpine go test ./...
 - Prefira interfaces simples e explicitas.
 - Nao esconda erros importantes.
 - Nao escreva tokens, diffs completos ou dados sensiveis no stdout quando isso puder vazar informacao.
+- Chaves de IA são write-only, cifradas no SQLite e não podem usar `.env` como fallback.
 - Preserve logs fisicos que ajudam a auditar prompts, diffs e respostas.
 
 ## Prompts
@@ -42,10 +43,10 @@ Prompts devem ser faceis de editar por quem nao quer mexer em Go.
 
 Ao alterar prompts:
 
-- Edite arquivos em `prompts/base/` ou `prompts/stacks/`.
-- Edite os patterns em `config/review-prompts.yaml`.
+- Edite os quatro arquivos em `prompts/`: revisão técnica, segurança/performance, divergências de importação e formato final.
+- Mantenha os caminhos desses arquivos e somente os filtros de arquivos em `config/review-prompts.yaml`.
 - Nao coloque regra especifica de projeto no YAML.
-- Prefira stacks autodetectadas por arquivo.
+- Não há seleção ou composição de prompts por stack.
 - Mantenha prompts curtos, objetivos e acionaveis.
 - Nao altere a estrutura de entrada ou resposta base apenas pelo Markdown.
 - Nao instrua o modelo a responder em JSON, Markdown livre ou outro formato sem atualizar o parser.

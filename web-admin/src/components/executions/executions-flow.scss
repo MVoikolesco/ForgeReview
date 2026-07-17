@@ -29,7 +29,7 @@
   gap: 24px;
   position: relative;
   overflow: hidden;
-  padding: 20px 22px;
+  padding: 20px 22px !important;
 
   &::after {
     content: "";
@@ -153,11 +153,41 @@
   }
 }
 
-.execution-history { @include mixins.card; display: grid; gap: 9px; padding: 17px; }
-.execution-history header { display: flex; align-items: center; justify-content: space-between; color: tokens.$muted; font-size: 11px; }
-.execution-history select { min-width: 0; border: 1px solid tokens.$line; border-radius: 9px; padding: 9px; color: tokens.$ink; background: tokens.$surface; font-size: 11px; }
-.execution-history .secondary-button { min-height: 32px; padding: 0 10px; font-size: 10px; }
-.execution-history small { color: tokens.$muted; font-size: 9px; }
+.execution-history {
+  @include mixins.card;
+  display: grid;
+  gap: 9px;
+  padding: 17px !important;
+}
+
+.execution-history header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: tokens.$muted;
+  font-size: 11px;
+}
+
+.execution-history select {
+  min-width: 0;
+  border: 1px solid tokens.$line;
+  border-radius: 9px;
+  padding: 9px;
+  color: tokens.$ink;
+  background: tokens.$surface;
+  font-size: 11px;
+}
+
+.execution-history .secondary-button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 10px;
+}
+
+.execution-history small {
+  color: tokens.$muted;
+  font-size: 9px;
+}
 
 .execution-flow-panel {
   @include mixins.card;

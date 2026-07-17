@@ -2,12 +2,11 @@ package gitea
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"database/sql"
-	"encoding/base64"
 	"fmt"
 	"os"
+
+	"gitea-agents/internal/secrets"
 )
 
 // ClientResolver selects the configured Gitea instance for a repository. The
@@ -54,22 +53,5 @@ func (r *ClientResolver) Resolve(ctx context.Context, instanceID int64, owner, r
 }
 
 func decryptToken(value string) (string, error) {
-	key := []byte(os.Getenv("GITEA_TOKEN_ENCRYPTION_KEY"))
-	if len(key) != 32 {
-		return "", fmt.Errorf("invalid encryption key")
-	}
-	raw, err := base64.StdEncoding.DecodeString(value)
-	if err != nil {
-		return "", err
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	g, err := cipher.NewGCM(block)
-	if err != nil || len(raw) < g.NonceSize() {
-		return "", fmt.Errorf("invalid token")
-	}
-	plain, err := g.Open(nil, raw[:g.NonceSize()], raw[g.NonceSize():], nil)
-	return string(plain), err
+	return secrets.Decrypt(value, nil)
 }

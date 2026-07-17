@@ -185,21 +185,12 @@ func (a *ReviewerAgent) Process(ctx context.Context, job queue.ReviewJob) error 
 func reviewerClientFromConfig(cfg *reviewconfig.ReviewConfig) (AIReviewerClient, error) {
 	switch cfg.Provider.Name {
 	case "ollama":
-		var key string
-		if cfg.Connection.APIKeyEnvName != "" {
-			key = os.Getenv(cfg.Connection.APIKeyEnvName)
-			if key == "" {
-				return nil, fmt.Errorf("Ollama secret environment variable %q is not set", cfg.Connection.APIKeyEnvName)
-			}
-		}
+		key := cfg.Connection.APIKey
 		return ollama.NewClient(ollama.Config{URL: cfg.Connection.BaseURL, Model: cfg.Model.Name, APIKey: key, Options: ollama.Options{Temperature: cfg.Parameters.Temperature, TopP: cfg.Parameters.TopP, RepeatPenalty: cfg.Parameters.RepeatPenalty, NumCtx: cfg.Parameters.NumCtx, NumThread: cfg.Parameters.NumThreads, NumPredict: cfg.Parameters.NumPredict}, KeepAlive: cfg.Parameters.KeepAlive, TimeoutSeconds: cfg.Parameters.TimeoutSeconds}), nil
 	case "openrouter":
-		if cfg.Connection.APIKeyEnvName == "" {
-			return nil, fmt.Errorf("OpenRouter connection has no API key environment variable configured")
-		}
-		key := os.Getenv(cfg.Connection.APIKeyEnvName)
+		key := cfg.Connection.APIKey
 		if key == "" {
-			return nil, fmt.Errorf("OpenRouter secret environment variable %q is not set", cfg.Connection.APIKeyEnvName)
+			return nil, fmt.Errorf("OpenRouter stored API key is unavailable")
 		}
 		return openrouter.NewClient(openrouter.Config{URL: cfg.Connection.BaseURL, Model: cfg.Model.Name, APIKey: key, HTTPReferer: cfg.Connection.HTTPReferer, AppTitle: cfg.Connection.AppTitle, Temperature: cfg.Parameters.Temperature, TopP: cfg.Parameters.TopP, ContextWindow: cfg.Model.ContextWindow, MaxTokens: cfg.Model.MaxOutputTokens, TimeoutSeconds: cfg.Parameters.TimeoutSeconds}), nil
 	default:
@@ -368,7 +359,7 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 		return nil
 	}
 
-	basePrompt, err := promptResolver.ResolvePartialPrompt(ctx, job.Owner, job.Repo, nil)
+	prompts, err := promptResolver.ResolvePrompts(ctx)
 	if err != nil {
 		return err
 	}
@@ -376,7 +367,7 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 	if author == "" {
 		author = job.Sender
 	}
-	input := pipeline.Input{Owner: job.Owner, Repository: job.Repo, PullRequestNumber: job.PRNumber, Title: job.Title, Description: job.Description, Author: author, BaseBranch: job.BaseBranch, HeadBranch: job.HeadBranch, Files: reviewable, Stacks: basePrompt.Stacks, GlobalRules: basePrompt.Content}
+	input := pipeline.Input{Owner: job.Owner, Repository: job.Repo, PullRequestNumber: job.PRNumber, Title: job.Title, Description: job.Description, Author: author, BaseBranch: job.BaseBranch, HeadBranch: job.HeadBranch, Files: reviewable, Prompts: prompts}
 	cfg := pipelineConfigFromEnv()
 	if a.options.PipelineConfigSet {
 		cfg = mergePipelineConfig(cfg, a.options.PipelineConfig)
@@ -402,12 +393,6 @@ func (a *ReviewerAgent) processPipeline(ctx context.Context, job queue.ReviewJob
 		if err := runLog.AppendProcess(format, args...); err != nil {
 			a.logger.Printf("erro ao gravar log de processo do review: %v", err)
 		}
-	}, StackRules: func(ctx context.Context, files []string) (string, []string, error) {
-		resolved, err := promptResolver.ResolvePartialPrompt(ctx, job.Owner, job.Repo, files)
-		if err != nil {
-			return "", nil, err
-		}
-		return resolved.Content, resolved.Stacks, nil
 	}}
 	started := time.Now()
 	finalResponse, finalReview, metadata, err := runner.Run(ctx, input)

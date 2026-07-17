@@ -1,5 +1,4 @@
-// Package admin exposes administrative configuration only. Secrets are referenced
-// by environment-variable name and are never read back through CRUD responses.
+// Package admin exposes administrative configuration only. Secrets are write-only.
 package admin
 
 import (
@@ -7,15 +6,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"gitea-agents/internal/ai"
 	"gitea-agents/internal/queue"
+	"gitea-agents/internal/secrets"
 	"gitea-agents/internal/store"
 )
 
@@ -240,6 +239,10 @@ func scanSingle(row *sql.Row, cols []string) (map[string]any, error) {
 func rowMap(cols []string, v []any) map[string]any {
 	m := map[string]any{}
 	for i, c := range cols {
+		if c == "api_key_ciphertext" {
+			m["api_key_configured"] = v[i] != nil && fmt.Sprint(v[i]) != ""
+			continue
+		}
 		if c == "token_ciphertext" {
 			continue
 		}
@@ -282,9 +285,47 @@ func (h Handler) update(w http.ResponseWriter, r *http.Request, t string, id int
 func (h Handler) write(w http.ResponseWriter, r *http.Request, t string, id int64, m map[string]any) {
 	delete(m, "id")
 	delete(m, "api_key_ciphertext")
+	apiKey, hasAPIKey := m["api_key"]
+	delete(m, "api_key")
 	delete(m, "token_ciphertext")
 	if t == "gitea_instances" {
 		delete(m, "token")
+	}
+	if t == "ai_connections" {
+		delete(m, "requires_auth") // Authentication classification is server-owned and immutable.
+	}
+	if t == "ai_connections" {
+		var providerName, authType string
+		providerID, ok := m["provider_id"]
+		var currentBaseURL, ciphertext string
+		if id > 0 {
+			var currentProviderID any
+			if err := h.db.QueryRowContext(r.Context(), "SELECT provider_id,base_url,api_key_ciphertext FROM ai_connections WHERE id=?", id).Scan(&currentProviderID, &currentBaseURL, &ciphertext); err != nil {
+				writeError(w, 404, "not found")
+				return
+			}
+			if !ok {
+				providerID = currentProviderID
+			}
+			ok = true
+		}
+		if !ok || h.db.QueryRowContext(r.Context(), "SELECT name,auth_type FROM ai_providers WHERE id=?", providerID).Scan(&providerName, &authType) != nil {
+			writeError(w, 400, "provider_id inválido")
+			return
+		}
+		baseURL := currentBaseURL
+		if value, present := m["base_url"]; present {
+			baseURL = fmt.Sprint(value)
+		}
+		requiresAuth := ai.ConnectionRequiresAuthentication(providerName, authType, baseURL)
+		m["requires_auth"] = boolInt(requiresAuth)
+		if !requiresAuth {
+			delete(m, "api_key")
+			hasAPIKey = false
+		} else if (!hasAPIKey || strings.TrimSpace(fmt.Sprint(apiKey)) == "") && (id == 0 || ciphertext == "") {
+			writeError(w, 400, "API key é obrigatória para esta conexão")
+			return
+		}
 	}
 	delete(m, "created_at")
 	delete(m, "updated_at")
@@ -313,13 +354,34 @@ func (h Handler) write(w http.ResponseWriter, r *http.Request, t string, id int6
 		args = append(args, m[k])
 	}
 	if id == 0 {
+		tx, e := h.db.BeginTx(r.Context(), nil)
+		if e != nil {
+			writeError(w, 500, e.Error())
+			return
+		}
+		defer tx.Rollback()
 		q := "INSERT INTO " + t + " (" + strings.Join(keys, ",") + ") VALUES (" + strings.TrimRight(strings.Repeat("?,", len(keys)), ",") + ")"
-		res, e := h.db.ExecContext(r.Context(), q, args...)
+		res, e := tx.ExecContext(r.Context(), q, args...)
 		if e != nil {
 			writeError(w, 400, e.Error())
 			return
 		}
 		id, _ = res.LastInsertId()
+		if hasAPIKey && strings.TrimSpace(fmt.Sprint(apiKey)) != "" {
+			ciphertext, err := secrets.Encrypt(fmt.Sprint(apiKey), secrets.ConnectionKeyAAD(id))
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			if _, err = tx.ExecContext(r.Context(), "UPDATE ai_connections SET api_key_ciphertext=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", ciphertext, id); err != nil {
+				writeError(w, 500, err.Error())
+				return
+			}
+		}
+		if e = tx.Commit(); e != nil {
+			writeError(w, 500, e.Error())
+			return
+		}
 		h.respondOne(w, r, t, id, http.StatusCreated)
 		return
 	}
@@ -338,7 +400,22 @@ func (h Handler) write(w http.ResponseWriter, r *http.Request, t string, id int6
 		writeError(w, 404, "not found")
 		return
 	}
+	if hasAPIKey && strings.TrimSpace(fmt.Sprint(apiKey)) != "" {
+		if err := h.saveConnectionKey(r, id, fmt.Sprint(apiKey)); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+	}
 	h.respondOne(w, r, t, id, 200)
+}
+
+func (h Handler) saveConnectionKey(r *http.Request, id int64, value string) error {
+	ciphertext, err := secrets.Encrypt(value, secrets.ConnectionKeyAAD(id))
+	if err != nil {
+		return fmt.Errorf("não foi possível proteger a API key")
+	}
+	_, err = h.db.ExecContext(r.Context(), "UPDATE ai_connections SET api_key_ciphertext=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", ciphertext, id)
+	return err
 }
 func (h Handler) respondOne(w http.ResponseWriter, r *http.Request, t string, id int64, status int) {
 	cols, e := h.columns(r, t)
@@ -552,8 +629,9 @@ func (h Handler) setDefault(w http.ResponseWriter, r *http.Request, t string, id
 	h.one(w, r, t, id)
 }
 func (h Handler) testConnection(w http.ResponseWriter, r *http.Request, id int64) {
-	var provider, baseURL, keyEnv string
-	e := h.db.QueryRowContext(r.Context(), `SELECT p.name,COALESCE(NULLIF(c.base_url,''),p.base_url),c.api_key_env_name FROM ai_connections c JOIN ai_providers p ON p.id=c.provider_id WHERE c.id=? AND c.is_enabled=1`, id).Scan(&provider, &baseURL, &keyEnv)
+	var provider, baseURL, ciphertext string
+	var authType string
+	e := h.db.QueryRowContext(r.Context(), `SELECT p.name,p.auth_type,COALESCE(NULLIF(c.base_url,''),p.base_url),c.api_key_ciphertext FROM ai_connections c JOIN ai_providers p ON p.id=c.provider_id WHERE c.id=? AND c.is_enabled=1`, id).Scan(&provider, &authType, &baseURL, &ciphertext)
 	if e != nil {
 		writeError(w, 404, "connection not found or disabled")
 		return
@@ -569,23 +647,22 @@ func (h Handler) testConnection(w http.ResponseWriter, r *http.Request, id int64
 		writeError(w, 400, e.Error())
 		return
 	}
-	if keyEnv != "" {
-		key := os.Getenv(keyEnv)
-		if key == "" {
-			writeError(w, 400, fmt.Sprintf("environment variable %s is not set", keyEnv))
+	if ai.ConnectionRequiresAuthentication(provider, authType, baseURL) {
+		key, err := secrets.Decrypt(ciphertext, secrets.ConnectionKeyAAD(id))
+		if err != nil || key == "" {
+			writeError(w, 400, "API key armazenada ausente ou inválida")
 			return
 		}
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	res, e := h.http.Do(req)
 	if e != nil {
-		writeError(w, 502, e.Error())
+		writeError(w, 502, "não foi possível testar a conexão com o provider")
 		return
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(res.Body, 1024))
-		writeError(w, 502, fmt.Sprintf("provider returned %d: %s", res.StatusCode, strings.TrimSpace(string(b))))
+		writeError(w, 502, fmt.Sprintf("provider retornou HTTP %d durante o teste da conexão", res.StatusCode))
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "provider": provider, "status": res.StatusCode})

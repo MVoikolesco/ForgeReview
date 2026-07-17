@@ -52,6 +52,86 @@ func TestGiteaTokenIsEncryptedAndNeverReturned(t *testing.T) {
 	}
 }
 
+func TestAIKeyIsEncryptedWriteOnlyAndFailsClosed(t *testing.T) {
+	t.Setenv("GITEA_TOKEN_ENCRYPTION_KEY", "01234567890123456789012345678901")
+	s, err := store.Open(config.Config{DatabaseDriver: "sqlite", DatabaseDSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Seed(context.Background(), config.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	Register(mux, s, "admin", "secret")
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/ai/connections", strings.NewReader(`{"provider_id":2,"name":"private","base_url":"https://example.test","api_key":"not-returned"}`))
+	req.SetBasicAuth("admin", "secret")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create=%d %s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "not-returned") || strings.Contains(res.Body.String(), "ciphertext") {
+		t.Fatalf("secret leaked: %s", res.Body.String())
+	}
+	var ciphertext string
+	if err = s.DB.QueryRow("SELECT api_key_ciphertext FROM ai_connections WHERE id=1").Scan(&ciphertext); err != nil || ciphertext == "" || ciphertext == "not-returned" {
+		t.Fatalf("ciphertext=%q err=%v", ciphertext, err)
+	}
+	if _, err = s.DB.Exec("UPDATE ai_connections SET api_key_ciphertext='invalid'"); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/ai/connections/1/test", nil)
+	req.SetBasicAuth("admin", "secret")
+	res = httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest || strings.Contains(res.Body.String(), "not-returned") {
+		t.Fatalf("fail closed=%d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestAuthenticatedProvidersRejectConnectionsWithoutAPIKey(t *testing.T) {
+	s, err := store.Open(config.Config{DatabaseDriver: "sqlite", DatabaseDSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Seed(context.Background(), config.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	Register(mux, s, "admin", "secret")
+
+	for _, provider := range []string{"google_gemini", "groq"} {
+		t.Run(provider, func(t *testing.T) {
+			var providerID int64
+			if err := s.DB.QueryRow("SELECT id FROM ai_providers WHERE name=?", provider).Scan(&providerID); err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/admin/ai/connections", strings.NewReader(fmt.Sprintf(`{"provider_id":%d,"name":"%s","base_url":"https://example.test"}`, providerID, provider)))
+			req.SetBasicAuth("admin", "secret")
+			res := httptest.NewRecorder()
+			mux.ServeHTTP(res, req)
+			if res.Code != http.StatusBadRequest {
+				t.Fatalf("create=%d %s", res.Code, res.Body.String())
+			}
+			var count int
+			if err := s.DB.QueryRow("SELECT COUNT(*) FROM ai_connections WHERE provider_id=?", providerID).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 0 {
+				t.Fatalf("connection created without API key: %d", count)
+			}
+		})
+	}
+}
+
 func TestGiteaHasOneConnectionAndDeletesItsRepositories(t *testing.T) {
 	os.Setenv("GITEA_TOKEN_ENCRYPTION_KEY", "01234567890123456789012345678901")
 	defer os.Unsetenv("GITEA_TOKEN_ENCRYPTION_KEY")
