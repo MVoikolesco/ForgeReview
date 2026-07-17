@@ -93,10 +93,13 @@ func (h Handler) setupRoute(w http.ResponseWriter, r *http.Request, action strin
 }
 
 func normalizeConnection(provider string, c setupConnection) setupConnection {
+	cloudOllama := provider == "ollama-cloud" || (provider == "ollama" && strings.TrimSpace(c.APIKeyEnvName) != "")
 	c.BaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
 	if c.Name == "" {
 		if provider == "openrouter" {
 			c.Name = "OpenRouter principal"
+		} else if cloudOllama {
+			c.Name = "Ollama Cloud"
 		} else {
 			c.Name = "Ollama local"
 		}
@@ -104,6 +107,8 @@ func normalizeConnection(provider string, c setupConnection) setupConnection {
 	if c.BaseURL == "" {
 		if provider == "openrouter" {
 			c.BaseURL = "https://openrouter.ai/api/v1"
+		} else if cloudOllama {
+			c.BaseURL = "https://ollama.com"
 		} else {
 			c.BaseURL = "http://host.docker.internal:11434"
 		}
@@ -111,7 +116,17 @@ func normalizeConnection(provider string, c setupConnection) setupConnection {
 	if provider == "openrouter" && c.APIKeyEnvName == "" {
 		c.APIKeyEnvName = "OPENROUTER_API_KEY"
 	}
+	if cloudOllama && c.APIKeyEnvName == "" {
+		c.APIKeyEnvName = "OLLAMA_API_KEY"
+	}
 	return c
+}
+
+func setupProviderName(provider string) string {
+	if provider == "ollama-cloud" {
+		return "ollama"
+	}
+	return provider
 }
 
 func (h Handler) providerCatalog(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +136,7 @@ func (h Handler) providerCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Connection = normalizeConnection(input.Provider, input.Connection)
-	switch input.Provider {
+	switch setupProviderName(input.Provider) {
 	case "openrouter":
 		h.openRouterCatalog(w, r, input.Connection)
 	case "ollama":
@@ -215,7 +230,15 @@ func (h Handler) openRouterCatalog(w http.ResponseWriter, r *http.Request, c set
 }
 
 func (h Handler) ollamaCatalog(w http.ResponseWriter, r *http.Request, c setupConnection) {
-	req, _ := providerRequest(r.Context(), http.MethodGet, c.BaseURL+"/api/tags", "", c)
+	key := ""
+	if c.APIKeyEnvName != "" {
+		key = os.Getenv(c.APIKeyEnvName)
+		if key == "" {
+			writeError(w, 400, fmt.Sprintf("A variável %s não está definida no ambiente da API", c.APIKeyEnvName))
+			return
+		}
+	}
+	req, _ := providerRequest(r.Context(), http.MethodGet, c.BaseURL+"/api/tags", key, c)
 	res, err := h.http.Do(req)
 	if err != nil {
 		writeError(w, 502, "Não foi possível acessar o Ollama: "+err.Error())
@@ -274,11 +297,12 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "JSON inválido")
 		return
 	}
-	if input.Provider != "ollama" && input.Provider != "openrouter" {
+	if input.Provider != "ollama" && input.Provider != "ollama-cloud" && input.Provider != "openrouter" {
 		writeError(w, 400, "Provider não suportado pelo wizard")
 		return
 	}
 	input.Connection = normalizeConnection(input.Provider, input.Connection)
+	providerName := setupProviderName(input.Provider)
 	if input.Model.ID == "" || input.Profile.Name == "" {
 		writeError(w, 400, "Modelo e profile são obrigatórios")
 		return
@@ -290,7 +314,7 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	var providerID int64
-	if err = tx.QueryRowContext(r.Context(), "SELECT id FROM ai_providers WHERE name=? AND is_enabled=1", input.Provider).Scan(&providerID); err != nil {
+	if err = tx.QueryRowContext(r.Context(), "SELECT id FROM ai_providers WHERE name=? AND is_enabled=1", providerName).Scan(&providerID); err != nil {
 		writeError(w, 400, "Provider não está disponível")
 		return
 	}
@@ -302,7 +326,7 @@ func (h Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	connectionID, _ := connectionResult.LastInsertId()
 	maxTokens := 0
-	if input.Provider == "openrouter" {
+	if providerName == "openrouter" {
 		// max_completion_tokens from the catalog is a model capability, not a
 		// sensible amount to request on every completion. Keep the operational
 		// review limit independent from that capability.

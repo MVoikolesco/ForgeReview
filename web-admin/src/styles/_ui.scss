@@ -45,22 +45,23 @@
 
 .primary-button {
   color: white;
-  background: tokens.$ink;
+  background: tokens.$rail;
   box-shadow: 0 4px 12px rgba(23, 33, 28, 0.15);
 
   &:hover:not(:disabled) {
-    background: #1e315c;
+    background: tokens.$ink-2;
     transform: translateY(-1px);
   }
 }
 
 .secondary-button {
   border: 1px solid tokens.$line;
-  background: white;
+  color: tokens.$ink;
+  background: tokens.$surface;
 
   &:hover:not(:disabled) {
-    border-color: #a9b5ad;
-    background: #fafbf9;
+    border-color: tokens.$accent;
+    background: tokens.$surface-hover;
   }
 }
 
@@ -85,6 +86,9 @@
     border: 1px solid #c6dbff;
   }
 }
+
+.console-toast { position: fixed; right: 22px; bottom: 22px; z-index: 100; max-width: min(380px, calc(100vw - 32px)); border: 1px solid #c6dbff; border-radius: tokens.$radius-md; padding: 13px 16px; color: #2458a9; background: #eaf3ff; box-shadow: 0 12px 32px rgba(20, 43, 82, .18); font-size: 13px; }
+.console-toast.error { color: #a53535; border-color: #f2cfcb; background: #fff1ef; }
 
 .status-chip {
   display: inline-flex;
@@ -140,7 +144,7 @@
   .secondary-button {
     color: #cbd4e4;
     border-color: tokens.$line;
-    background: #162237;
+    background: tokens.$surface;
 
     &:hover:not(:disabled) {
       color: white;
@@ -175,5 +179,17 @@
   .default-badge {
     color: #9fc0ff;
     background: #183362;
+  }
+
+  .console-toast {
+    color: #acd0ff;
+    border-color: #295389;
+    background: #173258;
+  }
+
+  .console-toast.error {
+    color: #ffb3b3;
+    border-color: #63313d;
+    background: #3a2028;
   }
 }

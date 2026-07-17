@@ -24,6 +24,7 @@ type Handler struct {
 	username, password string
 	http               *http.Client
 	observer           queue.Observer
+	publisher          queue.Publisher
 	logDir             string
 }
 
@@ -38,6 +39,9 @@ func Register(mux *http.ServeMux, s *store.Store, username, password string, opt
 	for _, value := range optional {
 		if observer, ok := value.(queue.Observer); ok {
 			h.observer = observer
+		}
+		if publisher, ok := value.(queue.Publisher); ok {
+			h.publisher = publisher
 		}
 		if dir, ok := value.(string); ok && dir != "" {
 			h.logDir = dir
@@ -72,6 +76,10 @@ func (h Handler) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(path, "gitea/instances") && h.giteaRoute(w, r, strings.TrimPrefix(path, "gitea/instances")) {
+		return
+	}
+	if path == "reviews/manual" && r.Method == http.MethodPost {
+		h.manualReview(w, r)
 		return
 	}
 	key, table, rest := matchResource(path)

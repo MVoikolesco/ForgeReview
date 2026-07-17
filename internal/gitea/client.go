@@ -33,6 +33,23 @@ type Repository struct {
 	Private bool `json:"private"`
 }
 
+type PullRequest struct {
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	State   string `json:"state"`
+	HTMLURL string `json:"html_url"`
+	User    struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+	Head struct {
+		Ref string `json:"ref"`
+	} `json:"head"`
+}
+
 type PullReview struct {
 	ID    int64  `json:"id"`
 	State string `json:"state"`
@@ -98,6 +115,18 @@ func (c *Client) ListRepositories(ctx context.Context, organization string) ([]R
 		path = "/orgs/" + url.PathEscape(organization) + "/repos?limit=50"
 	}
 	var result []Repository
+	return result, c.doJSON(ctx, path, &result)
+}
+
+func (c *Client) ListPullRequests(ctx context.Context, owner, repo string) ([]PullRequest, error) {
+	var result []PullRequest
+	path := fmt.Sprintf("/repos/%s/%s/pulls?state=open&limit=50", url.PathEscape(owner), url.PathEscape(repo))
+	return result, c.doJSON(ctx, path, &result)
+}
+
+func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number int) (PullRequest, error) {
+	var result PullRequest
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repo), number)
 	return result, c.doJSON(ctx, path, &result)
 }
 

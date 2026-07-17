@@ -13,7 +13,7 @@
 
 .execution-overview {
   display: grid;
-  grid-template-columns: minmax(420px, 1.65fr) repeat(3, minmax(150px, .55fr));
+  grid-template-columns: minmax(420px, 1.65fr) minmax(240px, .75fr);
   gap: 12px;
 
   >article {
@@ -152,6 +152,12 @@
     font-size: 15px;
   }
 }
+
+.execution-history { @include mixins.card; display: grid; gap: 9px; padding: 17px; }
+.execution-history header { display: flex; align-items: center; justify-content: space-between; color: tokens.$muted; font-size: 11px; }
+.execution-history select { min-width: 0; border: 1px solid tokens.$line; border-radius: 9px; padding: 9px; color: tokens.$ink; background: tokens.$surface; font-size: 11px; }
+.execution-history .secondary-button { min-height: 32px; padding: 0 10px; font-size: 10px; }
+.execution-history small { color: tokens.$muted; font-size: 9px; }
 
 .execution-flow-panel {
   @include mixins.card;
@@ -675,11 +681,7 @@
 
 @include bp.wide {
   .execution-overview {
-    grid-template-columns: repeat(3, 1fr);
-  }
-
-  .execution-current {
-    grid-column: 1 / -1;
+    grid-template-columns: minmax(420px, 1.65fr) minmax(280px, .75fr);
   }
 }
 
@@ -689,10 +691,6 @@
   }
 
   .execution-current {
-    grid-column: 1 / -1;
-  }
-
-  .execution-metric:last-child {
     grid-column: 1 / -1;
   }
 
@@ -716,8 +714,7 @@
     grid-template-columns: 1fr;
   }
 
-  .execution-current,
-  .execution-metric:last-child {
+  .execution-current {
     grid-column: auto;
   }
 

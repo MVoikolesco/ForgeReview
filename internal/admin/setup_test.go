@@ -6,9 +6,43 @@ import (
 	"gitea-agents/internal/store"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
+
+func TestOllamaCatalogUsesConfiguredBearerOnlyForCloud(t *testing.T) {
+	for _, test := range []struct {
+		name, key, envName, wantAuth string
+	}{
+		{name: "local"},
+		{name: "cloud", key: "cloud-secret", envName: "TEST_OLLAMA_KEY", wantAuth: "Bearer cloud-secret"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.envName != "" {
+				t.Setenv(test.envName, test.key)
+			} else {
+				_ = os.Unsetenv("TEST_OLLAMA_KEY")
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/tags" {
+					t.Fatalf("path=%s", r.URL.Path)
+				}
+				if got := r.Header.Get("Authorization"); got != test.wantAuth {
+					t.Fatalf("authorization=%q want=%q", got, test.wantAuth)
+				}
+				_, _ = w.Write([]byte(`{"models":[{"name":"qwen"}]}`))
+			}))
+			defer server.Close()
+			h := Handler{http: server.Client()}
+			w := httptest.NewRecorder()
+			h.ollamaCatalog(w, httptest.NewRequest(http.MethodGet, "/", nil), setupConnection{BaseURL: server.URL, APIKeyEnvName: test.envName})
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
 
 func TestCompleteSetupCreatesAtomicReviewConfiguration(t *testing.T) {
 	s, err := store.Open(config.Config{DatabaseDriver: "sqlite", DatabaseDSN: ":memory:"})

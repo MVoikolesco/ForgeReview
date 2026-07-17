@@ -54,7 +54,7 @@ O limite de contexto do modelo é tratado separadamente do limite de saída. Ant
 
 1. Copie `.env.example` para `.env`.
 2. Configure `GITEA_URL`, `GITEA_TOKEN`, `GITEA_BOT_USERNAME` e altere `ADMIN_PASSWORD`.
-3. Se usar OpenRouter, preencha `OPENROUTER_API_KEY`. O painel armazenará somente esse nome, nunca o segredo.
+3. Se usar OpenRouter, preencha `OPENROUTER_API_KEY`; para Ollama Cloud, `OLLAMA_API_KEY`. O painel armazena somente o nome da variável, nunca o segredo.
 4. Execute:
 
 ```sh
@@ -87,7 +87,7 @@ A conclusão usa uma única transação SQLite: conexão, modelo, parâmetros, p
 
 Os prompts não fazem parte do cadastro administrativo. O worker usa diretamente `config/review-prompts.yaml`, `prompts/base/review_partial.md`, `prompts/base/review_final.md` e os complementos versionados em `prompts/stacks`. Alterações de prompts ficam reservadas para uma evolução futura do produto.
 
-Para Ollama no host, o endereço padrão é `http://host.docker.internal:11434` e os modelos vêm de `/api/tags`. Para OpenRouter, a API valida `OPENROUTER_API_KEY` em `/api/v1/key` e carrega os modelos de `/api/v1/models`.
+Para Ollama local, o endereço padrão é `http://host.docker.internal:11434` e os modelos vêm de `/api/tags`. Ollama Cloud usa o endpoint compatível `https://ollama.com`, Bearer com a chave da variável configurada e os mesmos endpoints `/api/tags` e `/api/chat`. Para OpenRouter, a API valida `OPENROUTER_API_KEY` em `/api/v1/key` e carrega os modelos de `/api/v1/models`.
 
 ## Seleção de provider e modelo
 
@@ -99,7 +99,7 @@ sem vínculo específico  → profile padrão
 profile → modelo → conexão → provider
 ```
 
-- `ollama`: usa `/api/chat`, os parâmetros Ollama cadastrados e pode descarregar o modelo ao terminar.
+- `ollama`: usa `/api/chat`, os parâmetros Ollama cadastrados e pode descarregar o modelo local ao terminar. A variante Cloud usa o mesmo contrato com `Authorization: Bearer`; o descarregamento é no-op para não enviar a operação local ao serviço remoto.
 - `openrouter`: usa a base oficial `https://openrouter.ai/api/v1`, autenticação Bearer e `/chat/completions`. O modelo é salvo pelo slug oficial retornado pelo catálogo. O limite operacional de saída é configurado separadamente (padrão: `4096`); o máximo anunciado pelo catálogo nunca é enviado automaticamente como `max_tokens`. `HTTP-Referer` e `X-OpenRouter-Title` podem ser configurados para atribuição da aplicação.
 - Sem configuração completa e habilitada, o job falha com mensagem clara. Não existe fallback para configurações de review no `.env`.
 

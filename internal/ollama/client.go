@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"gitea-agents/internal/ai"
 )
 
 type Options struct {
@@ -23,6 +25,7 @@ type Options struct {
 type Config struct {
 	URL            string
 	Model          string
+	APIKey         string
 	Options        Options
 	KeepAlive      string
 	TimeoutSeconds int
@@ -34,7 +37,10 @@ type Client struct {
 	model      string
 	options    Options
 	keepAlive  string
+	apiKey     string
 }
+
+var _ ai.Client = (*Client)(nil)
 
 func NewClient(cfg Config) *Client {
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
@@ -50,6 +56,7 @@ func NewClient(cfg Config) *Client {
 		model:     cfg.Model,
 		options:   cfg.Options,
 		keepAlive: cfg.KeepAlive,
+		apiKey:    cfg.APIKey,
 	}
 }
 
@@ -57,6 +64,9 @@ func (c *Client) Model() string {
 	return c.model
 }
 func (c *Client) Unload(ctx context.Context, model string) error {
+	if c.apiKey != "" {
+		return nil
+	}
 	payload, err := json.Marshal(map[string]any{"model": model, "keep_alive": 0})
 	if err != nil {
 		return err
@@ -66,6 +76,7 @@ func (c *Client) Unload(ctx context.Context, model string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.authorize(req)
 	res, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("erro ao descarregar modelo ollama: %w", err)
@@ -93,11 +104,7 @@ func (c *Client) ChatWithMaxTokens(ctx context.Context, prompt string, maxOutput
 	return c.chatWithOptions(ctx, prompt, options)
 }
 
-type ChatResult struct {
-	Content          string
-	PromptTokens     int
-	CompletionTokens int
-}
+type ChatResult = ai.ChatResult
 
 func (c *Client) ChatWithMetadata(ctx context.Context, prompt string) (ChatResult, error) {
 	return c.chatWithOptions(ctx, prompt, c.options)
@@ -124,6 +131,7 @@ func (c *Client) chatWithOptions(ctx context.Context, prompt string, options Opt
 		return ChatResult{}, fmt.Errorf("erro ao criar request ollama: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.authorize(req)
 
 	res, err := c.httpClient.Do(req)
 	if err != nil {
@@ -150,6 +158,12 @@ func (c *Client) chatWithOptions(ctx context.Context, prompt string, options Opt
 		PromptTokens:     chatResponse.PromptEvalCount,
 		CompletionTokens: chatResponse.EvalCount,
 	}, nil
+}
+
+func (c *Client) authorize(req *http.Request) {
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 }
 
 type chatRequest struct {

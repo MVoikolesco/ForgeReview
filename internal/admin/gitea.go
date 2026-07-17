@@ -84,7 +84,33 @@ func (h Handler) giteaRoute(w http.ResponseWriter, r *http.Request, suffix strin
 		h.giteaRepositories(w, r, id)
 		return true
 	}
+	if action == "pull-requests" && r.Method == http.MethodPost {
+		h.giteaPullRequests(w, r, id)
+		return true
+	}
 	return false
+}
+
+func (h Handler) giteaPullRequests(w http.ResponseWriter, r *http.Request, id string) {
+	var body struct {
+		Owner string `json:"owner"`
+		Repo  string `json:"repo"`
+	}
+	if json.NewDecoder(r.Body).Decode(&body) != nil || strings.TrimSpace(body.Owner) == "" || strings.TrimSpace(body.Repo) == "" {
+		writeError(w, 400, "owner e repositório são obrigatórios")
+		return
+	}
+	c, err := h.savedGiteaClient(r, id)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	prs, err := c.ListPullRequests(r.Context(), body.Owner, body.Repo)
+	if err != nil {
+		writeError(w, 502, "falha ao listar pull requests")
+		return
+	}
+	writeJSON(w, 200, prs)
 }
 
 func decodeGitea(r *http.Request) (giteaInput, error) {

@@ -104,6 +104,20 @@ func TestCreatePullRequestReview(t *testing.T) {
 	}
 }
 
+func TestListPullRequestsRequestsOpenState(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/repos/acme/app/pulls" || r.URL.Query().Get("state") != "open" {
+			t.Fatalf("path=%s query=%s", r.URL.Path, r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`[{"number":7,"title":"Improve API","state":"open"}]`))
+	}))
+	defer server.Close()
+	prs, err := NewClient(server.URL, "token").ListPullRequests(context.Background(), "acme", "app")
+	if err != nil || len(prs) != 1 || prs[0].Number != 7 {
+		t.Fatalf("prs=%+v err=%v", prs, err)
+	}
+}
+
 func TestAuthenticatedCatalogRequests(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "token secret-token" {

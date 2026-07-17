@@ -66,7 +66,7 @@ export type ConnectionData = {
 };
 
 export type SetupDraft = {
-  provider: "ollama" | "openrouter";
+  provider: "ollama" | "ollama-cloud" | "openrouter";
   connection: {
     name: string;
     base_url: string;
@@ -117,4 +117,12 @@ export type GiteaRepository = {
   full_name: string;
   owner: { login: string };
   private: boolean;
+};
+export type GiteaPullRequest = {
+  number: number;
+  title: string;
+  body: string;
+  state: string;
+  html_url?: string;
+  user?: { login: string };
 };

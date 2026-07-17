@@ -83,6 +83,42 @@ func TestClientChatSendsPayloadAndReturnsContent(t *testing.T) {
 	}
 }
 
+func TestClientAuthorizationIsOptional(t *testing.T) {
+	for _, test := range []struct {
+		name, key, want string
+	}{
+		{name: "local", want: ""},
+		{name: "cloud", key: "ollama-secret", want: "Bearer ollama-secret"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.Header.Get("Authorization"); got != test.want {
+					t.Fatalf("authorization=%q want=%q", got, test.want)
+				}
+				_, _ = w.Write([]byte(`{"message":{"content":"ok"}}`))
+			}))
+			defer server.Close()
+			client := NewClient(Config{URL: server.URL, Model: "test", APIKey: test.key})
+			if _, err := client.Chat(context.Background(), "prompt"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCloudUnloadIsNoOp(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
+	defer server.Close()
+	client := NewClient(Config{URL: server.URL, Model: "test", APIKey: "secret"})
+	if err := client.Unload(context.Background(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("cloud unload must not call the endpoint")
+	}
+}
+
 func TestNewClientUsesDefaultTimeoutWhenInvalid(t *testing.T) {
 	client := NewClient(Config{URL: "http://localhost:11434", Model: "deepseek-coder:6.7b", TimeoutSeconds: -1})
 

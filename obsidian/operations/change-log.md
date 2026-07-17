@@ -57,3 +57,27 @@ Record meaningful changes using this structure:
 - **Notes updated:** [[../architecture/overview|Architecture]].
 - **Limitations:** Specialized controls, badges, node states, and modal chrome retain their intentional interaction-specific styling.
 
+## 2026-07-16 — Manual review dispatch and execution history
+
+- **Outcome:** Replaced the console primary new-connection action with an authenticated manual review flow, added open-PR validation and queue publishing, accessible feedback, and historical execution selection without live polling overwrites.
+- **Scope:** `internal/gitea`, `internal/admin`, manual-review/console/executions components, and styles.
+- **Validation:** `gofmt`; `go test ./...`; `web-admin npm run lint`; `web-admin npm run build` passed. Build retains the existing multiple-lockfile workspace warning.
+- **Notes updated:** [[../architecture/overview|Architecture]], [[../features/index|Features]], [[../decisions/log|Decision Log]].
+- **Limitations:** Run metadata is inferred from existing sanitized directory names; no log format change was introduced and no browser test suite exists.
+
+## 2026-07-16 — Manual review visual contrast correction
+
+- **Outcome:** Restored readable text and consistent blue identity colors across the manual-review modal and shared stepper controls in light and dark themes.
+- **Scope:** `web-admin/src/app/globals.scss`, `web-admin/src/styles/_tokens.scss`, `web-admin/src/styles/_ui.scss`, `web-admin/src/components/connections/connection-wizard.scss`, and `web-admin/src/components/manual-review/manual-review-modal.scss`.
+- **Validation:** `web-admin npm run lint` and `web-admin npm run build` passed after the contrast follow-up. Build retains the existing multiple-lockfile workspace warning.
+- **Notes updated:** This change log.
+- **Limitations:** No browser visual regression suite exists; final confidence depends on the static checks and manual theme inspection.
+
+## 2026-07-16 — Ollama local and cloud integrations
+
+- **Outcome:** Added Ollama local and Ollama Cloud connection modes, optional Bearer authentication, cloud catalog access, safe cloud unload behavior, and a shared chat metadata contract with OpenRouter.
+- **Scope:** `internal/ai`, `internal/ollama`, `internal/openrouter`, `internal/agents/reviewer.go`, `internal/admin/setup.go`, Ollama tests, README, and the connection wizard.
+- **Validation:** `gofmt`; `go test ./...`; `web-admin npm run lint` passed.
+- **Notes updated:** [[../architecture/overview|Architecture]], [[../architecture/feature-map|Feature Map]], [[../decisions/log|Decision Log]].
+- **Limitations:** Cloud behavior depends on the configured Ollama-compatible service and its API-key permissions; no browser test suite exists.
+

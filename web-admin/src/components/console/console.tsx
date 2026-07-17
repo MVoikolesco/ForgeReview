@@ -4,10 +4,11 @@ import { ConnectionWizard } from "@/components/connections/connection-wizard";
 import { ConnectionsDashboard } from "@/components/connections/connections-dashboard";
 import { ExecutionsFlow } from "@/components/executions/executions-flow";
 import { GiteaArea } from "@/components/gitea/gitea-area";
+import { ManualReviewModal } from "@/components/manual-review/manual-review-modal";
 import { ThemeToggle, type Theme } from "@/components/theme-toggle";
 import { createAdminClient } from "@/lib/admin-client";
 import type { Connection, ConnectionData } from "@/lib/contracts";
-import { Menu, Plus, RefreshCw } from "lucide-react";
+import { Menu, Play, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ConsoleView } from "./sidebar";
 import { Sidebar } from "./sidebar";
@@ -40,6 +41,11 @@ export function Console({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [manualReviewOpen, setManualReviewOpen] = useState(false);
+  const [toast, setToast] = useState<{
+    message: string;
+    error?: boolean;
+  } | null>(null);
   const [wizardConnection, setWizardConnection] = useState<Connection | null>(
     null,
   );
@@ -135,13 +141,10 @@ export function Console({
                 </div>
                 <button
                   className="primary-button"
-                  onClick={() => {
-                    setWizardConnection(null);
-                    setWizardOpen(true);
-                  }}
+                  onClick={() => setManualReviewOpen(true)}
                 >
-                  <Plus size={18} />
-                  Nova conexão
+                  <Play size={18} />
+                  Disparar review manual
                 </button>
               </div>
               {error && <div className="banner error">{error}</div>}
@@ -184,6 +187,14 @@ export function Console({
           )}
         </div>
       </main>
+      {toast && (
+        <div
+          className={`console-toast ${toast.error ? "error" : "success"}`}
+          role={toast.error ? "alert" : "status"}
+        >
+          {toast.message}
+        </div>
+      )}
       {wizardOpen && (
         <ConnectionWizard
           request={request}
@@ -211,6 +222,21 @@ export function Console({
             setWizardOpen(false);
             setWizardConnection(null);
             await refresh();
+          }}
+        />
+      )}
+      {manualReviewOpen && (
+        <ManualReviewModal
+          request={request}
+          onAuthError={onLogout}
+          onClose={() => setManualReviewOpen(false)}
+          onSuccess={(message) => {
+           setToast({ message });
+             window.setTimeout(() => setToast(null), 5000);
+           }}
+          onFailure={(message) => {
+            setToast({ message, error: true });
+            window.setTimeout(() => setToast(null), 5000);
           }}
         />
       )}

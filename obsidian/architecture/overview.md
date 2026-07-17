@@ -15,12 +15,18 @@ ForgeReview exposes an authenticated admin API and Next.js console for AI and Gi
 - Shared card surfaces use `styles/_mixins.scss` for the same border, radius, surface, and shadow treatment.
 - `internal/admin` enforces one default connection per provider and performs model/connection deletion in transactions, promoting active replacements when references allow it.
 - `web-admin/src/components/connections` reuses the wizard in add-model mode; catalog reads use the existing connection and explicit default actions do not change the global provider.
+- `internal/admin` exposes authenticated manual-review enqueue and Gitea pull-request catalog endpoints; selected open PRs become `Manual` jobs carrying `GiteaInstanceID`.
+- `web-admin/src/components/manual-review` uses `StepperModal` for instance, organization, repository, and open-PR selection. The console mounts accessible dispatch feedback while retaining Gitea connection management.
+- `observability/progress?name=...` reads a selected historical run without polling it; the executions view polls only the live pipeline and offers an explicit return action.
+- `internal/ai` defines the shared chat metadata contract used by Ollama and OpenRouter; `internal/ollama` supports unauthenticated local endpoints and Bearer-authenticated Ollama Cloud endpoints.
 
 ## Data Flow
 
 Admin POST/PATCH/test requests may carry a token. New tokens are encrypted with the 32-byte `GITEA_TOKEN_ENCRYPTION_KEY`; GET responses omit both token and ciphertext. Legacy `token_env_name` remains a fallback when ciphertext is unavailable.
 
 Connection model changes use `setup/add-model` and destructive resource deletes. Model parameters are removed before models, profiles are reassigned to an active replacement where possible, and deletes return a conflict instead of leaving an unusable review route.
+
+Ollama Cloud is represented by the existing `ollama` provider with an API-key environment-variable reference on the connection. The admin catalog uses `/api/tags`, the worker uses `/api/chat`, and cloud unload is a no-op; secrets are never persisted.
 
 ## Runtime and Deployment
 

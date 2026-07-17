@@ -12,13 +12,7 @@ import {
   type Node,
   type NodeProps,
 } from "@xyflow/react";
-import {
-  Activity,
-  Clock3,
-  HardDrive,
-  RefreshCw,
-  ServerCog,
-} from "lucide-react";
+import { Clock3, HardDrive, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Worker = {
@@ -62,6 +56,9 @@ type ReviewProgress = {
   status: string;
   message: string;
   events: ProgressEvent[];
+  owner?: string;
+  repo?: string;
+  pr_number?: number;
 };
 
 type ProgressResponse = {
@@ -74,6 +71,9 @@ type ReviewLog = {
   updated_at: string;
   files: number;
   bytes: number;
+  owner?: string;
+  repo?: string;
+  pr_number?: number;
 };
 
 type StageNodeData = {
@@ -256,6 +256,7 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
   const [error, setError] = useState("");
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedReview, setSelectedReview] = useState("");
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<StageNodeData>>(
     [],
   );
@@ -288,9 +289,29 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
 
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => void load(), 5000);
+    const timer = window.setInterval(() => {
+      if (!selectedReview) void load();
+    }, 5000);
     return () => window.clearInterval(timer);
-  }, [load]);
+  }, [load, selectedReview]);
+
+  async function selectHistorical(name: string) {
+    if (!name) {
+      setSelectedReview("");
+      void load(true);
+      return;
+    }
+    try {
+      setSelectedReview(name);
+      setProgress(
+        await request<ProgressResponse>(
+          `observability/progress?name=${encodeURIComponent(name)}`,
+        ),
+      );
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    }
+  }
 
   const current = progress.review;
   const events = useMemo(() => current?.events || [], [current?.events]);
@@ -407,13 +428,20 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
         <article className="execution-current">
           <div>
             <span
-              className={`live-indicator ${progress.active ? "active" : ""}`}
+              className={`live-indicator ${progress.active && !selectedReview ? "active" : ""}`}
             >
               <i />
-              {progress.active ? "Execução ao vivo" : "Última execução"}
+              {selectedReview
+                ? "Execução histórica"
+                : progress.active
+                  ? "Execução ao vivo"
+                  : "Última execução"}
             </span>
             <h2>{current?.name || "Nenhuma revisão registrada"}</h2>
             <p>
+              {current?.owner
+                ? `PR #${current.pr_number} · ${current.owner}/${current.repo} · `
+                : null}
               {current?.message ||
                 "O pipeline será preenchido assim que uma revisão for iniciada."}
             </p>
@@ -423,39 +451,49 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
             <span>progresso geral</span>
           </div>
         </article>
-        <article className="execution-metric">
-          <span>
-            <Activity size={18} />
-          </span>
-          <div>
-            <small>Etapa atual</small>
-            <strong>{current ? stageName(current.stage) : "Aguardando"}</strong>
-          </div>
-        </article>
-        <article className="execution-metric">
-          <span>
-            <Clock3 size={18} />
-          </span>
-          <div>
-            <small>Jobs pendentes</small>
-            <strong>{metrics.queue.pending || 0}</strong>
-          </div>
-        </article>
-        <article className="execution-metric">
-          <span>
-            <ServerCog size={18} />
-          </span>
-          <div>
-            <small>Workers ativos</small>
-            <strong>{activeWorkers}</strong>
-          </div>
+        <article className="execution-history">
+          <header>
+            <strong>Execuções anteriores</strong>
+            <Clock3 size={16} />
+          </header>
+          <label className="sr-only" htmlFor="execution-history-select">
+            Selecionar execução
+          </label>
+          <select
+            id="execution-history-select"
+            value={selectedReview}
+            onChange={(event) => void selectHistorical(event.target.value)}
+          >
+            <option value="">Pipeline em tempo real</option>
+            {reviews.map((review) => (
+              <option key={review.name} value={review.name}>
+                {review.owner && review.repo
+                  ? `PR #${review.pr_number} · ${review.owner}/${review.repo}`
+                  : review.name}
+              </option>
+            ))}
+          </select>
+          {selectedReview && (
+            <button
+              className="secondary-button"
+              onClick={() => void selectHistorical("")}
+            >
+              Voltar para pipeline em tempo real
+            </button>
+          )}
+          <small>
+            {reviews.length} revisões registradas · {activeWorkers} workers
+            ativos
+          </small>
         </article>
       </div>
 
       <article className="execution-flow-panel">
         <header>
           <div>
-            <span className="eyebrow">Pipeline em tempo real</span>
+            <span className="eyebrow">
+              {selectedReview ? "Pipeline histórico" : "Pipeline em tempo real"}
+            </span>
             <h3>Etapas da revisão</h3>
             <p>
               Selecione uma etapa para inspecionar seus eventos mais recentes.
@@ -464,12 +502,14 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
           <div className="execution-flow-actions">
             <span>
               <i />
-              Sincronização a cada 5s
+              {selectedReview
+                ? "Histórico congelado"
+                : "Sincronização a cada 5s"}
             </span>
             <button
               className="secondary-button"
               onClick={() => void load(true)}
-              disabled={refreshing}
+              disabled={refreshing || Boolean(selectedReview)}
             >
               <RefreshCw className={refreshing ? "spin" : ""} size={16} />
               Atualizar

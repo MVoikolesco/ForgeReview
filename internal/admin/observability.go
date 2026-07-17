@@ -18,6 +18,9 @@ type reviewLogSummary struct {
 	UpdatedAt string `json:"updated_at"`
 	Files     int    `json:"files"`
 	Bytes     int64  `json:"bytes"`
+	Owner     string `json:"owner,omitempty"`
+	Repo      string `json:"repo,omitempty"`
+	PRNumber  int    `json:"pr_number,omitempty"`
 }
 
 type reviewProgressSummary struct {
@@ -28,6 +31,9 @@ type reviewProgressSummary struct {
 	Status    string                   `json:"status"`
 	Message   string                   `json:"message"`
 	Events    []pipeline.ProgressEvent `json:"events"`
+	Owner     string                   `json:"owner,omitempty"`
+	Repo      string                   `json:"repo,omitempty"`
+	PRNumber  int                      `json:"pr_number,omitempty"`
 }
 
 func (h Handler) observabilityRoute(w http.ResponseWriter, r *http.Request, action string) {
@@ -113,7 +119,7 @@ func (h Handler) reviewLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) reviewProgress(w http.ResponseWriter, r *http.Request) {
-	progress, err := latestReviewProgress(h.logDir)
+	progress, err := reviewProgressFor(h.logDir, r.URL.Query().Get("name"))
 	if err != nil && !os.IsNotExist(err) {
 		writeError(w, 500, err.Error())
 		return
@@ -123,6 +129,13 @@ func (h Handler) reviewProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"active": progress.Status != "done" && progress.Status != "failed", "review": progress})
+}
+
+func reviewProgressFor(root, name string) (*reviewProgressSummary, error) {
+	if name != "" {
+		return readReviewProgress(filepath.Join(root, filepath.Base(name)), filepath.Base(name))
+	}
+	return latestReviewProgress(root)
 }
 
 func scanReviewLogs(root string) ([]reviewLogSummary, error) {
@@ -136,6 +149,14 @@ func scanReviewLogs(root string) ([]reviewLogSummary, error) {
 			continue
 		}
 		summary := reviewLogSummary{Name: entry.Name()}
+		parts := strings.Split(entry.Name(), "_pr-")
+		if len(parts) == 2 {
+			summary.PRNumber, _ = strconv.Atoi(parts[1])
+			ownerRepo := strings.SplitN(parts[0], "_", 2)
+			if len(ownerRepo) == 2 {
+				summary.Owner, summary.Repo = ownerRepo[0], ownerRepo[1]
+			}
+		}
 		_ = filepath.WalkDir(filepath.Join(root, entry.Name()), func(path string, d os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return nil
@@ -193,6 +214,14 @@ func readReviewProgress(dir, name string) (*reviewProgressSummary, error) {
 	}
 	defer file.Close()
 	item := &reviewProgressSummary{Name: name, Events: []pipeline.ProgressEvent{}}
+	parts := strings.Split(name, "_pr-")
+	if len(parts) == 2 {
+		item.PRNumber, _ = strconv.Atoi(parts[1])
+		ownerRepo := strings.SplitN(parts[0], "_", 2)
+		if len(ownerRepo) == 2 {
+			item.Owner, item.Repo = ownerRepo[0], ownerRepo[1]
+		}
+	}
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {

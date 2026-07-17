@@ -10,6 +10,7 @@
 @use "../components/connections/connection-detail";
 @use "../components/connections/connection-wizard";
 @use "../components/executions/executions-flow";
+@use "../components/manual-review/manual-review-modal";
 @use "../components/gitea/gitea-area";
 
 :root {
@@ -17,12 +18,15 @@
   --font-display: "Aptos Display", "Segoe UI", Arial, sans-serif;
   --ink: #111c36;
   --ink-2: #1c2b4d;
-  --muted: #6d7890;
+  --muted: #5f6b83;
   --line: #dce2ec;
   --surface: #ffffff;
   --canvas: #f3f6fb;
   --accent: #4f8cff;
   --accent-deep: #174ea6;
+  --rail: #111c36;
+  --surface-hover: #f5f8ff;
+  --control-surface: #f1f3f1;
   --orange: #ff8a4c;
   --danger: #b94343;
   --shadow: 0 18px 48px rgba(25, 50, 95, 0.1);
@@ -30,7 +34,7 @@
 }
 
 [data-theme="dark"] {
-  --ink: #0a1428;
+  --ink: #e6ebf4;
   --ink-2: #14213b;
   --muted: #8b98ae;
   --line: #29364b;
@@ -38,6 +42,9 @@
   --canvas: #1b273d;
   --accent: #5b96ff;
   --accent-deep: #8ab2ff;
+  --rail: #081225;
+  --surface-hover: #17253d;
+  --control-surface: #202c3f;
   --shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
   color-scheme: dark;
 }
