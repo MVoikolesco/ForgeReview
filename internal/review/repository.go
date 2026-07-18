@@ -1,0 +1,169 @@
+package review
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"gitea-agents/internal/queue"
+	"time"
+)
+
+type Repository struct{ db *sql.DB }
+
+func NewRepository(db *sql.DB) *Repository { return &Repository{db: db} }
+func (r *Repository) Create(ctx context.Context, id string, job queue.ReviewJob, source string) error {
+	payload, _ := json.Marshal(job)
+	_, err := r.db.ExecContext(ctx, `INSERT INTO reviews(id,owner,repository,pull_request,status,source,job_json) VALUES(?,?,?,?,?,?,?)`, id, job.Owner, job.Repository, job.PullRequest, StatusReceived, source, payload)
+	return err
+}
+func (r *Repository) Job(ctx context.Context, id string) (queue.ReviewJob, error) {
+	var payload string
+	if err := r.db.QueryRowContext(ctx, `SELECT job_json FROM reviews WHERE id=?`, id).Scan(&payload); err != nil {
+		return queue.ReviewJob{}, err
+	}
+	var job queue.ReviewJob
+	if err := json.Unmarshal([]byte(payload), &job); err != nil {
+		return job, err
+	}
+	return job, nil
+}
+
+func (r *Repository) DefaultPrompt(ctx context.Context) (string, error) {
+	var content string
+	err := r.db.QueryRowContext(ctx, `SELECT p.content FROM review_prompts p JOIN review_profiles rp ON rp.id=p.profile_id WHERE rp.is_default=1 AND rp.is_enabled=1 AND p.is_active=1 ORDER BY p.version DESC, p.id DESC LIMIT 1`).Scan(&content)
+	return content, err
+}
+func (r *Repository) SetStatus(ctx context.Context, id, status, message string) error {
+	now := time.Now().UTC()
+	var q string
+	switch status {
+	case StatusProcessing:
+		q = `UPDATE reviews SET status=?,updated_at=?,started_at=COALESCE(started_at,?) WHERE id=?`
+		return r.exec(ctx, q, status, now, now, id)
+	case StatusCompleted, StatusFailed, StatusCancelled:
+		q = `UPDATE reviews SET status=?,updated_at=?,finished_at=? WHERE id=?`
+		return r.exec(ctx, q, status, now, now, id)
+	default:
+		q = `UPDATE reviews SET status=?,updated_at=? WHERE id=?`
+		if message != "" {
+			q = `UPDATE reviews SET status=?,error_message=?,updated_at=? WHERE id=?`
+			return r.exec(ctx, q, status, message, now, id)
+		}
+		return r.exec(ctx, q, status, now, id)
+	}
+}
+func (r *Repository) exec(ctx context.Context, q string, args ...any) error {
+	_, err := r.db.ExecContext(ctx, q, args...)
+	return err
+}
+func (r *Repository) AddStep(ctx context.Context, id, step, status, message string, metadata map[string]any, started time.Time, finished *time.Time, duration int64, stepErr string) error {
+	data, _ := json.Marshal(metadata)
+	_, err := r.db.ExecContext(ctx, `INSERT INTO review_steps(review_id,step,status,message,metadata_json,started_at,finished_at,duration_ms,error_message) VALUES(?,?,?,?,?,?,?,?,?)`, id, step, status, message, data, started.UTC(), finished, duration, stepErr)
+	return err
+}
+func (r *Repository) SaveResult(ctx context.Context, id string, result Result) error {
+	data, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.ExecContext(ctx, `UPDATE reviews SET result_json=?,updated_at=? WHERE id=?`, data, time.Now().UTC(), id)
+	return err
+}
+func (r *Repository) Get(ctx context.Context, id string) (Review, error) {
+	var x Review
+	var result, errorMessage, created, updated, started, finished sql.NullString
+	err := r.db.QueryRowContext(ctx, `SELECT id,owner,repository,pull_request,status,source,result_json,error_message,created_at,updated_at,started_at,finished_at FROM reviews WHERE id=?`, id).Scan(&x.ID, &x.Owner, &x.Repository, &x.PullRequest, &x.Status, &x.Source, &result, &errorMessage, &created, &updated, &started, &finished)
+	if err != nil {
+		return x, err
+	}
+	x.Error = errorMessage.String
+	x.CreatedAt = parseTime(created.String)
+	x.UpdatedAt = parseTime(updated.String)
+	x.StartedAt = parseTimePtr(started.String)
+	x.FinishedAt = parseTimePtr(finished.String)
+	if result.String != "" {
+		var value Result
+		if json.Unmarshal([]byte(result.String), &value) == nil {
+			x.Result = &value
+		}
+	}
+	steps, err := r.Steps(ctx, id)
+	if err != nil {
+		return x, err
+	}
+	x.Steps = steps
+	return x, nil
+}
+func (r *Repository) List(ctx context.Context, limit int) ([]Review, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT id,owner,repository,pull_request,status,source,result_json,error_message,created_at,updated_at,started_at,finished_at FROM reviews ORDER BY updated_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Review{}
+	for rows.Next() {
+		var x Review
+		var result, errorMessage, created, updated, started, finished sql.NullString
+		if err := rows.Scan(&x.ID, &x.Owner, &x.Repository, &x.PullRequest, &x.Status, &x.Source, &result, &errorMessage, &created, &updated, &started, &finished); err != nil {
+			return nil, err
+		}
+		x.Error = errorMessage.String
+		x.CreatedAt = parseTime(created.String)
+		x.UpdatedAt = parseTime(updated.String)
+		x.StartedAt = parseTimePtr(started.String)
+		x.FinishedAt = parseTimePtr(finished.String)
+		if result.String != "" {
+			var v Result
+			if json.Unmarshal([]byte(result.String), &v) == nil {
+				x.Result = &v
+			}
+		}
+		items = append(items, x)
+	}
+	return items, rows.Err()
+}
+func (r *Repository) Steps(ctx context.Context, id string) ([]Step, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,review_id,step,status,message,metadata_json,started_at,finished_at,duration_ms,error_message FROM review_steps WHERE review_id=? ORDER BY id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Step{}
+	for rows.Next() {
+		var s Step
+		var metadata, started, finished, stepErr sql.NullString
+		if err := rows.Scan(&s.ID, &s.ReviewID, &s.Step, &s.Status, &s.Message, &metadata, &started, &finished, &s.DurationMS, &stepErr); err != nil {
+			return nil, err
+		}
+		s.StartedAt = parseTime(started.String)
+		s.FinishedAt = parseTimePtr(finished.String)
+		s.Error = stepErr.String
+		_ = json.Unmarshal([]byte(metadata.String), &s.Metadata)
+		items = append(items, s)
+	}
+	return items, rows.Err()
+}
+func parseTime(v string) time.Time {
+	t, _ := time.Parse(time.RFC3339Nano, v)
+	if t.IsZero() {
+		t, _ = time.Parse("2006-01-02 15:04:05", v)
+	}
+	return t
+}
+func parseTimePtr(v string) *time.Time {
+	if v == "" {
+		return nil
+	}
+	t := parseTime(v)
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+var ErrNotFound = sql.ErrNoRows
+var _ = fmt.Sprintf

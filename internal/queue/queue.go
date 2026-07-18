@@ -6,28 +6,30 @@ import (
 )
 
 type ReviewJob struct {
-	GiteaInstanceID   int64
-	Owner             string
-	Repo              string
-	PRNumber          int
-	RequestedReviewer string
-	Sender            string
-	Manual            bool
-	Title             string
-	Description       string
-	Author            string
-	BaseBranch        string
-	HeadBranch        string
+	ReviewID                                           string `json:"review_id"`
+	GiteaInstanceID                                    int64  `json:"gitea_instance_id,omitempty"`
+	Owner                                              string `json:"owner"`
+	Repository                                         string `json:"repo"`
+	PullRequest                                        int    `json:"pr_number"`
+	RequestedReviewer                                  string `json:"requested_reviewer"`
+	Sender                                             string `json:"sender"`
+	Manual                                             bool   `json:"manual"`
+	Title, Description, Author, BaseBranch, HeadBranch string
 }
 
 type Publisher interface {
-	Publish(ctx context.Context, job ReviewJob) error
+	Publish(context.Context, ReviewJob) error
 }
-
 type Consumer interface {
-	Consume(ctx context.Context, consumer string, handle func(context.Context, ReviewJob) error) error
+	Consume(context.Context, string, func(context.Context, ReviewJob) error) error
 }
-
+type Observer interface {
+	Metrics(context.Context) (Metrics, error)
+}
+type WorkerReporter interface {
+	Heartbeat(context.Context, string, string, string) error
+	RecordJob(context.Context, string, bool) error
+}
 type WorkerMetric struct {
 	Name       string    `json:"name"`
 	State      string    `json:"state"`
@@ -36,19 +38,9 @@ type WorkerMetric struct {
 	Processed  int64     `json:"processed"`
 	Failed     int64     `json:"failed"`
 }
-
 type Metrics struct {
 	Connected    bool           `json:"connected"`
 	StreamLength int64          `json:"stream_length"`
 	Pending      int64          `json:"pending"`
 	Workers      []WorkerMetric `json:"workers"`
-}
-
-type Observer interface {
-	Metrics(context.Context) (Metrics, error)
-}
-
-type WorkerReporter interface {
-	Heartbeat(context.Context, string, string, string) error
-	RecordJob(context.Context, string, bool) error
 }
