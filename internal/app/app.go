@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -48,7 +49,10 @@ func Run() error {
 	defer q.Close()
 	repo := review.NewRepository(db.SQL)
 	service := review.NewService(cfg, repo, q)
-	service.SetFactories(providerFactory(db.SQL, cfg), func(context.Context) (*gitea.Client, error) { return gitea.New(cfg.GiteaURL, cfg.GiteaToken), nil })
+	giteaResolver := gitea.NewResolver(db.SQL, gitea.New(cfg.GiteaURL, cfg.GiteaToken))
+	service.SetFactories(providerFactory(db.SQL, cfg), func(ctx context.Context, job queue.ReviewJob) (*gitea.Client, error) {
+		return giteaResolver.Resolve(ctx, job.GiteaInstanceID, job.Owner, job.Repository)
+	})
 	service.SetPromptLoader(func(ctx context.Context) string { value, _ := repo.DefaultPrompt(ctx); return value })
 	if cfg.AppMode == "worker" {
 		return runWorker(ctx, cfg, q, service, logger)
@@ -73,12 +77,48 @@ func runWorker(ctx context.Context, cfg config.Config, q *redisqueue.Queue, serv
 		return err
 	}
 	logger.Printf("worker listening on stream=%s group=%s consumer=%s", cfg.RedisStream, cfg.RedisGroup, cfg.RedisConsumer)
-	return q.Consume(ctx, cfg.RedisConsumer, func(jobCtx context.Context, job queue.ReviewJob) error {
-		_ = q.Heartbeat(jobCtx, cfg.RedisConsumer, "processing", job.ReviewID)
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var current string
+	var stateMu sync.RWMutex
+	setHeartbeat := func() {
+		stateMu.RLock()
+		job := current
+		stateMu.RUnlock()
+		state := "idle"
+		if job != "" {
+			state = "processing"
+		}
+		_ = q.Heartbeat(workerCtx, cfg.RedisConsumer, state, job)
+	}
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case <-ticker.C:
+				setHeartbeat()
+			}
+		}
+	}()
+	setHeartbeat()
+	return q.Consume(workerCtx, cfg.RedisConsumer, func(jobCtx context.Context, job queue.ReviewJob) error {
+		stateMu.Lock()
+		current = job.ReviewID
+		stateMu.Unlock()
+		setHeartbeat()
 		err := service.Process(jobCtx, job)
-		_ = q.Heartbeat(jobCtx, cfg.RedisConsumer, "idle", "")
+		stateMu.Lock()
+		current = ""
+		stateMu.Unlock()
+		setHeartbeat()
 		_ = q.RecordJob(jobCtx, cfg.RedisConsumer, err == nil)
-		return err
+		if err != nil {
+			logger.Printf("review job failed without stopping worker: err=%v", err)
+		}
+		return nil
 	})
 }
 func providerFactory(db *sql.DB, cfg config.Config) func(context.Context) (providers.LLMProvider, error) {

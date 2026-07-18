@@ -29,7 +29,7 @@ func NewRouter(cfg config.Config, db *sql.DB, repo *review.Repository, service *
 	r.Any("/webhook", webhook.Receive)
 	r.POST("/review", webhook.Manual)
 	reviewHandler := handlers.NewReviewHandler(service, repo)
-	api := r.Group("/api/v1")
+	api := r.Group("/api/v1", middlewares.BasicAuth(cfg.AdminUsername, cfg.AdminPassword))
 	api.GET("/reviews", reviewHandler.List)
 	api.POST("/reviews", reviewHandler.Create)
 	api.GET("/reviews/:id", reviewHandler.Get)
@@ -40,11 +40,13 @@ func NewRouter(cfg config.Config, db *sql.DB, repo *review.Repository, service *
 	api.POST("/reviews/:id/cancel", reviewHandler.Cancel)
 	admin := r.Group("/api/admin", middlewares.BasicAuth(cfg.AdminUsername, cfg.AdminPassword))
 	handlers.NewAdminHandler(db, cfg, service, repo, observer).Register(admin)
+	fileServer := http.FileServer(http.Dir("./web"))
 	r.NoRoute(func(c *gin.Context) {
-		if c.Request.Method == http.MethodGet {
-			c.File("./web")
+		if c.Request.Method != http.MethodGet {
+			c.Status(http.StatusNotFound)
+			return
 		}
-		c.Status(http.StatusNotFound)
+		fileServer.ServeHTTP(c.Writer, c.Request)
 	})
 	return r
 }

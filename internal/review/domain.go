@@ -5,12 +5,13 @@ import "time"
 import "gitea-agents/internal/contracts"
 
 const (
-	StatusReceived   = "recebido"
-	StatusQueued     = "enfileirado"
-	StatusProcessing = "processando"
-	StatusCompleted  = "concluido"
-	StatusFailed     = "falhou"
-	StatusCancelled  = "cancelado"
+	StatusReceived         = "recebido"
+	StatusQueued           = "enfileirado"
+	StatusProcessing       = "processando"
+	StatusCompleted        = "concluido"
+	StatusFailed           = "falhou"
+	StatusCancelled        = "cancelado"
+	StatusAwaitingApproval = "aguardando_autorizacao"
 )
 
 type Comment = contracts.Comment

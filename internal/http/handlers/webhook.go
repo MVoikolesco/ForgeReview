@@ -6,6 +6,7 @@ import (
 	"gitea-agents/internal/config"
 	"gitea-agents/internal/queue"
 	"gitea-agents/internal/review"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -57,13 +58,19 @@ func (h *WebhookHandler) Receive(c *gin.Context) {
 		} `json:"sender"`
 	}
 	var err error
-	if payload := c.Query("payload"); payload != "" {
+	payload := c.Query("payload")
+	if payload == "" && strings.HasPrefix(c.GetHeader("Content-Type"), "application/x-www-form-urlencoded") {
+		if err = c.Request.ParseForm(); err == nil {
+			payload = c.PostForm("payload")
+		}
+	}
+	if payload != "" {
 		err = json.Unmarshal([]byte(payload), &event)
 	} else {
 		err = c.ShouldBindJSON(&event)
 	}
 	if err != nil {
-		c.JSON(400, gin.H{"error": "invalid json"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
 		return
 	}
 	reviewer := event.RequestedReviewer.Login

@@ -42,4 +42,9 @@ func TestRouterKeepsHealthAndAdminContracts(t *testing.T) {
 			t.Fatalf("%s returned %d: %s", request.URL.Path, response.Code, response.Body.String())
 		}
 	}
+	unauthenticated := httptest.NewRecorder()
+	router.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, "/api/v1/reviews", nil))
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("versioned API must require auth, got %d", unauthenticated.Code)
+	}
 }

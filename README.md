@@ -1,80 +1,86 @@
 # ForgeReview
 
-Backend de code review automatizado para Gitea, reescrito em Go com Gin. O painel existente em `web-admin/` é mantido sem alterações de contrato.
+Backend de code review automatizado para Gitea, escrito em Go com Gin, Redis Streams, SQLite e um painel Next.js em `web-admin/`.
 
 ## Arquitetura
 
 ```text
-cmd/api e cmd/server
-        │
-internal/app ─ config ─ database (SQLite + migrations)
-        ├── http (Gin, handlers, middlewares, responses)
-        ├── review (service, repository, steps, contrato final)
-        ├── queue/redis (Redis Streams)
-        ├── integrations/gitea
-        └── providers (Ollama, OpenAI-compatible/OpenRouter/Groq, Gemini)
+web (Next.js :3000) --rewrite /api--> api (Gin :8080)
+                                      |-- SQLite + migrations
+                                      |-- Redis Streams
+                                      |-- Gitea
+                                      `-- providers Ollama/OpenAI-compatible/Gemini
+worker (Go) <------------------------- Redis
 ```
 
-`OldGoProject/` contém a implementação legada preservada como referência. O novo backend não importa nem executa código dessa pasta.
+O histórico pré-Gin está nos commits anteriores do Git. A pasta `OldGoProject/` não existe neste checkout e não é importada pelo backend atual.
 
-## Execução
+## Desenvolvimento local
 
 ```sh
 cp .env.example .env
 go test ./...
 go run ./cmd/server
+cd web-admin && npm ci && npm run dev
 ```
 
-Para execução assíncrona, use dois processos com o mesmo `.env`:
+Para processamento assíncrono, execute a API e o worker separadamente:
 
 ```sh
 APP_MODE=api go run ./cmd/api
 APP_MODE=worker go run ./cmd/server
 ```
 
-O Docker Compose continua usando `APP_MODE=api` no serviço HTTP e `APP_MODE=worker` no consumidor Redis. O worker exige que a API tenha aplicado as migrations primeiro.
+## Docker Compose
+
+`APP_ENVIRONMENT` controla o serviço `web`:
+
+- `development`: alvo `development` e `npm run dev`.
+- qualquer outro valor, por padrão `production`: build Next e `npm run start`.
+
+```sh
+APP_ENVIRONMENT=development docker compose up -d --build
+docker compose up -d --build
+```
+
+Em desenvolvimento o Next é acessível em `http://localhost:3000` e reescreve `/api/*` para `api:8080`. A API continua acessível em `http://localhost:8088`. Em produção o serviço `web` executa o servidor Next; a imagem Go também contém uma exportação estática de fallback em `/app/web`.
 
 ## Contratos HTTP
 
-As rotas legadas permanecem disponíveis: `GET /health`, `POST/GET /webhook`, `POST /review` e `/api/admin/*` com Basic Auth. O painel chama `/api/admin/` e recebe os arrays e objetos legados, incluindo `api_key_configured` sem expor secrets.
+Rotas públicas de integração:
 
-A API versionada adiciona:
+- `GET /health`: estado básico do processo.
+- `POST/GET /webhook`: aceita JSON, `payload` em query e `application/x-www-form-urlencoded`; só enfileira `review_requested` direcionado a `GITEA_BOT_USERNAME`.
+- `POST /review`: URL de PR no formato `http(s)://host/owner/repo/pulls/numero`.
 
-```text
-GET  /api/v1/reviews
-POST /api/v1/reviews
-GET  /api/v1/reviews/:id
-GET  /api/v1/reviews/:id/status
-GET  /api/v1/reviews/:id/steps
-GET  /api/v1/reviews/:id/result
-POST /api/v1/reviews/:id/reprocess
-POST /api/v1/reviews/:id/cancel
-```
+Rotas administrativas usam Basic Auth e respostas legadas para preservar o painel (`[]`/objetos em sucesso e `{error: string}` em falha). As rotas `/api/v1/*` também usam Basic Auth e o envelope `{success,data,error}`.
 
-Respostas novas usam `{success,data,error}`. As rotas administrativas mantêm o formato legado para não exigir alteração no frontend.
+Rotas versionadas: `GET/POST /api/v1/reviews`, `GET /api/v1/reviews/:id`, `GET /status`, `/steps`, `/result`, `POST /reprocess` e `/cancel`.
 
-## Review e retenção
+O painel usa `/api/admin/*`, incluindo recursos CRUD, setup/catalog, observabilidade, Gitea, review manual e pré-publicação. O mapa completo está em `obsidian/architecture/contracts.md`.
 
-O job é publicado no Redis Stream configurado por `REDIS_STREAM`, com consumer group e consumer configuráveis. O serviço registra status e steps (`recebido`, `enfileirado`, `processando`, `buscando_diff`, `enviando_para_ia`, `recebendo_resposta_parcial`, `agregando_resultado`, `publicando_comentario`, `concluido` ou `falhou`) no SQLite.
+## Fluxo de review
 
-O SQLite persiste apenas metadados, steps e resultado final. Diff bruto, prompts montados e respostas intermediárias não são persistidos pelo novo fluxo. Logs técnicos não incluem tokens; `LOG_LEVEL=debug` pode ser usado explicitamente para diagnóstico.
+1. Webhook ou ação manual valida a entrada.
+2. A API cria `reviews`, registra `enfileirado` e publica um job no Redis Stream.
+3. O worker resolve a instância Gitea, busca o diff e divide por limites de policy/configuração.
+4. O provider configurado responde JSON; comentários, severidade, linhas, evento e resumo são validados.
+5. O resultado é salvo. Reviews manuais aguardam em `pending_reviews` quando a policy não permite publicação automática.
+6. Aprovação publica o review no Gitea; rejeição cancela sem publicar; reexecução retorna ao Redis.
 
-O resultado preserva `comments[].file`, `line`, `severity`, `decision_reason` e `comment`, além de `final_review`. O processamento divide o diff por limite de caracteres e arquivos, valida JSON, agrega comentários e remove duplicatas.
+O SQLite não persiste diff bruto, prompts montados nem respostas intermediárias. Persiste metadados, steps, resultado final e resultado pendente de autorização.
 
-## Configuração administrativa
+## Configuração
 
-Providers, conexões, modelos, parâmetros, profiles, prompts, policies, instâncias Gitea e repositórios são mantidos em SQLite por migrations. As chaves de IA são aceitas somente em escrita e cifradas com AES-GCM usando `GITEA_TOKEN_ENCRYPTION_KEY` (32 bytes). Providers Gemini e Groq já são cadastrados no catálogo; seus adaptadores seguem o contrato comum e podem ser configurados pelo banco.
+Providers, conexões, modelos, parâmetros, profiles, prompts, policies, instâncias Gitea e repositórios são tabelas SQLite. API keys/tokens são cifrados com AES-GCM usando `GITEA_TOKEN_ENCRYPTION_KEY` de 32 bytes e nunca são retornados pelo CRUD.
 
-Prompts ativos do profile padrão são carregados pelo serviço. Se não houver prompt cadastrado, o sistema usa uma instrução mínima de compatibilidade; o prompt padrão recomendado fica em `prompts/` para cadastro operacional.
+O `config/review-prompts.yaml` permanece como referência operacional; o prompt efetivo do novo serviço é o prompt ativo do profile padrão, com fallback mínimo no código.
 
-## Frontend
+## Limitações conhecidas
 
-O frontend é Next.js/React, não Nuxt. Não foi alterado. Em desenvolvimento:
+- O pipeline antigo de planner/consolidator/verifier/formatter foi removido na migração e ainda não foi reimplementado; o serviço atual faz blocos, chamadas, validação e agregação simples.
+- Variáveis `REVIEW_*` do pipeline antigo não têm efeito no serviço atual salvo os limites básicos documentados.
+- A política por repositório é consultada para limites, publicação manual e rejeição autônoma; as demais colunas antigas ainda não são executadas.
+- CORS permanece permissivo (`*`) e Basic Auth deve ser protegido por HTTPS/reverse proxy fora do ambiente local.
 
-```sh
-cd web-admin
-npm ci
-npm run dev
-```
-
-O build Docker continua compilando `web-admin` e servindo o resultado pelo backend.
+Consulte a documentação viva em `obsidian/`, começando por `obsidian/00-index.md`.

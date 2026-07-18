@@ -1,13 +1,14 @@
 # Arquitetura atual
 
-O backend novo é independente do conteúdo de `OldGoProject/`. `cmd/api` e `cmd/server` compartilham `internal/app`; o modo de execução é definido por `APP_MODE`.
+O backend Go/Gin e o painel Next.js são processos separados no Compose. `cmd/api` e `cmd/server` compartilham `internal/app`; `APP_MODE` decide se o processo migra/serve HTTP ou consome Redis. `APP_ENVIRONMENT` decide se o serviço web executa `npm run dev` ou o build de produção.
 
-- `internal/config`: leitura e validação centralizadas de ambiente.
-- `internal/database`: SQLite, migrations embutidas e seed de providers.
-- `internal/http`: Gin, CORS, recovery, logging, Basic Auth, handlers e adaptadores de resposta.
-- `internal/review`: domínio, repository, service, split de diff e persistência de steps.
-- `internal/queue/redis`: Redis Streams isolado dos handlers.
-- `internal/providers`: interface comum e clientes Ollama, OpenAI-compatible e Gemini.
-- `internal/integrations/gitea`: diff e publicação de review.
+- `internal/config`: ambiente e defaults.
+- `internal/database`: SQLite, migrations embutidas e seed.
+- `internal/http`: Gin, CORS, recovery, logging, Basic Auth, handlers e respostas legadas/versionadas.
+- `internal/review`: domínio, policies, pending reviews, repository, split de diff e steps.
+- `internal/queue/redis`: Redis Streams, ack, heartbeat e métricas.
+- `internal/providers`: Ollama, OpenAI-compatible/OpenRouter e Gemini.
+- `internal/integrations/gitea`: diff, publicação, catálogo e resolver de instâncias.
+- `web-admin`: Next/React, cliente Basic Auth e visualização do fluxo.
 
-O frontend continua consumindo as rotas administrativas legadas, enquanto `/api/v1` oferece o contrato versionado para novas integrações.
+Detalhes: [[system-map|mapa do sistema]], [[data-model|modelo de dados]], [[contracts|contratos]] e [[migration-audit|auditoria]].

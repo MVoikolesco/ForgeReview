@@ -11,12 +11,13 @@ import (
 	"gitea-agents/internal/queue"
 	"gitea-agents/internal/review"
 	"gitea-agents/internal/security"
-	"github.com/gin-gonic/gin"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 type AdminHandler struct {
@@ -40,6 +41,7 @@ func (h *AdminHandler) Register(r *gin.RouterGroup) {
 	r.GET("/observability/reviews", h.observabilityReviews)
 	r.GET("/observability/progress", h.observabilityProgress)
 	r.POST("/reviews/manual", h.manual)
+	r.GET("/reviews/pending", h.pending)
 	r.Any("/reviews/pending/:action", h.pending)
 	r.POST("/gitea/instances/test", h.testGitea)
 	r.POST("/gitea/instances/:id/test", h.testGitea)
@@ -240,7 +242,16 @@ func (h *AdminHandler) setDefault(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	if _, err := h.db.ExecContext(c, "UPDATE "+table+" SET is_default=0 WHERE is_default=1"); err != nil {
+	scope := ""
+	scopeArgs := []any{}
+	if table == "ai_connections" {
+		scope = " AND provider_id=(SELECT provider_id FROM ai_connections WHERE id=?)"
+		scopeArgs = append(scopeArgs, id)
+	} else if table == "ai_models" {
+		scope = " AND connection_id=(SELECT connection_id FROM ai_models WHERE id=?)"
+		scopeArgs = append(scopeArgs, id)
+	}
+	if _, err := h.db.ExecContext(c, "UPDATE "+table+" SET is_default=0 WHERE is_default=1"+scope, scopeArgs...); err != nil {
 		responses.LegacyError(c, 400, "could not update default")
 		return
 	}
@@ -312,9 +323,58 @@ func (h *AdminHandler) observabilityProgress(c *gin.Context) {
 	}
 	events := make([]gin.H, 0, len(item.Steps))
 	for _, step := range item.Steps {
-		events = append(events, gin.H{"stage": step.Step, "status": step.Status, "percent": 0, "message": step.Message, "timestamp": step.StartedAt})
+		stage, status, percent := progressMapping(step.Step, step.Status)
+		events = append(events, gin.H{"stage": stage, "status": status, "percent": percent, "message": step.Message, "timestamp": step.StartedAt})
 	}
-	responses.Legacy(c, 200, gin.H{"active": item.Status != review.StatusCompleted && item.Status != review.StatusFailed, "review": gin.H{"name": item.ID, "updated_at": item.UpdatedAt, "percent": 0, "stage": item.Status, "status": item.Status, "message": item.Error, "events": events, "owner": item.Owner, "repo": item.Repository, "pr_number": item.PullRequest}})
+	stage, status, percent := progressMapping(item.Status, "")
+	if len(events) > 0 {
+		last := events[len(events)-1]
+		stage, status, percent = stringValue(last["stage"]), stringValue(last["status"]), intValue(last["percent"], 0)
+	}
+	active := item.Status != review.StatusCompleted && item.Status != review.StatusFailed && item.Status != review.StatusCancelled
+	responses.Legacy(c, 200, gin.H{"active": active, "review": gin.H{"name": item.ID, "updated_at": item.UpdatedAt, "percent": percent, "stage": stage, "status": status, "message": item.Error, "events": events, "owner": item.Owner, "repo": item.Repository, "pr_number": item.PullRequest}})
+}
+
+func progressMapping(step, rawStatus string) (string, string, int) {
+	stage := step
+	switch step {
+	case "enfileirado", "buscando_diff":
+		stage = "preparacao"
+	case "enviando_para_ia", "recebendo_resposta_parcial":
+		stage = "revisao"
+	case "agregando_resultado":
+		stage = "consolidacao"
+	case "publicando_comentario":
+		stage = "publicacao"
+	case review.StatusAwaitingApproval, "pre-publicacao":
+		stage = "pre-publicacao"
+	case review.StatusCompleted:
+		stage = "publicacao"
+	}
+	status := rawStatus
+	if status == "" {
+		status = "running"
+	}
+	switch rawStatus {
+	case "concluido":
+		status = "done"
+	case "falhou":
+		status = "failed"
+	case "aguardando":
+		status = "waiting"
+	case "processando":
+		status = "running"
+	}
+	percent := map[string]int{"enfileirado": 5, "buscando_diff": 20, "enviando_para_ia": 45, "recebendo_resposta_parcial": 60, "agregando_resultado": 80, "pre-publicacao": 90, "publicando_comentario": 95, "publicacao": 100}[step]
+	if step == review.StatusAwaitingApproval {
+		percent = 90
+		status = "waiting"
+	}
+	if step == review.StatusCompleted {
+		percent = 100
+		status = "done"
+	}
+	return stage, status, percent
 }
 func (h *AdminHandler) manual(c *gin.Context) {
 	var body struct {
@@ -340,13 +400,101 @@ func (h *AdminHandler) manual(c *gin.Context) {
 	responses.Legacy(c, 202, gin.H{"accepted": true, "review_id": item.ID, "owner": body.Owner, "repo": body.Repo, "pr_number": body.PRNumber})
 }
 func (h *AdminHandler) pending(c *gin.Context) {
-	responses.LegacyError(c, 409, "pending review actions are not available for this execution")
+	id := c.Query("name")
+	if id == "" {
+		responses.LegacyError(c, 400, "name é obrigatório")
+		return
+	}
+	pending, err := h.reviewRepo.Pending(c, id)
+	if err == sql.ErrNoRows {
+		responses.LegacyError(c, 404, "não há review aguardando autorização")
+		return
+	}
+	if err != nil {
+		responses.LegacyError(c, 500, "could not load pending review")
+		return
+	}
+	switch c.Param("action") {
+	case "":
+		comments := make([]gin.H, 0, len(pending.Result.Comments))
+		for _, item := range pending.Result.Comments {
+			comments = append(comments, gin.H{"path": item.File, "new_position": item.Line, "body": item.Comment})
+		}
+		responses.Legacy(c, 200, gin.H{"name": id, "job": pending.Job, "final_review": pending.Result.FinalReview, "publication": gin.H{"event": pending.Result.FinalReview.GiteaEvent, "body": pending.Result.FinalReview.Summary, "comments": comments}})
+	case "approve":
+		instanceID, err := h.resolveGiteaInstance(c, pending.Job)
+		if err != nil {
+			responses.LegacyError(c, 400, err.Error())
+			return
+		}
+		client, err := h.savedGiteaByID(c, instanceID)
+		if err != nil {
+			responses.LegacyError(c, 400, err.Error())
+			return
+		}
+		if err := client.Publish(c, pending.Job.Owner, pending.Job.Repository, pending.Job.PullRequest, pending.Result); err != nil {
+			responses.LegacyError(c, 502, "não foi possível publicar a revisão no Gitea")
+			return
+		}
+		_ = h.reviewRepo.DeletePending(c, id)
+		_ = h.reviewRepo.SetStatus(c, id, review.StatusCompleted, "")
+		responses.Legacy(c, 200, gin.H{"accepted": true, "action": "approve"})
+	case "reject":
+		_ = h.reviewRepo.DeletePending(c, id)
+		_ = h.reviewRepo.SetStatus(c, id, review.StatusCancelled, "review negada sem publicação")
+		responses.Legacy(c, 200, gin.H{"accepted": true, "action": "reject"})
+	case "rerun":
+		if err := h.reviewRepo.DeletePending(c, id); err != nil {
+			responses.LegacyError(c, 500, "could not reset pending review")
+			return
+		}
+		pending.Job.ReviewID = id
+		if err := h.reviews.EnqueueExisting(c, pending.Job); err != nil {
+			responses.LegacyError(c, 503, "não foi possível reexecutar a revisão")
+			return
+		}
+		responses.Legacy(c, http.StatusAccepted, gin.H{"accepted": true, "action": "rerun"})
+	default:
+		responses.LegacyError(c, 404, "not found")
+	}
 }
-func (h *AdminHandler) testConnection(c *gin.Context) { responses.Legacy(c, 200, gin.H{"ok": true}) }
+func (h *AdminHandler) testConnection(c *gin.Context) {
+	var provider, baseURL, ciphertext, authType string
+	if err := h.db.QueryRowContext(c, `SELECT p.name,COALESCE(NULLIF(c.base_url,''),p.base_url),c.api_key_ciphertext,p.auth_type FROM ai_connections c JOIN ai_providers p ON p.id=c.provider_id WHERE c.id=? AND c.is_enabled=1`, c.Param("id")).Scan(&provider, &baseURL, &ciphertext, &authType); err != nil {
+		responses.LegacyError(c, 404, "connection not found")
+		return
+	}
+	key := ""
+	if ciphertext != "" {
+		key, _ = security.Decrypt(ciphertext)
+	}
+	endpoint := strings.TrimRight(baseURL, "/") + "/api/tags"
+	if provider == "openrouter" || authType == "bearer" {
+		endpoint = strings.TrimRight(baseURL, "/") + "/models"
+	}
+	req, err := http.NewRequestWithContext(c, http.MethodGet, endpoint, nil)
+	if err != nil {
+		responses.LegacyError(c, 400, "endpoint inválido")
+		return
+	}
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	res, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil || res.StatusCode < 200 || res.StatusCode >= 300 {
+		if res != nil {
+			_ = res.Body.Close()
+		}
+		responses.LegacyError(c, 502, "provider indisponível")
+		return
+	}
+	_ = res.Body.Close()
+	responses.Legacy(c, 200, gin.H{"ok": true, "provider": provider})
+}
 func (h *AdminHandler) setup(c *gin.Context) {
 	switch c.Param("action") {
 	case "catalog":
-		responses.Legacy(c, 200, gin.H{"models": []gin.H{{"id": "llama3.2", "name": "llama3.2", "context_length": 8192, "max_completion_tokens": 4096, "supported_parameters": []string{}}}})
+		h.catalog(c)
 	case "complete":
 		h.completeSetup(c)
 	case "add-model":
@@ -354,6 +502,122 @@ func (h *AdminHandler) setup(c *gin.Context) {
 	default:
 		responses.LegacyError(c, 404, "not found")
 	}
+}
+
+func (h *AdminHandler) catalog(c *gin.Context) {
+	var input struct {
+		Provider   string `json:"provider"`
+		Connection struct {
+			ID          int64  `json:"id"`
+			BaseURL     string `json:"base_url"`
+			APIKey      string `json:"api_key"`
+			HTTPReferer string `json:"http_referer"`
+			AppTitle    string `json:"app_title"`
+		} `json:"connection"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		responses.LegacyError(c, 400, "invalid JSON")
+		return
+	}
+	provider := input.Provider
+	if provider == "ollama-cloud" {
+		provider = "ollama"
+	}
+	if input.Connection.ID > 0 {
+		var dbURL, ciphertext string
+		if err := h.db.QueryRowContext(c, "SELECT base_url,api_key_ciphertext FROM ai_connections WHERE id=? AND is_enabled=1", input.Connection.ID).Scan(&dbURL, &ciphertext); err != nil {
+			responses.LegacyError(c, 400, "connection not found")
+			return
+		}
+		if input.Connection.BaseURL == "" {
+			input.Connection.BaseURL = dbURL
+		}
+		if input.Connection.APIKey == "" && ciphertext != "" {
+			input.Connection.APIKey, _ = security.Decrypt(ciphertext)
+		}
+	}
+	if input.Connection.BaseURL == "" {
+		if provider == "openrouter" {
+			input.Connection.BaseURL = "https://openrouter.ai/api/v1"
+		} else if input.Provider == "ollama-cloud" {
+			input.Connection.BaseURL = "https://ollama.com"
+		} else {
+			input.Connection.BaseURL = "http://localhost:11434"
+		}
+	}
+	endpoint := strings.TrimRight(input.Connection.BaseURL, "/")
+	if provider == "openrouter" {
+		endpoint += "/models?output_modalities=text"
+	} else {
+		endpoint += "/api/tags"
+	}
+	req, err := http.NewRequestWithContext(c, http.MethodGet, endpoint, nil)
+	if err != nil {
+		responses.LegacyError(c, 400, "endpoint inválido")
+		return
+	}
+	if input.Connection.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+input.Connection.APIKey)
+	}
+	if input.Connection.HTTPReferer != "" {
+		req.Header.Set("HTTP-Referer", input.Connection.HTTPReferer)
+	}
+	if input.Connection.AppTitle != "" {
+		req.Header.Set("X-OpenRouter-Title", input.Connection.AppTitle)
+	}
+	res, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		responses.LegacyError(c, 502, "provider indisponível")
+		return
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		responses.LegacyError(c, 502, fmt.Sprintf("provider respondeu HTTP %d", res.StatusCode))
+		return
+	}
+	if provider == "openrouter" {
+		var payload struct {
+			Data []struct {
+				ID                  string   `json:"id"`
+				Name                string   `json:"name"`
+				ContextLength       int      `json:"context_length"`
+				SupportedParameters []string `json:"supported_parameters"`
+				TopProvider         struct {
+					MaxCompletionTokens int `json:"max_completion_tokens"`
+				} `json:"top_provider"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+			responses.LegacyError(c, 502, "catálogo inválido")
+			return
+		}
+		models := make([]gin.H, 0, len(payload.Data))
+		for _, item := range payload.Data {
+			models = append(models, gin.H{"id": item.ID, "name": item.Name, "context_length": item.ContextLength, "max_completion_tokens": item.TopProvider.MaxCompletionTokens, "supported_parameters": item.SupportedParameters})
+		}
+		responses.Legacy(c, 200, gin.H{"provider": "openrouter", "connection_ok": true, "models": models})
+		return
+	}
+	var payload struct {
+		Models []struct {
+			Name  string `json:"name"`
+			Model string `json:"model"`
+			Size  int64  `json:"size"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		responses.LegacyError(c, 502, "catálogo inválido")
+		return
+	}
+	models := make([]gin.H, 0, len(payload.Models))
+	for _, item := range payload.Models {
+		id := item.Model
+		if id == "" {
+			id = item.Name
+		}
+		models = append(models, gin.H{"id": id, "name": item.Name, "context_length": 0, "max_completion_tokens": 0, "supported_parameters": []string{"temperature", "top_p", "repeat_penalty", "num_ctx", "num_predict", "keep_alive"}, "size": item.Size})
+	}
+	responses.Legacy(c, 200, gin.H{"provider": "ollama", "connection_ok": true, "models": models})
 }
 func (h *AdminHandler) completeSetup(c *gin.Context) {
 	var d struct {
@@ -372,8 +636,14 @@ func (h *AdminHandler) completeSetup(c *gin.Context) {
 	if providerName == "ollama-cloud" {
 		providerName = "ollama"
 	}
+	tx, err := h.db.BeginTx(c, nil)
+	if err != nil {
+		responses.LegacyError(c, 500, "could not start setup transaction")
+		return
+	}
+	defer tx.Rollback()
 	var providerID int64
-	if err := h.db.QueryRowContext(c, "SELECT id FROM ai_providers WHERE name=?", providerName).Scan(&providerID); err != nil {
+	if err := tx.QueryRowContext(c, "SELECT id FROM ai_providers WHERE name=?", providerName).Scan(&providerID); err != nil {
 		responses.LegacyError(c, 400, "provider not found")
 		return
 	}
@@ -382,27 +652,49 @@ func (h *AdminHandler) completeSetup(c *gin.Context) {
 	apiKey := stringValue(d.Connection["api_key"])
 	enc := ""
 	if apiKey != "" {
-		enc, _ = security.Encrypt(apiKey)
+		enc, err = security.Encrypt(apiKey)
+		if err != nil {
+			responses.LegacyError(c, 400, "não foi possível proteger a API key")
+			return
+		}
 	}
-	result, err := h.db.ExecContext(c, `INSERT INTO ai_connections(provider_id,name,base_url,api_key_ciphertext,is_default,is_enabled) VALUES(?,?,?,?,1,1)`, providerID, name, baseURL, enc)
+	_, err = tx.ExecContext(c, "UPDATE ai_connections SET is_default=0 WHERE provider_id=? AND is_default=1", providerID)
+	if err != nil {
+		responses.LegacyError(c, 400, "could not update connection default")
+		return
+	}
+	result, err := tx.ExecContext(c, `INSERT INTO ai_connections(provider_id,name,base_url,api_key_ciphertext,http_referer,app_title,is_default,is_enabled) VALUES(?,?,?,?,?,?,1,1)`, providerID, name, baseURL, enc, stringValue(d.Connection["http_referer"]), stringValue(d.Connection["app_title"]))
 	if err != nil {
 		responses.LegacyError(c, 400, "could not create connection")
 		return
 	}
 	connectionID, _ := result.LastInsertId()
-	modelID, err := h.insertModel(c, connectionID, d.Model)
+	modelID, err := h.insertModelExec(c, tx, connectionID, d.Model)
 	if err != nil {
 		responses.LegacyError(c, 400, err.Error())
 		return
 	}
+	_, err = tx.ExecContext(c, `INSERT INTO model_parameters(model_id,temperature,top_p,timeout_seconds,keep_alive,unload_model_after_review) VALUES(?,?,?,?,?,?)`, modelID, floatValue(d.Parameters["temperature"]), floatValue(d.Parameters["top_p"]), intValue(d.Parameters["timeout_seconds"], h.cfg.ReviewRequestTimeoutSeconds), stringValue(d.Parameters["keep_alive"]), boolIntValue(d.Parameters["unload_model_after_review"]))
+	if err != nil {
+		responses.LegacyError(c, 400, "could not create model parameters")
+		return
+	}
 	profileName := stringValue(d.Profile["name"])
-	result, err = h.db.ExecContext(c, `INSERT INTO review_profiles(name,description,model_id,is_default,is_enabled) VALUES(?,?,?,1,1)`, profileName, stringValue(d.Profile["description"]), modelID)
+	result, err = tx.ExecContext(c, `INSERT INTO review_profiles(name,description,model_id,is_default,is_enabled) VALUES(?,?,?,1,1)`, profileName, stringValue(d.Profile["description"]), modelID)
 	if err != nil {
 		responses.LegacyError(c, 400, "could not create profile")
 		return
 	}
 	profileID, _ := result.LastInsertId()
-	_, _ = h.db.ExecContext(c, `INSERT INTO review_policies(profile_id,max_block_chars,max_files_per_block) VALUES(?,?,?)`, profileID, intValue(d.Policy["max_block_chars"], h.cfg.ReviewMaxBlockChars), intValue(d.Policy["max_files_per_block"], h.cfg.ReviewMaxFilesPerBlock))
+	_, err = tx.ExecContext(c, `INSERT INTO review_policies(profile_id,max_block_chars,max_files_per_block,review_concurrency,review_final_retries,publish_manual_reviews,allow_autonomous_rejection) VALUES(?,?,?,?,?,?,?)`, profileID, intValue(d.Policy["max_block_chars"], h.cfg.ReviewMaxBlockChars), intValue(d.Policy["max_files_per_block"], h.cfg.ReviewMaxFilesPerBlock), intValue(d.Policy["review_concurrency"], 1), intValue(d.Policy["review_final_retries"], 5), boolIntValue(d.Policy["publish_manual_reviews"]), boolIntValue(d.Policy["allow_autonomous_rejection"]))
+	if err != nil {
+		responses.LegacyError(c, 400, "could not create review policy")
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		responses.LegacyError(c, 500, "could not commit setup")
+		return
+	}
 	responses.Legacy(c, 201, gin.H{"connection_id": connectionID, "model_id": modelID, "profile_id": profileID})
 }
 func (h *AdminHandler) addModel(c *gin.Context) {
@@ -422,16 +714,171 @@ func (h *AdminHandler) addModel(c *gin.Context) {
 	responses.Legacy(c, 201, gin.H{"id": id})
 }
 func (h *AdminHandler) insertModel(c *gin.Context, connectionID int64, m map[string]any) (int64, error) {
-	result, err := h.db.ExecContext(c, `INSERT INTO ai_models(connection_id,provider_model_name,display_name,context_window,max_output_tokens,supports_json,is_enabled) VALUES(?,?,?,?,?,?,1)`, connectionID, stringValue(m["id"]), stringValue(m["name"]), intValue(m["context_length"], 0), intValue(m["max_completion_tokens"], 0), 1)
+	return h.insertModelExec(c, h.db, connectionID, m)
+}
+func (h *AdminHandler) insertModelExec(ctx context.Context, exec interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, connectionID int64, m map[string]any) (int64, error) {
+	result, err := exec.ExecContext(ctx, `INSERT INTO ai_models(connection_id,provider_model_name,display_name,context_window,max_output_tokens,supports_json,is_enabled) VALUES(?,?,?,?,?,?,1)`, connectionID, stringValue(m["id"]), stringValue(m["name"]), intValue(m["context_length"], 0), intValue(m["max_completion_tokens"], 0), 1)
 	if err != nil {
 		return 0, err
 	}
 	return result.LastInsertId()
 }
-func (h *AdminHandler) testGitea(c *gin.Context)         { responses.Legacy(c, 200, gin.H{"ok": true}) }
-func (h *AdminHandler) organizations(c *gin.Context)     { responses.Legacy(c, 200, []any{}) }
-func (h *AdminHandler) giteaRepositories(c *gin.Context) { responses.Legacy(c, 200, []any{}) }
-func (h *AdminHandler) pullRequests(c *gin.Context)      { responses.Legacy(c, 200, []any{}) }
+func (h *AdminHandler) testGitea(c *gin.Context) {
+	var input struct {
+		BaseURL     string `json:"base_url"`
+		Token       string `json:"token"`
+		BotUsername string `json:"bot_username"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		responses.LegacyError(c, 400, "invalid JSON")
+		return
+	}
+	if input.Token == "" && c.Param("id") != "" {
+		client, err := h.savedGitea(c)
+		if err != nil {
+			responses.LegacyError(c, 400, err.Error())
+			return
+		}
+		if err := client.TestConnection(c); err != nil {
+			responses.LegacyError(c, 502, "falha ao conectar ao Gitea")
+			return
+		}
+		responses.Legacy(c, 200, gin.H{"ok": true})
+		return
+	}
+	if strings.TrimSpace(input.BaseURL) == "" || strings.TrimSpace(input.Token) == "" {
+		responses.LegacyError(c, 400, "base_url e token são obrigatórios")
+		return
+	}
+	if err := gitea.New(input.BaseURL, input.Token).TestConnection(c); err != nil {
+		responses.LegacyError(c, 502, "falha ao conectar ao Gitea")
+		return
+	}
+	responses.Legacy(c, 200, gin.H{"ok": true, "bot_username": input.BotUsername})
+}
+
+func (h *AdminHandler) savedGitea(c *gin.Context) (*gitea.Client, error) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("instância Gitea inválida")
+	}
+	return h.savedGiteaByID(c, id)
+}
+
+func (h *AdminHandler) savedGiteaByID(c *gin.Context, id int64) (*gitea.Client, error) {
+	var baseURL, ciphertext string
+	if err := h.db.QueryRowContext(c, "SELECT base_url,token_ciphertext FROM gitea_instances WHERE id=? AND is_enabled=1", id).Scan(&baseURL, &ciphertext); err != nil {
+		return nil, err
+	}
+	token, err := security.Decrypt(ciphertext)
+	if err != nil || token == "" {
+		return nil, fmt.Errorf("token Gitea indisponível")
+	}
+	return gitea.New(baseURL, token), nil
+}
+
+func (h *AdminHandler) resolveGiteaInstance(c *gin.Context, job queue.ReviewJob) (int64, error) {
+	if job.GiteaInstanceID > 0 {
+		return job.GiteaInstanceID, nil
+	}
+	var id int64
+	err := h.db.QueryRowContext(c, `SELECT gi.id FROM gitea_instances gi JOIN repositories rep ON rep.gitea_instance_id=gi.id WHERE rep.owner=? AND rep.name=? AND gi.is_enabled=1 ORDER BY rep.id LIMIT 1`, job.Owner, job.Repository).Scan(&id)
+	if err == sql.ErrNoRows {
+		err = h.db.QueryRowContext(c, `SELECT id FROM gitea_instances WHERE is_enabled=1 ORDER BY is_default DESC, id LIMIT 1`).Scan(&id)
+	}
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("nenhuma instância Gitea configurada")
+	}
+	return id, err
+}
+
+func (h *AdminHandler) organizations(c *gin.Context) {
+	client, err := h.savedGitea(c)
+	if err != nil {
+		responses.LegacyError(c, 400, err.Error())
+		return
+	}
+	items, err := client.ListOrganizations(c)
+	if err != nil {
+		responses.LegacyError(c, 502, "falha ao listar organizações")
+		return
+	}
+	responses.Legacy(c, 200, items)
+}
+
+func (h *AdminHandler) giteaRepositories(c *gin.Context) {
+	client, err := h.savedGitea(c)
+	if err != nil {
+		responses.LegacyError(c, 400, err.Error())
+		return
+	}
+	var body struct {
+		Organization string `json:"organization"`
+		Repositories []struct {
+			Owner    string `json:"owner"`
+			Name     string `json:"name"`
+			FullName string `json:"full_name"`
+		} `json:"repositories"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	if body.Repositories != nil {
+		tx, txErr := h.db.BeginTx(c, nil)
+		if txErr == nil {
+			_, txErr = tx.ExecContext(c, "DELETE FROM repositories WHERE gitea_instance_id=?", c.Param("id"))
+			for _, item := range body.Repositories {
+				if txErr != nil {
+					break
+				}
+				full := item.FullName
+				if full == "" {
+					full = item.Owner + "/" + item.Name
+				}
+				_, txErr = tx.ExecContext(c, "INSERT INTO repositories(gitea_instance_id,owner,name,full_name) VALUES(?,?,?,?)", c.Param("id"), item.Owner, item.Name, full)
+			}
+			if txErr == nil {
+				txErr = tx.Commit()
+			} else {
+				_ = tx.Rollback()
+			}
+		}
+		if txErr != nil {
+			responses.LegacyError(c, 400, "could not save repositories")
+			return
+		}
+		responses.Legacy(c, 200, gin.H{"saved": len(body.Repositories)})
+		return
+	}
+	items, err := client.ListRepositories(c, body.Organization)
+	if err != nil {
+		responses.LegacyError(c, 502, "falha ao listar repositórios")
+		return
+	}
+	responses.Legacy(c, 200, items)
+}
+
+func (h *AdminHandler) pullRequests(c *gin.Context) {
+	client, err := h.savedGitea(c)
+	if err != nil {
+		responses.LegacyError(c, 400, err.Error())
+		return
+	}
+	var body struct {
+		Owner string `json:"owner"`
+		Repo  string `json:"repo"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.Owner == "" || body.Repo == "" {
+		responses.LegacyError(c, 400, "owner e repo são obrigatórios")
+		return
+	}
+	items, err := client.ListPullRequests(c, body.Owner, body.Repo)
+	if err != nil {
+		responses.LegacyError(c, 502, "falha ao listar pull requests")
+		return
+	}
+	responses.Legacy(c, 200, items)
+}
 func stringValue(v any) string {
 	if v == nil {
 		return ""
@@ -444,6 +891,14 @@ func intValue(v any, fallback int) int {
 		return fallback
 	}
 	return n
+}
+func floatValue(v any) float64 { n, _ := strconv.ParseFloat(stringValue(v), 64); return n }
+func boolIntValue(v any) int {
+	value := strings.EqualFold(stringValue(v), "true") || stringValue(v) == "1"
+	if value {
+		return 1
+	}
+	return 0
 }
 func columns(ctx context.Context, db *sql.DB, table string) ([]string, error) {
 	rows, err := db.QueryContext(ctx, "SELECT * FROM "+table+" LIMIT 0")

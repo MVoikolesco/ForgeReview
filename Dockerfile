@@ -13,6 +13,7 @@ WORKDIR /web-admin
 COPY web-admin/package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY web-admin ./
+ENV NEXT_OUTPUT=export
 RUN npm run build
 
 FROM alpine:3.20
