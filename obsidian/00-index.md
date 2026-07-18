@@ -1,18 +1,9 @@
-# Project Home
+# ForgeReview knowledge base
 
-Project-owned durable knowledge initialized by FlowAI.
-
-## Navigation
-
-- [[Project Overview]]
-- [[Architecture]]
-- [[Feature Map]]
-- [[Decision Log]]
-- [[Change Log]]
-- [[features/index|Features]]
-
-## Usage
-
-Keep these notes aligned with the repository after every meaningful write-capable
-task. Prefer concise facts and links over duplicated explanations.
-
+- [[architecture/overview|Arquitetura resumida]]
+- [[architecture/system-map|Mapa do sistema e reaproveitamento]]
+- [[architecture/data-model|Modelo de dados e mapeamentos]]
+- [[architecture/contracts|Contratos HTTP]]
+- [[architecture/migration-audit|Auditoria da migração e lacunas]]
+- [[operations/runbook|Runbook Docker/operação]]
+- [[operations/change-log|Change log]]

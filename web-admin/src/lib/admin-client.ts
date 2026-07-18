@@ -29,7 +29,11 @@ export function createAdminClient(
       const text = await response.text();
       let message = text;
       try {
-        message = (JSON.parse(text) as { error?: string }).error || text;
+        const payload = JSON.parse(text) as {
+          error?: string | { message?: string };
+        };
+        const error = payload.error;
+        message = typeof error === "string" ? error : error?.message || text;
       } catch {
         // Keep the raw response when it is not JSON.
       }

@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS pending_reviews (
+    review_id TEXT PRIMARY KEY REFERENCES reviews(id) ON DELETE CASCADE,
+    job_json TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

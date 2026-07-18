@@ -1,0 +1,14 @@
+ALTER TABLE review_policies ADD COLUMN review_planner_enabled INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE review_policies ADD COLUMN review_consolidator_enabled INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE review_policies ADD COLUMN review_verifier_enabled INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE review_policies ADD COLUMN review_formatter_enabled INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE review_policies ADD COLUMN review_planner_max_output_tokens INTEGER NOT NULL DEFAULT 2000;
+ALTER TABLE review_policies ADD COLUMN review_group_max_output_tokens INTEGER NOT NULL DEFAULT 3500;
+ALTER TABLE review_policies ADD COLUMN review_consolidator_max_output_tokens INTEGER NOT NULL DEFAULT 3500;
+ALTER TABLE review_policies ADD COLUMN review_verifier_max_output_tokens INTEGER NOT NULL DEFAULT 2500;
+ALTER TABLE review_policies ADD COLUMN review_formatter_max_output_tokens INTEGER NOT NULL DEFAULT 2500;
+ALTER TABLE review_policies ADD COLUMN review_context_safety_margin_tokens INTEGER NOT NULL DEFAULT 2048;
+ALTER TABLE review_policies ADD COLUMN review_min_publish_confidence REAL NOT NULL DEFAULT 0.75;
+ALTER TABLE review_policies ADD COLUMN review_max_parallel_groups INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE review_policies ADD COLUMN review_medium_severity_event TEXT NOT NULL DEFAULT 'REQUEST_CHANGES';
+ALTER TABLE review_policies ADD COLUMN review_partial_event TEXT NOT NULL DEFAULT 'COMMENT';

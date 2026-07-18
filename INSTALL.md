@@ -23,11 +23,14 @@ GITEA_TOKEN=...
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=troque-esta-senha
 GITEA_TOKEN_ENCRYPTION_KEY=uma-chave-com-exatos-32-bytes
+APP_ENVIRONMENT=production
 ```
 
 O Compose define internamente o caminho correto do SQLite (`/data/forgereview.db`) e compartilha o volume `config_data` entre API e worker.
 
-Abra `http://localhost:8088`, faça login e escolha **Configurar IA**. O assistente valida a conexão, consulta o catálogo do provider e grava conexão, modelo, parâmetros, profile e policy em uma única transação. Os prompts internos versionados pelo projeto não são modificados pelo painel.
+Abra `http://localhost:3000`, faça login e escolha **Configurar IA**. O assistente valida a conexão, consulta o catálogo do provider e grava conexão, modelo, parâmetros, profile e policy. A API permanece disponível em `http://localhost:8088` para integrações e fallback estático; os prompts internos versionados pelo projeto não são modificados pelo painel.
+
+Para desenvolvimento, use `APP_ENVIRONMENT=development`; o serviço web sobe com `npm run dev`. O valor padrão `production` compila o Next e sobe com `npm run start`.
 
 Para Ollama executando na máquina host, use esta URL na conexão cadastrada:
 
@@ -43,7 +46,7 @@ A área **Operação** exibe heartbeat dos workers, tamanho e pendências da fil
 
 ```sh
 docker compose ps
-docker compose logs --tail=100 api worker
+docker compose logs --tail=100 api worker web
 ```
 
 Todos os serviços devem aparecer como ativos e API/Redis como saudáveis. Para recriar containers sem apagar o SQLite:

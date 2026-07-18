@@ -64,6 +64,23 @@ services:
       api:
         condition: service_healthy
 
+  web:
+    image: forgereview-web:local
+    build:
+      context: ./web-admin
+      target: ${APP_ENVIRONMENT:-production}
+    container_name: gitea-ai-reviewer-web
+    restart: unless-stopped
+    environment:
+      APP_ENVIRONMENT: ${APP_ENVIRONMENT:-production}
+      API_INTERNAL_URL: http://api:8080
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   redis_data:
   config_data:
