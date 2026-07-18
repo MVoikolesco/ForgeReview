@@ -1,5 +1,9 @@
 # Change log
 
+## 2026-07-18
+
+- O registro HTTP foi modularizado: `internal/http/router.go` conserva o único ponto de composição em `RegisterRoutes`; os domínios `health`, `webhook`, `reviews` e `admin` foram movidos para pacotes próprios, cada qual com `router.go` e `RegisterRoutes`. Os contratos de paths, métodos e autenticação foram preservados e cobertos em `internal/http/router_test.go`. Ver [[architecture/system-map|mapa do sistema]].
+
 ## 2026-07-17
 
 - Implementado backend novo com Gin, separado do legado histórico.

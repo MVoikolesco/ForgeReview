@@ -7,16 +7,19 @@ import (
 	"time"
 
 	"gitea-agents/internal/config"
-	"gitea-agents/internal/http/handlers"
+	"gitea-agents/internal/http/admin"
+	"gitea-agents/internal/http/health"
 	"gitea-agents/internal/http/middlewares"
+	"gitea-agents/internal/http/reviews"
+	"gitea-agents/internal/http/webhook"
 	"gitea-agents/internal/queue"
 	"gitea-agents/internal/review"
 
 	"github.com/gin-gonic/gin"
 )
 
-// NewRouter builds the Gin engine, middleware chain, public integration routes,
-// authenticated APIs, administrative routes, and static frontend fallback.
+// NewRouter builds the Gin engine and its global middleware. Route composition
+// is delegated to RegisterRoutes so domain handlers own their endpoints.
 func NewRouter(
 	cfg config.Config,
 	db *sql.DB,
@@ -32,32 +35,29 @@ func NewRouter(
 	r := gin.New()
 	r.Use(middlewares.Recovery(), middlewares.CORS(), middlewares.AccessLog(logger))
 
-	started := time.Now()
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":         "ok",
-			"service":        cfg.ServiceName,
-			"version":        cfg.Version,
-			"uptime_seconds": int(time.Since(started).Seconds()),
-		})
-	})
+	RegisterRoutes(r, cfg, db, repo, service, observer)
+	return r
+}
 
-	webhook := handlers.NewWebhookHandler(service, cfg)
-	r.Any("/webhook", webhook.Receive)
-	r.POST("/review", webhook.Manual)
-	reviewHandler := handlers.NewReviewHandler(service, repo)
+// RegisterRoutes is the sole HTTP route composition point. Domain handlers
+// register their own endpoints; this function only establishes shared groups.
+func RegisterRoutes(
+	r *gin.Engine,
+	cfg config.Config,
+	db *sql.DB,
+	repo *review.Repository,
+	service *review.Service,
+	observer queue.Observer,
+) {
+	health.RegisterRoutes(r, cfg, time.Now())
+
+	webhook.RegisterRoutes(r, service, cfg)
+
 	api := r.Group("/api/v1", middlewares.BasicAuth(cfg.AdminUsername, cfg.AdminPassword))
-	api.GET("/reviews", reviewHandler.List)
-	api.POST("/reviews", reviewHandler.Create)
-	api.GET("/reviews/:id", reviewHandler.Get)
-	api.GET("/reviews/:id/status", reviewHandler.Get)
-	api.GET("/reviews/:id/steps", reviewHandler.Steps)
-	api.GET("/reviews/:id/result", reviewHandler.Result)
-	api.POST("/reviews/:id/reprocess", reviewHandler.Reprocess)
-	api.POST("/reviews/:id/cancel", reviewHandler.Cancel)
+	reviews.RegisterRoutes(api, service, repo)
 
-	admin := r.Group("/api/admin", middlewares.BasicAuth(cfg.AdminUsername, cfg.AdminPassword))
-	handlers.NewAdminHandler(db, cfg, service, repo, observer).Register(admin)
+	adminRoutes := r.Group("/api/admin", middlewares.BasicAuth(cfg.AdminUsername, cfg.AdminPassword))
+	admin.RegisterRoutes(adminRoutes, db, cfg, service, repo, observer)
 
 	fileServer := http.FileServer(http.Dir("./web"))
 	r.NoRoute(func(c *gin.Context) {
@@ -67,5 +67,4 @@ func NewRouter(
 		}
 		fileServer.ServeHTTP(c.Writer, c.Request)
 	})
-	return r
 }

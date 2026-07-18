@@ -17,7 +17,7 @@ Relaciona cada fronteira, responsabilidade e ponto de reaproveitamento. A fonte 
 - `internal/app`: composição de configuração, banco, queue, service, provider e HTTP.
 - `internal/config`: ambiente e defaults; só aceita SQLite e `APP_MODE` `api`/`worker`.
 - `internal/database`: migrations embutidas em `internal/database/migrations/*.sql`, seed de quatro providers e verificação de schema.
-- `internal/http`: router Gin, Basic Auth, CORS, recovery, log, handlers e envelopes.
+- `internal/http`: `router.go` compõe middleware, grupos e fallback. Os pacotes `health`, `webhook`, `reviews` e `admin` possuem um `router.go` próprio que registra somente as rotas do domínio; inclui Basic Auth, CORS, recovery, log e envelopes.
 - `internal/review`: `Service` coordena o fluxo; `Repository` persiste reviews, steps, policies, prompts e pendências.
 - `internal/queue/redis`: Redis Streams, consumer group, heartbeat, ack e métricas.
 - `internal/integrations/gitea`: diff, publicação, catálogo de organizações/repos/PRs e resolução de instância/token.

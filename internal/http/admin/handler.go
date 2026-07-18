@@ -1,4 +1,4 @@
-package handlers
+package admin
 
 import (
 	"database/sql"
@@ -51,47 +51,6 @@ func NewAdminHandler(
 		reviews:    reviews,
 		reviewRepo: repo,
 		observer:   observer,
-	}
-}
-
-// Register attaches all administrative routes to the supplied Gin router
-// group. Authentication must be configured by the caller on that group.
-func (h *AdminHandler) Register(router *gin.RouterGroup) {
-	router.GET("/status", h.status)
-	router.Any("/setup/:action", h.setup)
-	router.GET("/observability/metrics", h.metrics)
-	router.GET("/observability/logs", func(c *gin.Context) {
-		responses.OK(c, 200, gin.H{"lines": []string{}, "available": false})
-	})
-	router.GET("/observability/reviews", h.observabilityReviews)
-	router.GET("/observability/progress", h.observabilityProgress)
-	router.POST("/reviews/manual", h.manual)
-	router.GET("/reviews/pending", h.pending)
-	router.Any("/reviews/pending/:action", h.pending)
-	router.POST("/gitea/instances/test", h.testGitea)
-	router.POST("/gitea/instances/:id/test", h.testGitea)
-	router.POST("/gitea/instances/:id/organizations", h.organizations)
-	router.POST("/gitea/instances/:id/repositories", h.giteaRepositories)
-	router.POST("/gitea/instances/:id/pull-requests", h.pullRequests)
-
-	for path := range resources {
-		h.registerResource(router, path)
-	}
-}
-
-// registerResource attaches the generic CRUD endpoints for one allow-listed
-// administrative resource.
-func (h *AdminHandler) registerResource(router *gin.RouterGroup, path string) {
-	router.GET("/"+path, h.list)
-	router.POST("/"+path, h.create)
-	router.GET("/"+path+"/:id", h.one)
-	router.PUT("/"+path+"/:id", h.update)
-	router.PATCH("/"+path+"/:id", h.update)
-	router.DELETE("/"+path+"/:id", h.delete)
-	router.POST("/"+path+"/:id/set-default", h.setDefault)
-
-	if path == "ai/connections" {
-		router.POST("/"+path+"/:id/test", h.testConnection)
 	}
 }
 
