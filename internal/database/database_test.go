@@ -2,8 +2,9 @@ package database
 
 import (
 	"context"
-	"gitea-agents/internal/config"
 	"testing"
+
+	"gitea-agents/internal/config"
 )
 
 func TestMigrateAndSeed(t *testing.T) {

@@ -13,16 +13,21 @@ import (
 
 	"gitea-agents/internal/config"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // Register the pure-Go SQLite database driver.
 )
 
-// Migrations are embedded in the binary so API and worker use the same schema.
+// migrationFS embeds migrations so API and worker use the same schema.
 //
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-type DB struct{ SQL *sql.DB }
+// DB owns the configured SQLite connection used by application repositories.
+type DB struct {
+	SQL *sql.DB
+}
 
+// Open validates the configured database driver, creates the database directory,
+// opens SQLite, and returns a ready DB connection.
 func Open(cfg config.Config) (*DB, error) {
 	if cfg.DatabaseDriver != "sqlite" {
 		return nil, fmt.Errorf("unsupported database driver %q", cfg.DatabaseDriver)
@@ -50,8 +55,13 @@ func Open(cfg config.Config) (*DB, error) {
 	return &DB{SQL: db}, nil
 }
 
-func (d *DB) Close() error { return d.SQL.Close() }
+// Close releases the underlying SQLite connection.
+func (d *DB) Close() error {
+	return d.SQL.Close()
+}
 
+// Migrate applies each pending embedded migration in filename order. It returns
+// the first migration or transaction error encountered.
 func (d *DB) Migrate(ctx context.Context) error {
 	if _, err := d.SQL.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
 		return err
@@ -119,6 +129,8 @@ func (d *DB) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// RequireSchema verifies that the review schema exists. Workers call this
+// method instead of applying migrations and receive an actionable startup error.
 func (d *DB) RequireSchema(ctx context.Context) error {
 	var name string
 	if err := d.SQL.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name='reviews'").Scan(&name); err != nil {

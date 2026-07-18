@@ -1,105 +1,75 @@
-# Como Contribuir
+# Como contribuir
 
-Obrigado por considerar contribuir com o Gitea AI Reviewer.
-
-Este projeto mexe com fluxo automatizado de review, entao mudancas devem preservar previsibilidade, rastreabilidade e seguranca na publicacao dos comentarios no Gitea.
-
-## Antes de Comecar
-
-1. Abra uma issue ou descreva claramente o problema que o PR resolve.
-2. Prefira mudancas pequenas e focadas.
-3. Evite misturar refatoracao grande com alteracao funcional.
-4. Mantenha compatibilidade com o fluxo atual de webhook, fila, worker, Ollama e publicacao no Gitea.
+Mudanças no ForgeReview devem preservar previsibilidade, rastreabilidade, contratos HTTP e segurança na publicação de reviews no Gitea.
 
 ## Ambiente
 
-Configure o projeto seguindo [INSTALL.md](INSTALL.md).
-
-Para validar localmente:
+Configure o projeto seguindo o [INSTALL.md](INSTALL.md). Para validar backend e frontend:
 
 ```sh
-go test ./...
+make check
 ```
 
-Ou via Docker:
+Para formatar todo o código Go:
 
 ```sh
-docker run --rm -v "${PWD}:/app" -w /app golang:1.22-alpine go test ./...
+make fmt
 ```
 
-## Padroes de Codigo
+## Estilo
 
-- Use `gofmt`/`go fmt ./...`.
-- Mantenha funcoes pequenas quando possivel.
-- Prefira interfaces simples e explicitas.
-- Nao esconda erros importantes.
-- Nao escreva tokens, diffs completos ou dados sensiveis no stdout quando isso puder vazar informacao.
-- Chaves de IA são write-only, cifradas no SQLite e não podem usar `.env` como fallback.
-- Preserve logs fisicos que ajudam a auditar prompts, diffs e respostas.
+O `.editorconfig` na raiz define:
 
-## Prompts
+- tabs e largura 4 para Go, `go.mod`, `go.sum` e receitas do `Makefile`;
+- 2 espaços para TypeScript, TSX, JSON, YAML, SCSS e shell;
+- 4 espaços para SQL e Dockerfiles;
+- UTF-8, LF, newline final e remoção de whitespace excedente.
 
-Prompts devem ser faceis de editar por quem nao quer mexer em Go.
+`gofmt` continua sendo a fonte de verdade para Go. EditorConfig não substitui o formatador.
 
-Ao alterar prompts:
+## GoDoc
 
-- Edite os quatro arquivos em `prompts/`: revisão técnica, segurança/performance, divergências de importação e formato final.
-- Mantenha os caminhos desses arquivos e somente os filtros de arquivos em `config/review-prompts.yaml`.
-- Nao coloque regra especifica de projeto no YAML.
-- Não há seleção ou composição de prompts por stack.
-- Mantenha prompts curtos, objetivos e acionaveis.
-- Nao altere a estrutura de entrada ou resposta base apenas pelo Markdown.
-- Nao instrua o modelo a responder em JSON, Markdown livre ou outro formato sem atualizar o parser.
+Todo símbolo exportado deve ter comentário iniciado pelo nome do símbolo:
 
-## Contrato de Resposta
+```go
+// NewRouter builds the Gin engine and registers the HTTP routes.
+func NewRouter(...) *gin.Engine
+```
 
-O formato de resposta do modelo e parte critica do sistema.
+Descreva no texto o propósito, entradas relevantes, retorno e efeitos colaterais. Não use tags PHPDoc como `@param` ou `@return`; elas não fazem parte do padrão GoDoc.
 
-Nao altere a estrutura abaixo sem atualizar parser, testes e fluxo de publicacao:
+Funções privadas devem receber comentários apenas quando coordenam regras, integrações ou transformações que não sejam evidentes pelo nome.
 
-- `STATUS`
-- `ACHADOS_CONCRETOS`
-- `CONTRATOS_DECLARADOS`
-- `REFERENCIAS_A_VERIFICAR`
-- `REGRAS_DE_VALIDACAO`
-- `COMENTARIOS_INLINE`
-- `REVISAO_FINAL`
-- `EVENTO_GITEA`
+## Organização Go/Gin
 
-Esse contrato e usado para transformar a resposta do modelo em comentarios inline e evento final no Gitea.
+- Um arquivo deve representar uma responsabilidade coesa.
+- Handlers Gin validam entrada e escrevem respostas; regras de review ficam em `internal/review`.
+- Persistência de review passa por `review.Repository`.
+- Integrações externas ficam em `internal/integrations` ou `internal/providers`.
+- Use `net/http` para status HTTP, em vez de números soltos.
+- Separe imports da biblioteca padrão, módulos internos e dependências externas.
+- Prefira payloads e structs nomeados quando DTOs anônimos tornarem o handler difícil de ler.
+- Não altere formato JSON, rotas, status persistidos ou regras de publicação em uma refatoração apenas estrutural.
 
-Mudancas nesse contrato devem ser tratadas como alteracao de codigo, nao apenas como ajuste de prompt.
+## Segurança
+
+- Nunca registre tokens, API keys ou ciphertexts.
+- Chaves de IA e tokens Gitea são write-only e cifrados no SQLite.
+- Não persista diff bruto, prompt montado ou resposta intermediária sem decisão explícita de retenção.
+- Não enfraqueça autenticação, validação do contrato de IA ou policies para obter um teste verde.
 
 ## Testes
 
-Inclua ou atualize testes quando alterar:
+Inclua testes ao alterar contratos, handlers, migrations, fila, policies, providers, parser de resultado ou publicação Gitea.
 
-- parsing de diff;
-- montagem de blocos;
-- resolucao de prompts;
-- parser da resposta final;
-- cliente Gitea;
-- cliente Ollama;
-- fluxo do worker;
-- filtros de arquivos.
-
-Antes de abrir PR:
+Antes de abrir um PR:
 
 ```sh
-go test ./...
-docker build -t gitea-agents-configurable-test .
+go test -race ./...
+go vet ./...
+npm --prefix web-admin run lint
+npm --prefix web-admin run build
+docker compose config --quiet
 ```
 
-## Checklist de Pull Request
-
-- A mudanca tem escopo claro.
-- `go test ./...` passou.
-- O build Docker passou quando aplicavel.
-- O README ou INSTALL foi atualizado quando o uso mudou.
-- Prompts novos estao cadastrados em `config/review-prompts.yaml`.
-- O contrato de resposta foi preservado ou atualizado com testes.
-- Nao ha segredo, token ou URL privada nos exemplos.
-
-## Licenca
-
-Ao contribuir, voce concorda que sua contribuicao sera distribuida sob a licenca do projeto: [MIT](LICENSE).
+Atualize `README.md`, `INSTALL.md` e as notas em `obsidian/` quando a arquitetura, operação ou comportamento mudar.

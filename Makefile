@@ -1,7 +1,7 @@
 APP_NAME := gitea-agents
 MAIN_PACKAGE := ./cmd/server
 
-.PHONY: run build test docker fmt lint
+.PHONY: run build test docker fmt lint check
 
 run:
 	go run $(MAIN_PACKAGE)
@@ -19,4 +19,7 @@ fmt:
 	go fmt ./...
 
 lint:
-	@echo "lint placeholder"
+	go vet ./...
+	npm --prefix web-admin run lint
+
+check: test lint

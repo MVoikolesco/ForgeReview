@@ -2,11 +2,12 @@ package review
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"gitea-agents/internal/config"
 	databasepkg "gitea-agents/internal/database"
 	"gitea-agents/internal/queue"
-	"testing"
-	"time"
 )
 
 func TestRepositoryPersistsReviewAndSteps(t *testing.T) {
@@ -26,7 +27,7 @@ func TestRepositoryPersistsReviewAndSteps(t *testing.T) {
 	if err := repo.SetStatus(context.Background(), job.ReviewID, StatusQueued, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.AddStep(context.Background(), job.ReviewID, "buscando_diff", "concluido", "ok", nil, now(), nil, 12, ""); err != nil {
+	if err := repo.AddStep(context.Background(), job.ReviewID, "buscando_diff", "concluido", "ok", nil, time.Now().UTC(), nil, 12, ""); err != nil {
 		t.Fatal(err)
 	}
 	item, err := repo.Get(context.Background(), job.ReviewID)
@@ -37,5 +38,3 @@ func TestRepositoryPersistsReviewAndSteps(t *testing.T) {
 		t.Fatalf("unexpected review: %#v", item)
 	}
 }
-
-func now() time.Time { return time.Now().UTC() }

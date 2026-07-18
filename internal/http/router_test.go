@@ -2,19 +2,22 @@ package httpapi
 
 import (
 	"context"
-	"gitea-agents/internal/config"
-	databasepkg "gitea-agents/internal/database"
-	"gitea-agents/internal/queue"
-	"gitea-agents/internal/review"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"gitea-agents/internal/config"
+	databasepkg "gitea-agents/internal/database"
+	"gitea-agents/internal/queue"
+	"gitea-agents/internal/review"
 )
 
-type publisher struct{}
+type stubPublisher struct{}
 
-func (publisher) Publish(context.Context, queue.ReviewJob) error { return nil }
+func (stubPublisher) Publish(context.Context, queue.ReviewJob) error {
+	return nil
+}
 
 func TestRouterKeepsHealthAndAdminContracts(t *testing.T) {
 	db, err := databasepkg.Open(config.Config{DatabaseDriver: "sqlite", DatabaseDSN: ":memory:"})
@@ -29,7 +32,7 @@ func TestRouterKeepsHealthAndAdminContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := review.NewRepository(db.SQL)
-	service := review.NewService(config.Config{}, repo, publisher{})
+	service := review.NewService(config.Config{}, repo, stubPublisher{})
 	cfg := config.Config{ServiceName: "test", Version: "test", AdminUsername: "admin", AdminPassword: "secret", GiteaBotUsername: "ia-reviewer"}
 	router := NewRouter(cfg, db.SQL, repo, service, nil, log.Default())
 	for _, request := range []*http.Request{httptest.NewRequest(http.MethodGet, "/health", nil), httptest.NewRequest(http.MethodGet, "/api/admin/ai/providers", nil)} {

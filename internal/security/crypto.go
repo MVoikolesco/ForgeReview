@@ -10,6 +10,8 @@ import (
 	"os"
 )
 
+// Encrypt protects value with AES-256-GCM using GITEA_TOKEN_ENCRYPTION_KEY.
+// It returns a base64 ciphertext containing the random nonce.
 func Encrypt(value string) (string, error) {
 	key := []byte(os.Getenv("GITEA_TOKEN_ENCRYPTION_KEY"))
 	if len(key) != 32 {
@@ -29,6 +31,9 @@ func Encrypt(value string) (string, error) {
 	}
 	return base64.StdEncoding.EncodeToString(gcm.Seal(nonce, nonce, []byte(value), nil)), nil
 }
+
+// Decrypt decodes and opens an AES-256-GCM ciphertext produced by Encrypt. It
+// returns the original plaintext or an error for invalid key/ciphertext data.
 func Decrypt(value string) (string, error) {
 	key := []byte(os.Getenv("GITEA_TOKEN_ENCRYPTION_KEY"))
 	if len(key) != 32 {
