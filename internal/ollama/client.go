@@ -114,6 +114,7 @@ func (c *Client) chatWithOptions(ctx context.Context, prompt string, options Opt
 	payload := chatRequest{
 		Model:     c.model,
 		Stream:    false,
+		Think:     false,
 		KeepAlive: c.keepAlive,
 		Messages: []chatMessage{
 			{Role: "user", Content: prompt},
@@ -149,12 +150,17 @@ func (c *Client) chatWithOptions(ctx context.Context, prompt string, options Opt
 		return ChatResult{}, fmt.Errorf("erro ao ler resposta ollama: %w", err)
 	}
 
-	if chatResponse.Message.Content == "" {
+	content := strings.TrimSpace(chatResponse.Message.Content)
+	if content == "" {
+		// Older or compatibility endpoints may return generate-style output.
+		content = strings.TrimSpace(chatResponse.Response)
+	}
+	if content == "" {
 		return ChatResult{}, fmt.Errorf("ollama retornou resposta sem message.content")
 	}
 
 	return ChatResult{
-		Content:          chatResponse.Message.Content,
+		Content:          content,
 		PromptTokens:     chatResponse.PromptEvalCount,
 		CompletionTokens: chatResponse.EvalCount,
 	}, nil
@@ -169,6 +175,7 @@ func (c *Client) authorize(req *http.Request) {
 type chatRequest struct {
 	Model     string        `json:"model"`
 	Stream    bool          `json:"stream"`
+	Think     bool          `json:"think"`
 	KeepAlive string        `json:"keep_alive,omitempty"`
 	Messages  []chatMessage `json:"messages"`
 	Options   Options       `json:"options"`
@@ -181,6 +188,7 @@ type chatMessage struct {
 
 type chatResponse struct {
 	Message         chatMessage `json:"message"`
+	Response        string      `json:"response"`
 	PromptEvalCount int         `json:"prompt_eval_count"`
 	EvalCount       int         `json:"eval_count"`
 }

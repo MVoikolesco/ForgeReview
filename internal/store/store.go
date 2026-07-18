@@ -95,8 +95,20 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// SQLite cannot rebuild a referenced table while foreign-key enforcement
+		// is enabled. Migration 009 preserves all IDs and restores enforcement
+		// before the connection is available to other work.
+		rebuildsReferencedTable := name == "009_ai_connection_secret.sql"
+		if rebuildsReferencedTable {
+			if _, err = s.DB.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+				return err
+			}
+		}
 		tx, err := s.DB.BeginTx(ctx, nil)
 		if err != nil {
+			if rebuildsReferencedTable {
+				_, _ = s.DB.ExecContext(ctx, "PRAGMA foreign_keys=ON")
+			}
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, string(b)); err == nil {
@@ -104,10 +116,21 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 		if err != nil {
 			tx.Rollback()
+			if rebuildsReferencedTable {
+				_, _ = s.DB.ExecContext(ctx, "PRAGMA foreign_keys=ON")
+			}
 			return fmt.Errorf("migration %s: %w", name, err)
 		}
 		if err = tx.Commit(); err != nil {
+			if rebuildsReferencedTable {
+				_, _ = s.DB.ExecContext(ctx, "PRAGMA foreign_keys=ON")
+			}
 			return err
+		}
+		if rebuildsReferencedTable {
+			if _, err = s.DB.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

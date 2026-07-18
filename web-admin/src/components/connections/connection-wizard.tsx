@@ -27,7 +27,7 @@ type Props = {
     provider: SetupDraft["provider"];
     name: string;
     base_url: string;
-    api_key_env_name: string;
+    api_key_configured: boolean;
     http_referer?: string;
     app_title?: string;
   };
@@ -47,8 +47,8 @@ const defaults: SetupDraft = {
   provider: "ollama",
   connection: {
     name: "Ollama local",
-    base_url: "http://host.docker.internal:11434",
-    api_key_env_name: "",
+    base_url: "http://localhost:11434",
+    api_key: "",
     http_referer: "",
     app_title: "ForgeReview",
   },
@@ -78,14 +78,9 @@ const defaults: SetupDraft = {
     review_own_pull_requests: false,
     publish_manual_reviews: false,
     allow_autonomous_rejection: false,
-    log_sensitive_data: false,
     unload_model_after_review: false,
   },
 };
-
-function apiProvider(provider: SetupDraft["provider"]): "ollama" | "openrouter" {
-  return provider === "ollama-cloud" ? "ollama" : provider;
-}
 
 export function ConnectionWizard({
   request,
@@ -100,10 +95,11 @@ export function ConnectionWizard({
     existingConnection
       ? {
           ...defaults,
-           provider:
-             existingConnection.provider === "ollama" && existingConnection.api_key_env_name
-               ? "ollama-cloud"
-               : existingConnection.provider,
+          provider:
+            existingConnection.provider === "ollama" &&
+            existingConnection.api_key_configured
+              ? "ollama-cloud"
+              : existingConnection.provider,
           connection: { ...defaults.connection, ...existingConnection },
         }
       : defaults,
@@ -152,7 +148,7 @@ export function ConnectionWizard({
           ? {
               name: "OpenRouter principal",
               base_url: "https://openrouter.ai/api/v1",
-              api_key_env_name: "OPENROUTER_API_KEY",
+              api_key: "",
               http_referer: "",
               app_title: "ForgeReview",
             }
@@ -160,17 +156,17 @@ export function ConnectionWizard({
             ? {
                 name: "Ollama Cloud",
                 base_url: "https://ollama.com",
-                api_key_env_name: "OLLAMA_API_KEY",
+                api_key: "",
                 http_referer: "",
                 app_title: "ForgeReview",
               }
             : {
-              name: "Ollama local",
-              base_url: "http://host.docker.internal:11434",
-              api_key_env_name: "",
-              http_referer: "",
-              app_title: "ForgeReview",
-            },
+                name: "Ollama local",
+                base_url: "http://localhost:11434",
+                api_key: "",
+                http_referer: "",
+                app_title: "ForgeReview",
+              },
     }));
   }
 
@@ -191,7 +187,7 @@ export function ConnectionWizard({
       const result = await request<CatalogResponse>("setup/catalog", {
         method: "POST",
         body: JSON.stringify({
-          provider: apiProvider(draft.provider),
+          provider: draft.provider,
           connection: draft.connection,
         }),
       });
@@ -223,7 +219,7 @@ export function ConnectionWizard({
                 parameters: draft.parameters,
                 make_default: makeDefault,
               }
-            : { ...draft, provider: apiProvider(draft.provider) },
+            : { ...draft, provider: draft.provider },
         ),
       });
       await onComplete();
@@ -276,7 +272,12 @@ export function ConnectionWizard({
           <ProviderStep selected={draft.provider} onSelect={chooseProvider} />
         )}
         {step === 1 && (
-          <ConnectionStep draft={draft} update={updateConnection} />
+          <ConnectionStep
+            draft={draft}
+            update={updateConnection}
+            addMode={addMode}
+            existingConnection={existingConnection}
+          />
         )}
         {step === 2 && (
           <ModelStep
@@ -395,7 +396,9 @@ function ProviderStep({
         className={selected === "ollama-cloud" ? "selected" : ""}
         onClick={() => onSelect("ollama-cloud")}
       >
-        <span className="provider-option-icon ollama"><Box /></span>
+        <span className="provider-option-icon ollama">
+          <Box />
+        </span>
         <span className="provider-option-copy">
           <strong>Ollama Cloud</strong>
           <small>Modelos hospedados com autenticação por chave.</small>
@@ -410,9 +413,13 @@ function ProviderStep({
 function ConnectionStep({
   draft,
   update,
+  addMode,
+  existingConnection,
 }: {
   draft: SetupDraft;
   update: (field: keyof SetupDraft["connection"], value: string) => void;
+  addMode: boolean;
+  existingConnection?: Props["existingConnection"];
 }) {
   return (
     <div className="connection-form">
@@ -459,29 +466,38 @@ function ConnectionStep({
           </span>
           <small>O servidor deve conseguir alcançar este endereço.</small>
         </label>
-        {(draft.provider === "openrouter" || draft.provider === "ollama-cloud") && (
+        {(draft.provider === "openrouter" ||
+          draft.provider === "ollama-cloud") && (
           <>
             <label className="full">
-              Variável de ambiente da API key
+              API key{" "}
+              {addMode && existingConnection?.api_key_configured
+                ? "(deixe em branco para manter a chave configurada)"
+                : ""}
               <span className="input-with-icon">
                 <KeyRound size={16} />
                 <input
-                  value={draft.connection.api_key_env_name}
-                  onChange={(event) =>
-                    update("api_key_env_name", event.target.value)
-                  }
-                  placeholder={draft.provider === "ollama-cloud" ? "OLLAMA_API_KEY" : "OPENROUTER_API_KEY"}
+                  type="password"
+                  autoComplete="new-password"
+                  value={draft.connection.api_key}
+                  onChange={(event) => update("api_key", event.target.value)}
+                  placeholder="Cole a chave para validar e salvar"
                 />
               </span>
-              <small>Informe o nome da variável, nunca o segredo.</small>
+              <small>
+                A chave é usada somente nesta operação e nunca é exibida
+                novamente.
+              </small>
             </label>
-            {draft.provider === "openrouter" && <label>
-              Identificação da aplicação
-              <input
-                value={draft.connection.app_title}
-                onChange={(event) => update("app_title", event.target.value)}
-              />
-            </label>}
+            {draft.provider === "openrouter" && (
+              <label>
+                Identificação da aplicação
+                <input
+                  value={draft.connection.app_title}
+                  onChange={(event) => update("app_title", event.target.value)}
+                />
+              </label>
+            )}
             <label>
               HTTP Referer <em>opcional</em>
               <input

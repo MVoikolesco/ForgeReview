@@ -17,7 +17,6 @@ type Runner struct {
 	Config     Config
 	Logger     *log.Logger
 	Chat       ChatFunc
-	StackRules func(context.Context, []string) (string, []string, error)
 	Progress   ProgressFunc
 	ProcessLog func(string, ...any)
 }
@@ -88,7 +87,7 @@ func (r Runner) Run(ctx context.Context, input Input) (string, basereview.FinalR
 	r.progress(ProgressEvent{Stage: "verificacao", Status: "done", Percent: 88, Message: fmt.Sprintf("%d confirmados, %d rejeitados", meta.ConfirmedFindings, meta.RejectedFindings), Findings: meta.ConfirmedFindings})
 
 	r.progress(ProgressEvent{Stage: "formatacao", Status: "running", Percent: 92, Message: "Montando comentario final"})
-	response, formatterFallback := r.format(ctx, cfg, consolidated, approved, meta)
+	response, formatterFallback := r.format(ctx, cfg, input, consolidated, approved, meta)
 	meta.FormatterFallback = formatterFallback
 	response = alignFinalCommentLines(response, approved)
 	response.Metadata = meta
@@ -155,20 +154,7 @@ func (r Runner) reviewGroups(ctx context.Context, cfg Config, input Input, plan 
 			defer func() { <-sem }()
 			res := result{index: index, groupID: group.ID}
 			r.progress(ProgressEvent{Stage: "revisao", Status: "running", Percent: reviewGroupPercent(index, len(plan.Groups), false), Message: fmt.Sprintf("Revisando grupo %s", group.ID), GroupID: group.ID, GroupIndex: index + 1, TotalGroups: len(plan.Groups), Files: group.Files})
-			stackRules := ""
-			if r.StackRules != nil {
-				rules, stacks, err := r.StackRules(ctx, group.Files)
-				if err != nil {
-					res.err = err
-					results <- res
-					return
-				}
-				stackRules = rules
-				if len(group.RelevantStacks) == 0 {
-					group.RelevantStacks = stacks
-				}
-			}
-			prompt := reviewerPrompt(input, plan, group, stackRules)
+			prompt := reviewerPrompt(input, plan, group)
 			max, err := SafeOutputTokens(cfg, prompt, cfg.ReviewerMaxOutputTokens)
 			if err != nil {
 				res.err = err
@@ -200,7 +186,7 @@ func (r Runner) reviewGroups(ctx context.Context, cfg Config, input Input, plan 
 
 				nextAttempt := attempt + 1
 				r.progress(ProgressEvent{Stage: "revisao", Status: "retrying", Percent: reviewGroupPercent(index, len(plan.Groups), false), Message: fmt.Sprintf("Contrato inválido no grupo %s. Retentando %d/%d", group.ID, nextAttempt, cfg.ContractMaxAttempts), GroupID: group.ID, GroupIndex: index + 1, TotalGroups: len(plan.Groups), Files: group.Files, Attempt: nextAttempt, MaxAttempts: cfg.ContractMaxAttempts})
-				attemptPrompt = prompt + fmt.Sprintf("\n\nA resposta anterior foi rejeitada porque não respeitou o contrato JSON: %s. Esta é a tentativa %d de %d. Retorne somente JSON válido, exatamente com os campos definidos no contrato, sem campos adicionais e sem texto fora do JSON.", contractErr, nextAttempt, cfg.ContractMaxAttempts)
+				attemptPrompt = prompt + dynamicBlock("retry", fmt.Sprintf("erro=%s tentativa=%d maximo=%d", contractErr, nextAttempt, cfg.ContractMaxAttempts))
 			}
 			if res.err != nil {
 				results <- res
@@ -325,13 +311,14 @@ func (r Runner) verify(ctx context.Context, cfg Config, input Input, consolidate
 	return approved, rejected, false
 }
 
-func (r Runner) format(ctx context.Context, cfg Config, consolidated ConsolidatedReview, findings []ReviewFinding, meta Metadata) (FinalResponse, bool) {
+func (r Runner) format(ctx context.Context, cfg Config, input Input, consolidated ConsolidatedReview, findings []ReviewFinding, meta Metadata) (FinalResponse, bool) {
 	if cfg.FormatterEnabled {
-		prompt := formatterPrompt(consolidated, findings, meta)
+		prompt := formatterPrompt(input, consolidated, findings, meta)
 		if max, err := SafeOutputTokens(cfg, prompt, cfg.FormatterMaxOutputTokens); err == nil {
 			if raw, _, err := r.Chat(ctx, "formatter", prompt, max); err == nil {
 				var response FinalResponse
 				if err := parseJSONStage("formatter", raw, &response); err == nil && response.FinalReview.Summary != "" {
+					response.Comments = filterImportFinalComments(response.Comments, findings, input)
 					response = enforceDecision(response, findings, meta, cfg, consolidated.PRSummary)
 					return response, false
 				}
@@ -339,6 +326,28 @@ func (r Runner) format(ctx context.Context, cfg Config, consolidated Consolidate
 		}
 	}
 	return deterministicFinal(findings, meta, cfg, consolidated.PRSummary), true
+}
+
+func filterImportFinalComments(comments []FinalComment, findings []ReviewFinding, input Input) []FinalComment {
+	valid := make([]FinalComment, 0, len(comments))
+	for _, comment := range comments {
+		if !isImportDivergenceComment(comment) {
+			valid = append(valid, comment)
+			continue
+		}
+		for _, finding := range findings {
+			if finding.File == comment.File && finding.Line == comment.Line && isImportDivergenceFinding(finding) && !unsupportedImportDivergence(finding, input) {
+				valid = append(valid, comment)
+				break
+			}
+		}
+	}
+	return valid
+}
+
+func isImportDivergenceComment(comment FinalComment) bool {
+	text := strings.ToLower(comment.Type + " " + comment.DecisionReason + " " + comment.Comment)
+	return strings.Contains(text, "import") || strings.Contains(text, "alias")
 }
 
 func normalizeConfig(cfg Config) Config {

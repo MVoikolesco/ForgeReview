@@ -16,15 +16,20 @@ func (h Handler) manualReview(w http.ResponseWriter, r *http.Request) {
 		Repo       string `json:"repo"`
 		PRNumber   int    `json:"pr_number"`
 	}
-	if json.NewDecoder(r.Body).Decode(&input) != nil || input.InstanceID <= 0 || strings.TrimSpace(input.Owner) == "" || strings.TrimSpace(input.Repo) == "" || input.PRNumber <= 0 {
-		writeError(w, 400, "instância, owner, repositório e PR são obrigatórios")
+	if json.NewDecoder(r.Body).Decode(&input) != nil || strings.TrimSpace(input.Owner) == "" || strings.TrimSpace(input.Repo) == "" || input.PRNumber <= 0 {
+		writeError(w, 400, "owner, repositório e PR são obrigatórios")
 		return
 	}
 	if h.publisher == nil {
 		writeError(w, 503, "fila de reviews indisponível")
 		return
 	}
-	client, err := h.savedGiteaClient(r, fmt.Sprint(input.InstanceID))
+	instanceID, err := h.resolvePendingGiteaInstance(r, input.InstanceID, input.Owner, input.Repo)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	client, err := h.savedGiteaClient(r, fmt.Sprint(instanceID))
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
@@ -42,7 +47,7 @@ func (h Handler) manualReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "o pull request não está aberto")
 		return
 	}
-	job := queue.ReviewJob{GiteaInstanceID: input.InstanceID, Owner: input.Owner, Repo: input.Repo, PRNumber: pr.Number, Manual: true, Title: pr.Title, Description: pr.Body, Author: pr.User.Login, BaseBranch: pr.Base.Ref, HeadBranch: pr.Head.Ref}
+	job := queue.ReviewJob{GiteaInstanceID: instanceID, Owner: input.Owner, Repo: input.Repo, PRNumber: pr.Number, Manual: true, Title: pr.Title, Description: pr.Body, Author: pr.User.Login, BaseBranch: pr.Base.Ref, HeadBranch: pr.Head.Ref}
 	if err := h.publisher.Publish(r.Context(), job); err != nil {
 		writeError(w, 503, "não foi possível enfileirar a revisão")
 		return

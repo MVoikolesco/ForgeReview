@@ -33,7 +33,7 @@ export const resources: Resource[] = [
     name: "Conexões",
     singular: "Conexão",
     path: "ai/connections",
-    description: "Endpoints e credenciais referenciadas por ambiente.",
+    description: "Endpoints e credenciais cifradas no SQLite.",
     icon: "CN",
     group: "IA",
     canDefault: true,
@@ -53,9 +53,10 @@ export const resources: Resource[] = [
         hint: "Ex.: http://host.docker.internal:11434",
       },
       {
-        key: "api_key_env_name",
-        label: "Variável da API key",
-        hint: "Somente o nome, como OPENROUTER_API_KEY.",
+        key: "api_key",
+        label: "API key (rotação)",
+        type: "password",
+        hint: "Write-only; deixe em branco para manter a chave atual.",
       },
       {
         key: "http_referer",
@@ -242,17 +243,12 @@ export const resources: Resource[] = [
       },
       {
         key: "publish_manual_reviews",
-        label: "Publicar reviews manuais",
+        label: "Publicar revisões automaticamente",
         type: "boolean",
       },
       {
         key: "allow_autonomous_rejection",
         label: "Permitir decisão autônoma",
-        type: "boolean",
-      },
-      {
-        key: "log_sensitive_data",
-        label: "Registrar dados sensíveis",
         type: "boolean",
       },
       {

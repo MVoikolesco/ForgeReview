@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"gitea-agents/internal/ai"
+	"gitea-agents/internal/secrets"
 	"gitea-agents/internal/store"
 )
 
@@ -17,7 +19,7 @@ type ReviewConfig struct {
 	Pipeline   ReviewPipelineConfig
 }
 type ProviderConfig struct{ Name, BaseURL, AuthType string }
-type ConnectionConfig struct{ Name, BaseURL, APIKeyEnvName, HTTPReferer, AppTitle string }
+type ConnectionConfig struct{ Name, BaseURL, APIKey, HTTPReferer, AppTitle string }
 type ModelConfig struct {
 	Name                                           string
 	ContextWindow, MaxOutputTokens                 int
@@ -30,8 +32,8 @@ type ModelParameters struct {
 	UnloadModelAfterReview                         bool
 }
 type ReviewPolicyConfig struct {
-	MaxBlockChars, MaxFilesPerBlock, ReviewConcurrency, ReviewFinalRetries                                                                 int
-	ReviewWIPPullRequests, ReviewOwnPullRequests, LogSensitiveData, UnloadModelAfterReview, PublishManualReviews, AllowAutonomousRejection bool
+	MaxBlockChars, MaxFilesPerBlock, ReviewConcurrency, ReviewFinalRetries                                               int
+	ReviewWIPPullRequests, ReviewOwnPullRequests, UnloadModelAfterReview, PublishManualReviews, AllowAutonomousRejection bool
 }
 type ReviewPipelineConfig struct {
 	PlannerEnabled, ConsolidatorEnabled, VerifierEnabled, FormatterEnabled       bool
@@ -52,8 +54,10 @@ type SQLiteProvider struct{ Store *store.Store }
 func (p SQLiteProvider) GetConfig(ctx context.Context, repo string) (*ReviewConfig, error) {
 	var c ReviewConfig
 	var modelID sql.NullInt64
-	var f, g, h bool
-	err := p.Store.DB.QueryRowContext(ctx, `SELECT rp.model_id,pol.max_block_chars,pol.max_files_per_block,pol.review_concurrency,pol.review_wip_pull_requests,pol.review_own_pull_requests,pol.log_sensitive_data,pol.unload_model_after_review,pol.review_final_retries,pol.publish_manual_reviews,pol.allow_autonomous_rejection,pol.review_planner_enabled,pol.review_consolidator_enabled,pol.review_verifier_enabled,pol.review_formatter_enabled,pol.review_planner_max_output_tokens,pol.review_group_max_output_tokens,pol.review_consolidator_max_output_tokens,pol.review_verifier_max_output_tokens,pol.review_formatter_max_output_tokens,pol.review_context_safety_margin_tokens,pol.review_min_publish_confidence,pol.review_max_parallel_groups,pol.review_medium_severity_event,pol.review_partial_event FROM review_profiles rp JOIN review_policies pol ON pol.profile_id=rp.id LEFT JOIN repositories r ON r.review_profile_id=rp.id AND r.full_name=? AND r.is_enabled=1 WHERE rp.is_enabled=1 AND (r.id IS NOT NULL OR rp.is_default=1) ORDER BY r.id DESC, rp.is_default DESC LIMIT 1`, repo).Scan(&modelID, &c.Policy.MaxBlockChars, &c.Policy.MaxFilesPerBlock, &c.Policy.ReviewConcurrency, &f, &g, &h, &c.Policy.UnloadModelAfterReview, &c.Policy.ReviewFinalRetries, &c.Policy.PublishManualReviews, &c.Policy.AllowAutonomousRejection, &c.Pipeline.PlannerEnabled, &c.Pipeline.ConsolidatorEnabled, &c.Pipeline.VerifierEnabled, &c.Pipeline.FormatterEnabled, &c.Pipeline.PlannerMaxOutputTokens, &c.Pipeline.GroupMaxOutputTokens, &c.Pipeline.ConsolidatorMaxOutputTokens, &c.Pipeline.VerifierMaxOutputTokens, &c.Pipeline.FormatterMaxOutputTokens, &c.Pipeline.ContextSafetyMarginTokens, &c.Pipeline.MinimumPublishConfidence, &c.Pipeline.MaxParallelGroups, &c.Pipeline.MediumSeverityEvent, &c.Pipeline.PartialEvent)
+	var f, g bool
+	// The default profile follows the active provider/connection/model chain.
+	// Repository-specific profiles retain their explicit model selection.
+	err := p.Store.DB.QueryRowContext(ctx, `SELECT CASE WHEN rp.is_default=1 THEN NULL ELSE rp.model_id END,pol.max_block_chars,pol.max_files_per_block,pol.review_concurrency,pol.review_wip_pull_requests,pol.review_own_pull_requests,pol.unload_model_after_review,pol.review_final_retries,pol.publish_manual_reviews,pol.allow_autonomous_rejection,pol.review_planner_enabled,pol.review_consolidator_enabled,pol.review_verifier_enabled,pol.review_formatter_enabled,pol.review_planner_max_output_tokens,pol.review_group_max_output_tokens,pol.review_consolidator_max_output_tokens,pol.review_verifier_max_output_tokens,pol.review_formatter_max_output_tokens,pol.review_context_safety_margin_tokens,pol.review_min_publish_confidence,pol.review_max_parallel_groups,pol.review_medium_severity_event,pol.review_partial_event FROM review_profiles rp JOIN review_policies pol ON pol.profile_id=rp.id LEFT JOIN repositories r ON r.review_profile_id=rp.id AND r.full_name=? AND r.is_enabled=1 WHERE rp.is_enabled=1 AND (r.id IS NOT NULL OR rp.is_default=1) ORDER BY CASE WHEN r.id IS NOT NULL THEN 1 ELSE 0 END DESC, rp.is_default DESC LIMIT 1`, repo).Scan(&modelID, &c.Policy.MaxBlockChars, &c.Policy.MaxFilesPerBlock, &c.Policy.ReviewConcurrency, &f, &g, &c.Policy.UnloadModelAfterReview, &c.Policy.ReviewFinalRetries, &c.Policy.PublishManualReviews, &c.Policy.AllowAutonomousRejection, &c.Pipeline.PlannerEnabled, &c.Pipeline.ConsolidatorEnabled, &c.Pipeline.VerifierEnabled, &c.Pipeline.FormatterEnabled, &c.Pipeline.PlannerMaxOutputTokens, &c.Pipeline.GroupMaxOutputTokens, &c.Pipeline.ConsolidatorMaxOutputTokens, &c.Pipeline.VerifierMaxOutputTokens, &c.Pipeline.FormatterMaxOutputTokens, &c.Pipeline.ContextSafetyMarginTokens, &c.Pipeline.MinimumPublishConfidence, &c.Pipeline.MaxParallelGroups, &c.Pipeline.MediumSeverityEvent, &c.Pipeline.PartialEvent)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrConfigNotFound
@@ -62,7 +66,6 @@ func (p SQLiteProvider) GetConfig(ctx context.Context, repo string) (*ReviewConf
 	}
 	c.Policy.ReviewWIPPullRequests = f
 	c.Policy.ReviewOwnPullRequests = g
-	c.Policy.LogSensitiveData = h
 	if err = p.loadModelConfig(ctx, &c, modelID); err != nil {
 		return nil, err
 	}
@@ -76,15 +79,18 @@ func (p SQLiteProvider) GetConfig(ctx context.Context, repo string) (*ReviewConf
 }
 
 func (p SQLiteProvider) loadModelConfig(ctx context.Context, c *ReviewConfig, modelID sql.NullInt64) error {
-	q := `SELECT ap.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ap.auth_type, ac.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ac.api_key_env_name,ac.http_referer,ac.app_title,am.provider_model_name,am.context_window,am.max_output_tokens,am.supports_json,am.supports_tools,am.supports_streaming,COALESCE(mp.temperature,0),COALESCE(mp.top_p,0),COALESCE(mp.repeat_penalty,0),COALESCE(mp.num_ctx,0),COALESCE(mp.num_threads,0),COALESCE(mp.num_predict,0),mp.keep_alive,mp.timeout_seconds,mp.unload_model_after_review FROM ai_models am JOIN ai_connections ac ON ac.id=am.connection_id AND ac.is_enabled=1 JOIN ai_providers ap ON ap.id=ac.provider_id AND ap.is_enabled=1 JOIN model_parameters mp ON mp.model_id=am.id WHERE am.is_enabled=1 AND am.id=?`
+	q := `SELECT ap.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ap.auth_type, ac.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ac.api_key_ciphertext,ac.requires_auth,ac.id,ac.http_referer,ac.app_title,am.provider_model_name,am.context_window,am.max_output_tokens,am.supports_json,am.supports_tools,am.supports_streaming,COALESCE(mp.temperature,0),COALESCE(mp.top_p,0),COALESCE(mp.repeat_penalty,0),COALESCE(mp.num_ctx,0),COALESCE(mp.num_threads,0),COALESCE(mp.num_predict,0),mp.keep_alive,mp.timeout_seconds,mp.unload_model_after_review FROM ai_models am JOIN ai_connections ac ON ac.id=am.connection_id AND ac.is_enabled=1 JOIN ai_providers ap ON ap.id=ac.provider_id AND ap.is_enabled=1 JOIN model_parameters mp ON mp.model_id=am.id WHERE am.is_enabled=1 AND am.id=?`
 	args := []any{}
 	if modelID.Valid {
 		args = append(args, modelID.Int64)
 	} else {
-		q = `SELECT ap.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ap.auth_type, ac.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ac.api_key_env_name,ac.http_referer,ac.app_title,am.provider_model_name,am.context_window,am.max_output_tokens,am.supports_json,am.supports_tools,am.supports_streaming,COALESCE(mp.temperature,0),COALESCE(mp.top_p,0),COALESCE(mp.repeat_penalty,0),COALESCE(mp.num_ctx,0),COALESCE(mp.num_threads,0),COALESCE(mp.num_predict,0),mp.keep_alive,mp.timeout_seconds,mp.unload_model_after_review FROM ai_providers ap JOIN ai_connections ac ON ac.provider_id=ap.id AND ac.is_enabled=1 AND ac.is_default=1 JOIN ai_models am ON am.connection_id=ac.id AND am.is_enabled=1 AND am.is_default=1 JOIN model_parameters mp ON mp.model_id=am.id WHERE ap.is_enabled=1 AND ap.is_default=1 LIMIT 1`
+		q = `SELECT ap.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ap.auth_type, ac.name, COALESCE(NULLIF(ac.base_url,''),ap.base_url), ac.api_key_ciphertext,ac.requires_auth,ac.id,ac.http_referer,ac.app_title,am.provider_model_name,am.context_window,am.max_output_tokens,am.supports_json,am.supports_tools,am.supports_streaming,COALESCE(mp.temperature,0),COALESCE(mp.top_p,0),COALESCE(mp.repeat_penalty,0),COALESCE(mp.num_ctx,0),COALESCE(mp.num_threads,0),COALESCE(mp.num_predict,0),mp.keep_alive,mp.timeout_seconds,mp.unload_model_after_review FROM ai_providers ap JOIN ai_connections ac ON ac.provider_id=ap.id AND ac.is_enabled=1 AND ac.is_default=1 JOIN ai_models am ON am.connection_id=ac.id AND am.is_enabled=1 AND am.is_default=1 JOIN model_parameters mp ON mp.model_id=am.id WHERE ap.is_enabled=1 AND ap.is_default=1 LIMIT 1`
 	}
 	var a, b, d, e bool
-	err := p.Store.DB.QueryRowContext(ctx, q, args...).Scan(&c.Provider.Name, &c.Provider.BaseURL, &c.Provider.AuthType, &c.Connection.Name, &c.Connection.BaseURL, &c.Connection.APIKeyEnvName, &c.Connection.HTTPReferer, &c.Connection.AppTitle, &c.Model.Name, &c.Model.ContextWindow, &c.Model.MaxOutputTokens, &a, &b, &d, &c.Parameters.Temperature, &c.Parameters.TopP, &c.Parameters.RepeatPenalty, &c.Parameters.NumCtx, &c.Parameters.NumThreads, &c.Parameters.NumPredict, &c.Parameters.KeepAlive, &c.Parameters.TimeoutSeconds, &e)
+	var ciphertext string
+	var requiresAuth bool
+	var connectionID int64
+	err := p.Store.DB.QueryRowContext(ctx, q, args...).Scan(&c.Provider.Name, &c.Provider.BaseURL, &c.Provider.AuthType, &c.Connection.Name, &c.Connection.BaseURL, &ciphertext, &requiresAuth, &connectionID, &c.Connection.HTTPReferer, &c.Connection.AppTitle, &c.Model.Name, &c.Model.ContextWindow, &c.Model.MaxOutputTokens, &a, &b, &d, &c.Parameters.Temperature, &c.Parameters.TopP, &c.Parameters.RepeatPenalty, &c.Parameters.NumCtx, &c.Parameters.NumThreads, &c.Parameters.NumPredict, &c.Parameters.KeepAlive, &c.Parameters.TimeoutSeconds, &e)
 	if err == sql.ErrNoRows && !modelID.Valid {
 		return ErrConfigNotFound
 	}
@@ -93,6 +99,12 @@ func (p SQLiteProvider) loadModelConfig(ctx context.Context, c *ReviewConfig, mo
 	}
 	if err != nil {
 		return fmt.Errorf("load model config: %w", err)
+	}
+	if ai.ConnectionRequiresAuthentication(c.Provider.Name, c.Provider.AuthType, c.Connection.BaseURL) {
+		c.Connection.APIKey, err = secrets.Decrypt(ciphertext, secrets.ConnectionKeyAAD(connectionID))
+		if err != nil || c.Connection.APIKey == "" {
+			return fmt.Errorf("stored API key is unavailable")
+		}
 	}
 	c.Model.SupportsJSON = a
 	c.Model.SupportsTools = b

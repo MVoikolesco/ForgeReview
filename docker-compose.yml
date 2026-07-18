@@ -35,7 +35,6 @@ services:
         condition: service_healthy
     volumes:
       - config_data:/data
-      - ./logs:/logs:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
       interval: 5s
@@ -52,12 +51,10 @@ services:
       APP_MODE: worker
       REDIS_ADDR: redis:6379
       REDIS_CONSUMER: worker-1
-      DIFF_LOG_DIR: /logs/diffs
       DATABASE_DSN: /data/forgereview.db
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./logs:/logs
       - ./prompts:/app/prompts:ro
       - ./config:/app/config:ro
       - config_data:/data

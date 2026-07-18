@@ -12,6 +12,7 @@ import (
 
 	"gitea-agents/internal/config"
 	"gitea-agents/internal/queue"
+	"gitea-agents/internal/reviewlog"
 )
 
 type Queue struct {
@@ -19,6 +20,10 @@ type Queue struct {
 	stream string
 	group  string
 }
+
+var _ reviewlog.Store = (*Queue)(nil)
+
+const reviewLogTTL = 12 * time.Hour
 
 func New(cfg config.Config) *Queue {
 	client := redis.NewClient(&redis.Options{
@@ -36,6 +41,72 @@ func New(cfg config.Config) *Queue {
 
 func (q *Queue) Close() error {
 	return q.client.Close()
+}
+
+func (q *Queue) reviewKey(name, file string) string {
+	return q.stream + ":review-log:" + name + ":" + file
+}
+
+func (q *Queue) reviewIndexKey() string { return q.stream + ":review-log:index" }
+
+func (q *Queue) CreateRun(ctx context.Context, baseName string) (string, error) {
+	for attempt := 0; ; attempt++ {
+		name := baseName
+		if attempt > 0 {
+			name = fmt.Sprintf("%s-run-%d", baseName, time.Now().UnixNano())
+		}
+		created, err := q.client.SetNX(ctx, q.reviewKey(name, "meta"), "1", reviewLogTTL).Result()
+		if err != nil {
+			return "", err
+		}
+		if !created {
+			continue
+		}
+		if err := q.client.ZAdd(ctx, q.reviewIndexKey(), redis.Z{Score: float64(time.Now().UnixNano()), Member: name}).Err(); err != nil {
+			return "", err
+		}
+		_ = q.client.Expire(ctx, q.reviewIndexKey(), reviewLogTTL).Err()
+		return name, nil
+	}
+}
+
+func (q *Queue) Write(ctx context.Context, name, file, content string) error {
+	if err := q.client.Set(ctx, q.reviewKey(name, file), content, reviewLogTTL).Err(); err != nil {
+		return err
+	}
+	return q.client.Expire(ctx, q.reviewIndexKey(), reviewLogTTL).Err()
+}
+
+func (q *Queue) Append(ctx context.Context, name, file, content string) error {
+	key := q.reviewKey(name, file)
+	if err := q.client.Append(ctx, key, content).Err(); err != nil {
+		return err
+	}
+	if err := q.client.Expire(ctx, key, reviewLogTTL).Err(); err != nil {
+		return err
+	}
+	return q.client.Expire(ctx, q.reviewIndexKey(), reviewLogTTL).Err()
+}
+
+func (q *Queue) Read(ctx context.Context, name, file string) (string, error) {
+	value, err := q.client.Get(ctx, q.reviewKey(name, file)).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", reviewlog.ErrNotFound
+	}
+	return value, err
+}
+
+func (q *Queue) Exists(ctx context.Context, name, file string) (bool, error) {
+	count, err := q.client.Exists(ctx, q.reviewKey(name, file)).Result()
+	return count > 0, err
+}
+
+func (q *Queue) Delete(ctx context.Context, name, file string) error {
+	return q.client.Del(ctx, q.reviewKey(name, file)).Err()
+}
+
+func (q *Queue) Runs(ctx context.Context) ([]string, error) {
+	return q.client.ZRevRange(ctx, q.reviewIndexKey(), 0, -1).Result()
 }
 
 func (q *Queue) Ping(ctx context.Context) error {

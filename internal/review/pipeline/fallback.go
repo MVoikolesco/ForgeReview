@@ -40,7 +40,7 @@ func FallbackPlan(input Input, cfg Config, reason string) ReviewPlan {
 		for _, file := range current {
 			paths = append(paths, file.Path)
 		}
-		groups = append(groups, ReviewGroup{ID: fmt.Sprintf("group-%d", len(groups)+1), Purpose: "Grupo deterministico por afinidade de diretorio e nome", Files: paths, RelevantStacks: input.Stacks, RiskLevel: "medio", ReviewFocus: []string{"bugs funcionais", "contratos entre arquivos", "validacao", "seguranca"}})
+		groups = append(groups, ReviewGroup{ID: fmt.Sprintf("group-%d", len(groups)+1), Purpose: "Grupo deterministico por afinidade de diretorio e nome", Files: paths, RiskLevel: "medio", ReviewFocus: []string{"bugs funcionais", "contratos entre arquivos", "validacao", "seguranca"}})
 		current = nil
 		currentChars = 0
 	}

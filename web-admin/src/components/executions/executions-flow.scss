@@ -29,7 +29,7 @@
   gap: 24px;
   position: relative;
   overflow: hidden;
-  padding: 20px 22px;
+  padding: 20px 22px !important;
 
   &::after {
     content: "";
@@ -153,11 +153,41 @@
   }
 }
 
-.execution-history { @include mixins.card; display: grid; gap: 9px; padding: 17px; }
-.execution-history header { display: flex; align-items: center; justify-content: space-between; color: tokens.$muted; font-size: 11px; }
-.execution-history select { min-width: 0; border: 1px solid tokens.$line; border-radius: 9px; padding: 9px; color: tokens.$ink; background: tokens.$surface; font-size: 11px; }
-.execution-history .secondary-button { min-height: 32px; padding: 0 10px; font-size: 10px; }
-.execution-history small { color: tokens.$muted; font-size: 9px; }
+.execution-history {
+  @include mixins.card;
+  display: grid;
+  gap: 9px;
+  padding: 17px !important;
+}
+
+.execution-history header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: tokens.$muted;
+  font-size: 11px;
+}
+
+.execution-history select {
+  min-width: 0;
+  border: 1px solid tokens.$line;
+  border-radius: 9px;
+  padding: 9px;
+  color: tokens.$ink;
+  background: tokens.$surface;
+  font-size: 11px;
+}
+
+.execution-history .secondary-button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 10px;
+}
+
+.execution-history small {
+  color: tokens.$muted;
+  font-size: 9px;
+}
 
 .execution-flow-panel {
   @include mixins.card;
@@ -196,6 +226,7 @@
   display: flex;
   align-items: center;
   gap: 14px;
+  flex-wrap: wrap;
 
   >span {
     display: flex;
@@ -222,8 +253,37 @@
   }
 }
 
+.publication-toggle {
+  min-height: 36px;
+  border: 1px solid tokens.$line;
+  border-radius: 9px;
+  padding: 0 12px;
+  color: tokens.$muted;
+  background: tokens.$surface;
+  cursor: pointer;
+  font: 700 10px tokens.$font-body;
+  transition: border-color .18s ease, color .18s ease, background .18s ease;
+
+  &:hover:not(:disabled),
+  &:focus-visible {
+    border-color: tokens.$accent;
+    color: #2b68c6;
+  }
+
+  &.enabled {
+    border-color: rgba(34, 152, 101, .28);
+    color: #168455;
+    background: rgba(34, 152, 101, .08);
+  }
+
+  &:disabled {
+    cursor: wait;
+    opacity: .58;
+  }
+}
+
 .execution-flow-canvas {
-  height: 660px;
+  height: 760px;
   background: radial-gradient(circle at 16% 5%, rgba(79, 140, 255, .08), transparent 30%), linear-gradient(145deg, #f8faff, tokens.$surface 58%);
 
   .react-flow__background pattern circle {
@@ -702,6 +762,10 @@
   .execution-flow-actions {
     width: 100%;
     justify-content: space-between;
+
+    .publication-toggle {
+      flex: 1;
+    }
   }
 
   .execution-flow-canvas {
@@ -736,8 +800,9 @@
       display: none;
     }
 
+    .publication-toggle,
     .secondary-button {
-      width: 100%;
+      flex: 1 1 100%;
     }
   }
 

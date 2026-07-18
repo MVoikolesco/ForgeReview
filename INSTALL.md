@@ -22,7 +22,7 @@ GITEA_URL=https://gitea.example
 GITEA_TOKEN=...
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=troque-esta-senha
-OPENROUTER_API_KEY=
+GITEA_TOKEN_ENCRYPTION_KEY=uma-chave-com-exatos-32-bytes
 ```
 
 O Compose define internamente o caminho correto do SQLite (`/data/forgereview.db`) e compartilha o volume `config_data` entre API e worker.
@@ -35,7 +35,7 @@ Para Ollama executando na máquina host, use esta URL na conexão cadastrada:
 http://host.docker.internal:11434
 ```
 
-Para OpenRouter, preencha `OPENROUTER_API_KEY` no `.env`. O assistente usa esse nome automaticamente; o valor permanece somente no ambiente do container.
+Para OpenRouter ou Ollama Cloud, informe a chave diretamente no assistente. Ela é cifrada no SQLite, não aparece novamente e API/worker devem receber a mesma `GITEA_TOKEN_ENCRYPTION_KEY`.
 
 A área **Operação** exibe heartbeat dos workers, tamanho e pendências da fila, reviews com artefatos e o log consolidado do worker.
 

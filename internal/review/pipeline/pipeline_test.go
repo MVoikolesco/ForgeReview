@@ -80,6 +80,44 @@ func TestValidateFindingsNormalizesAndFilters(t *testing.T) {
 	}
 }
 
+func TestValidateFindingsFiltersUnprovenImportDivergenceAndAcceptsDiffProof(t *testing.T) {
+	input := Input{Files: []diff.ChangedFile{{Path: "app.go", Patch: "diff --git a/app.go b/app.go\n--- a/app.go\n+++ b/app.go\n@@ -1 +1,2 @@\n+import client \\\"pkg\\\"\n+server.Call()\n"}}}
+	base := ReviewFinding{File: "app.go", Line: 2, Severity: "alta", Confidence: .9, Comment: "corrija", IntroducedByPR: true}
+	negative := base
+	negative.ID = "missing"
+	negative.Title = "Import ausente"
+	negative.DecisionReason = "O método importado não existe fora do diff"
+	positive := base
+	positive.ID = "mismatch"
+	positive.Title = "Alias de import incompatível"
+	positive.DecisionReason = "O alias alterado diverge do uso"
+	positive.Evidence = `import client \"pkg\"; server.Call()`
+	findings := validateFindings([]ReviewFinding{negative, positive}, input, "group-1")
+	if len(findings) != 1 || findings[0].ID != "mismatch" {
+		t.Fatalf("unexpected import findings %#v", findings)
+	}
+}
+
+func TestFilterImportFinalCommentsRequiresCorrespondingProvenImportFinding(t *testing.T) {
+	input := Input{Files: []diff.ChangedFile{{Path: "app.go", Patch: "@@ -1 +1,2 @@\n+import client \"pkg\"\n+server.Call()\n"}}}
+	importComment := FinalComment{File: "app.go", Line: 2, Type: "sintaxe", DecisionReason: "Alias de import incompatível", Comment: "corrija o uso do alias"}
+	commonFinding := ReviewFinding{ID: "regular", File: "app.go", Line: 2, Severity: "alta", DecisionReason: "Chamada sem tratamento de erro", Comment: "trate o erro", IntroducedByPR: true}
+	provenImportFinding := ReviewFinding{ID: "import", File: "app.go", Line: 2, Severity: "alta", Title: "Alias de import incompatível", DecisionReason: "O alias alterado diverge do uso", Comment: "corrija o uso do alias", Evidence: `import client "pkg"; server.Call()`, IntroducedByPR: true}
+	nonImportComment := FinalComment{File: "app.go", Line: 2, Type: "confiabilidade", DecisionReason: "Erro ignorado", Comment: "trate o erro retornado"}
+
+	if comments := filterImportFinalComments([]FinalComment{importComment, nonImportComment}, []ReviewFinding{commonFinding}, input); len(comments) != 1 || comments[0] != nonImportComment {
+		t.Fatalf("expected only the unrelated comment when no corresponding import finding exists, got %#v", comments)
+	}
+	if comments := filterImportFinalComments([]FinalComment{importComment}, []ReviewFinding{provenImportFinding}, input); len(comments) != 1 || comments[0] != importComment {
+		t.Fatalf("expected proven import comment to be retained, got %#v", comments)
+	}
+	wrongLineComment := importComment
+	wrongLineComment.Line = 1
+	if comments := filterImportFinalComments([]FinalComment{wrongLineComment}, []ReviewFinding{provenImportFinding}, input); len(comments) != 0 {
+		t.Fatalf("expected import comment on a different line to be discarded, got %#v", comments)
+	}
+}
+
 func TestEnforceDecisionDoesNotBlockWhenDiffOnlyCommentIsFiltered(t *testing.T) {
 	cfg := DefaultConfig()
 	response := enforceDecision(FinalResponse{Comments: []FinalComment{{File: "app.go", Line: 10, Severity: "alta", DecisionReason: "O diff nao mostra a validacao anterior.", Comment: "Sem evidencia concreta."}}, FinalReview: FinalReview{Summary: "Resumo"}}, nil, Metadata{}, cfg, "Resumo")
@@ -131,13 +169,16 @@ func TestTruncateInputDiffMarksFilesWithoutCuttingMidLine(t *testing.T) {
 }
 
 func TestRunnerFullFlowAndFallbacks(t *testing.T) {
-	input := Input{Owner: "o", Repository: "r", PullRequestNumber: 1, Files: sampleFiles(), Stacks: []string{"go"}}
+	input := Input{Owner: "o", Repository: "r", PullRequestNumber: 1, Files: sampleFiles()}
 	calls := 0
 	runner := Runner{Config: DefaultConfig(), Chat: func(ctx context.Context, stage string, prompt string, maxOutputTokens int) (string, StageUsage, error) {
 		calls++
+		if !strings.Contains(prompt, "===== INICIO ARQUIVO path=app.go") {
+			t.Fatalf("stage %s did not receive canonical diff: %q", stage, prompt)
+		}
 		switch stage {
 		case "planner":
-			return `{"pr_summary":"Resumo","risk_level":"medio","risk_areas":[],"groups":[{"id":"group-1","purpose":"Go","files":["app.go"],"relevant_stacks":["go"],"risk_level":"medio","review_focus":["contrato"]}],"assumptions":[]}`, StageUsage{}, nil
+			return `{"pr_summary":"Resumo","risk_level":"medio","risk_areas":[],"groups":[{"id":"group-1","purpose":"Go","files":["app.go"],"risk_level":"medio","review_focus":["contrato"]}],"assumptions":[]}`, StageUsage{}, nil
 		case "reviewer":
 			return `{"group_id":"group-1","reviewed_files":["app.go"],"findings":[{"id":"f1","file":"app.go","line":10,"severity":"alta","category":"correctness","confidence":0.9,"title":"Bug","decision_reason":"Quebra contrato","comment":"Corrija o contrato.","evidence":"diff","failure_scenario":"falha","suggested_fix":"corrigir","introduced_by_pr":true}],"review_summary":"um achado"}`, StageUsage{}, nil
 		case "consolidator":
@@ -149,7 +190,7 @@ func TestRunnerFullFlowAndFallbacks(t *testing.T) {
 		default:
 			return "", StageUsage{}, errors.New("unexpected stage")
 		}
-	}, StackRules: func(context.Context, []string) (string, []string, error) { return "go rules", []string{"go"}, nil }}
+	}}
 	raw, final, meta, err := runner.Run(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
@@ -171,10 +212,13 @@ func TestReviewGroupRetriesInvalidContractUntilSuccess(t *testing.T) {
 		Config: cfg,
 		Chat: func(ctx context.Context, stage string, prompt string, maxOutputTokens int) (string, StageUsage, error) {
 			calls++
+			if !strings.Contains(prompt, "===== INICIO ARQUIVO path=app.go") {
+				t.Fatalf("retry %d did not receive canonical diff: %q", calls, prompt)
+			}
 			if calls < 5 {
 				return `{"group_id":"group-1","reviewed_files":["app.go"],"findings":[],"review_summary":"ok","CONTRATOS_DECLARADOS":true}`, StageUsage{}, nil
 			}
-			if !strings.Contains(prompt, "tentativa 5 de 5") {
+			if !strings.Contains(prompt, "<retry>") && calls == 5 {
 				t.Fatalf("expected retry correction in prompt, got %q", prompt)
 			}
 			return `{"group_id":"group-1","reviewed_files":["app.go"],"findings":[],"review_summary":"ok"}`, StageUsage{}, nil

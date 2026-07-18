@@ -16,4 +16,14 @@ Document project features, their behavior, dependencies, and related decisions.
 ## Execution history
 
 - `web-admin/src/components/executions/executions-flow.tsx` separates live polling from selected historical progress.
+- Switching executions resets the React Flow canvas identity and clears the previous progress while historical data loads, so cards cannot retain the prior run.
+- Repeated executions of the same PR are listed as independent runs instead of appending events to the previous run directory.
 - Historical summaries include owner/repository/PR metadata parsed from the existing run directory name when available.
+- Execution artifacts are stored in the shared Redis review-log namespace and expire after 12 hours; the flow does not require a writable logs volume.
+- The default review profile resolves the active provider, connection, and model defaults for each new review; repository-specific profiles keep their explicit model.
+
+## Manual publication approval
+
+- The review policy flag is presented as `Publicar revisões automaticamente`.
+- When disabled for a manual review, the worker stores a structured pending artifact and stops at the clickable `Pré-publicação` stage.
+- The authenticated modal shows the exact Gitea event, main body, and inline comments, with actions to authorize publication, reject without publishing, or enqueue a new review.

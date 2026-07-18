@@ -1,11 +1,7 @@
 package admin
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +12,7 @@ import (
 	"strings"
 
 	"gitea-agents/internal/gitea"
+	"gitea-agents/internal/secrets"
 )
 
 type giteaInput struct {
@@ -373,41 +370,8 @@ func (h Handler) saveGitea(r *http.Request, id int64, v giteaInput) (int64, erro
 	return id, err
 }
 func (h Handler) encryptToken(token string) (string, error) {
-	key := []byte(os.Getenv("GITEA_TOKEN_ENCRYPTION_KEY"))
-	if len(key) != 32 {
-		return "", fmt.Errorf("GITEA_TOKEN_ENCRYPTION_KEY deve ter 32 bytes")
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	g, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-	nonce := make([]byte, g.NonceSize())
-	if _, err = rand.Read(nonce); err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(g.Seal(nonce, nonce, []byte(token), nil)), nil
+	return secrets.Encrypt(token, nil)
 }
 func (h Handler) decryptToken(value string) (string, error) {
-	key := []byte(os.Getenv("GITEA_TOKEN_ENCRYPTION_KEY"))
-	if len(key) != 32 {
-		return "", fmt.Errorf("chave de criptografia inválida")
-	}
-	raw, err := base64.StdEncoding.DecodeString(value)
-	if err != nil {
-		return "", err
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	g, err := cipher.NewGCM(block)
-	if err != nil || len(raw) < g.NonceSize() {
-		return "", fmt.Errorf("token inválido")
-	}
-	out, err := g.Open(nil, raw[:g.NonceSize()], raw[g.NonceSize():], nil)
-	return string(out), err
+	return secrets.Decrypt(value, nil)
 }

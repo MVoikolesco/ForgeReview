@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS ai_connections (
     provider_id INTEGER NOT NULL REFERENCES ai_providers (id),
     name TEXT NOT NULL,
     base_url TEXT NOT NULL DEFAULT '',
-    api_key_env_name TEXT NOT NULL DEFAULT '',
+    api_key_ciphertext TEXT NOT NULL DEFAULT '',
     organization_id TEXT NOT NULL DEFAULT '',
     project_id TEXT NOT NULL DEFAULT '',
     is_default INTEGER NOT NULL DEFAULT 0,

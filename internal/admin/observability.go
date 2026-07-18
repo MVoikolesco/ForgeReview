@@ -2,7 +2,10 @@ package admin
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +14,7 @@ import (
 	"strings"
 
 	"gitea-agents/internal/review/pipeline"
+	"gitea-agents/internal/reviewlog"
 )
 
 type reviewLogSummary struct {
@@ -65,7 +69,12 @@ func (h Handler) operationalMetrics(w http.ResponseWriter, r *http.Request) {
 			response["queue"] = metrics
 		}
 	}
-	reviews, _ := scanReviewLogs(h.logDir)
+	var reviews []reviewLogSummary
+	if h.logStore != nil {
+		reviews, _ = h.reviewLogsFromStore(r.Context())
+	} else {
+		reviews, _ = scanReviewLogs(h.logDir)
+	}
 	var bytes int64
 	for _, item := range reviews {
 		bytes += item.Bytes
@@ -110,8 +119,17 @@ func (h Handler) workerLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) reviewLogs(w http.ResponseWriter, r *http.Request) {
+	if h.logStore != nil {
+		reviews, err := h.reviewLogsFromStore(r.Context())
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, reviews)
+		return
+	}
 	reviews, err := scanReviewLogs(h.logDir)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !os.IsNotExist(err) && !errors.Is(err, reviewlog.ErrNotFound) {
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -119,7 +137,13 @@ func (h Handler) reviewLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) reviewProgress(w http.ResponseWriter, r *http.Request) {
-	progress, err := reviewProgressFor(h.logDir, r.URL.Query().Get("name"))
+	var progress *reviewProgressSummary
+	var err error
+	if h.logStore != nil {
+		progress, err = h.reviewProgressFromStore(r.Context(), r.URL.Query().Get("name"))
+	} else {
+		progress, err = reviewProgressFor(h.logDir, r.URL.Query().Get("name"))
+	}
 	if err != nil && !os.IsNotExist(err) {
 		writeError(w, 500, err.Error())
 		return
@@ -129,6 +153,47 @@ func (h Handler) reviewProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"active": progress.Status != "done" && progress.Status != "failed", "review": progress})
+}
+
+func (h Handler) reviewLogsFromStore(ctx context.Context) ([]reviewLogSummary, error) {
+	names, err := h.logStore.Runs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]reviewLogSummary, 0, len(names))
+	for _, name := range names {
+		progress, readErr := h.readProgressFromStore(ctx, name)
+		if readErr != nil || progress == nil {
+			continue
+		}
+		items = append(items, reviewLogSummary{Name: name, UpdatedAt: progress.UpdatedAt, Owner: progress.Owner, Repo: progress.Repo, PRNumber: progress.PRNumber})
+	}
+	return items, nil
+}
+
+func (h Handler) reviewProgressFromStore(ctx context.Context, name string) (*reviewProgressSummary, error) {
+	if name != "" {
+		return h.readProgressFromStore(ctx, filepath.Base(name))
+	}
+	names, err := h.logStore.Runs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, run := range names {
+		progress, readErr := h.readProgressFromStore(ctx, run)
+		if readErr == nil && progress != nil && len(progress.Events) > 0 {
+			return progress, nil
+		}
+	}
+	return nil, nil
+}
+
+func (h Handler) readProgressFromStore(ctx context.Context, name string) (*reviewProgressSummary, error) {
+	content, err := h.logStore.Read(ctx, name, "00-progress.jsonl")
+	if err != nil {
+		return nil, err
+	}
+	return parseReviewProgress(content, name), nil
 }
 
 func reviewProgressFor(root, name string) (*reviewProgressSummary, error) {
@@ -151,7 +216,8 @@ func scanReviewLogs(root string) ([]reviewLogSummary, error) {
 		summary := reviewLogSummary{Name: entry.Name()}
 		parts := strings.Split(entry.Name(), "_pr-")
 		if len(parts) == 2 {
-			summary.PRNumber, _ = strconv.Atoi(parts[1])
+			prNumber := strings.SplitN(parts[1], "-run-", 2)[0]
+			summary.PRNumber, _ = strconv.Atoi(prNumber)
 			ownerRepo := strings.SplitN(parts[0], "_", 2)
 			if len(ownerRepo) == 2 {
 				summary.Owner, summary.Repo = ownerRepo[0], ownerRepo[1]
@@ -213,16 +279,32 @@ func readReviewProgress(dir, name string) (*reviewProgressSummary, error) {
 		return nil, err
 	}
 	defer file.Close()
+	var content strings.Builder
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+	content.Write(data)
+	return parseReviewProgress(content.String(), name), nil
+}
+
+func parseReviewProgressContent(name string) *reviewProgressSummary {
 	item := &reviewProgressSummary{Name: name, Events: []pipeline.ProgressEvent{}}
 	parts := strings.Split(name, "_pr-")
 	if len(parts) == 2 {
-		item.PRNumber, _ = strconv.Atoi(parts[1])
+		prNumber := strings.SplitN(parts[1], "-run-", 2)[0]
+		item.PRNumber, _ = strconv.Atoi(prNumber)
 		ownerRepo := strings.SplitN(parts[0], "_", 2)
 		if len(ownerRepo) == 2 {
 			item.Owner, item.Repo = ownerRepo[0], ownerRepo[1]
 		}
 	}
-	scanner := bufio.NewScanner(file)
+	return item
+}
+
+func parseReviewProgress(content, name string) *reviewProgressSummary {
+	item := parseReviewProgressContent(name)
+	scanner := bufio.NewScanner(strings.NewReader(content))
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -240,8 +322,5 @@ func readReviewProgress(dir, name string) (*reviewProgressSummary, error) {
 		item.Status = event.Status
 		item.Message = event.Message
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return item, nil
+	return item
 }

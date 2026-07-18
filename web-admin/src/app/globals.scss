@@ -11,6 +11,7 @@
 @use "../components/connections/connection-wizard";
 @use "../components/executions/executions-flow";
 @use "../components/manual-review/manual-review-modal";
+@use "../components/pre-review/pre-review-modal";
 @use "../components/gitea/gitea-area";
 
 :root {

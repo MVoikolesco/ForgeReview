@@ -208,7 +208,7 @@ export function Console({
                   )?.name as "ollama" | "openrouter",
                   name: wizardConnection.name,
                   base_url: wizardConnection.base_url,
-                  api_key_env_name: wizardConnection.api_key_env_name,
+                  api_key_configured: wizardConnection.api_key_configured,
                   http_referer: wizardConnection.http_referer,
                   app_title: wizardConnection.app_title,
                 }

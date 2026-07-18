@@ -310,8 +310,12 @@ export function ConnectionDetail({
               <ExternalLink size={13} />
             </a>
           </Fact>
-          <Fact icon={<KeyRound />} label="Variável de autenticação">
-            <code>{connection.api_key_env_name || "Não necessária"}</code>
+          <Fact icon={<KeyRound />} label="Autenticação">
+            <code>
+              {connection.api_key_configured
+                ? "Chave configurada"
+                : "Não necessária"}
+            </code>
           </Fact>
           <Fact icon={<Radio />} label="Provider">
             <span>{provider?.display_name || "-"}</span>

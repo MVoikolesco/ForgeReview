@@ -1,5 +1,6 @@
 "use client";
 
+import { PreReviewModal } from "@/components/pre-review/pre-review-modal";
 import type { AdminRequest } from "@/lib/admin-client";
 import {
   Background,
@@ -13,7 +14,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import { Clock3, HardDrive, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Worker = {
   name: string;
@@ -76,6 +77,18 @@ type ReviewLog = {
   pr_number?: number;
 };
 
+type ReviewProfile = {
+  id: number;
+  is_default: number;
+  is_enabled: number;
+};
+
+type ReviewPolicy = {
+  id: number;
+  profile_id: number;
+  publish_manual_reviews: number | boolean;
+};
+
 type StageNodeData = {
   title: string;
   subtitle: string;
@@ -124,6 +137,11 @@ const workflowStages = [
     title: "Formatação",
     subtitle: "Composição do comentário",
   },
+  {
+    id: "pre-publicacao",
+    title: "Pré-publicação",
+    subtitle: "Revisão e autorização",
+  },
   { id: "publicacao", title: "Publicação", subtitle: "Envio para o Gitea" },
 ] as const;
 
@@ -135,6 +153,8 @@ const stagePositions = [
   { x: 923, y: 397 },
   { x: 440, y: 382 },
   { x: 9, y: 389 },
+  { x: 420, y: 590 },
+  { x: 812, y: 590 },
 ];
 
 function statusLabel(status: string) {
@@ -142,6 +162,7 @@ function statusLabel(status: string) {
   if (status === "running") return "Em execução";
   if (status === "retrying") return "Retentando";
   if (status === "failed") return "Falhou";
+  if (status === "waiting") return "Aguardando autorização";
   return "Aguardando";
 }
 
@@ -257,23 +278,49 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedReview, setSelectedReview] = useState("");
+  const [preReviewName, setPreReviewName] = useState("");
+  const [publicationPolicy, setPublicationPolicy] = useState<{
+    id: number;
+    manual: boolean;
+  } | null>(null);
+  const [updatingPublicationPolicy, setUpdatingPublicationPolicy] =
+    useState(false);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<StageNodeData>>(
     [],
   );
+  const historicalRequest = useRef(0);
 
   const load = useCallback(
     async (showRefreshing = false) => {
       if (showRefreshing) setRefreshing(true);
       try {
-        const [metricsResult, progressResult, reviewsResult] =
+        const [metricsResult, progressResult, reviewsResult, profiles, policies] =
           await Promise.all([
             request<Metrics>("observability/metrics"),
             request<ProgressResponse>("observability/progress"),
             request<ReviewLog[]>("observability/reviews"),
+            request<ReviewProfile[]>("review/profiles"),
+            request<ReviewPolicy[]>("review/policies"),
           ]);
         setMetrics(metricsResult);
         setProgress(progressResult);
         setReviews(reviewsResult || []);
+        const defaultProfile = profiles.find(
+          (profile) => profile.is_default === 1 && profile.is_enabled === 1,
+        );
+        const defaultPolicy = defaultProfile
+          ? policies.find((policy) => policy.profile_id === defaultProfile.id)
+          : undefined;
+        setPublicationPolicy(
+          defaultPolicy
+            ? {
+                id: defaultPolicy.id,
+                manual:
+                  defaultPolicy.publish_manual_reviews === true ||
+                  Number(defaultPolicy.publish_manual_reviews) === 1,
+              }
+            : null,
+        );
         setUpdatedAt(new Date());
         setError(metricsResult.queue_error || "");
       } catch (failure) {
@@ -296,6 +343,10 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
   }, [load, selectedReview]);
 
   async function selectHistorical(name: string) {
+    const requestId = ++historicalRequest.current;
+    setError("");
+    setProgress({ active: false });
+    setNodes([]);
     if (!name) {
       setSelectedReview("");
       void load(true);
@@ -303,26 +354,60 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
     }
     try {
       setSelectedReview(name);
-      setProgress(
-        await request<ProgressResponse>(
-          `observability/progress?name=${encodeURIComponent(name)}`,
-        ),
+      const historical = await request<ProgressResponse>(
+        `observability/progress?name=${encodeURIComponent(name)}`,
       );
+      if (requestId === historicalRequest.current) setProgress(historical);
     } catch (failure) {
+      if (requestId === historicalRequest.current) {
+        setError(failure instanceof Error ? failure.message : String(failure));
+      }
+    }
+  }
+
+  async function togglePublicationPolicy() {
+    if (!publicationPolicy || updatingPublicationPolicy) return;
+    const manual = !publicationPolicy.manual;
+    setUpdatingPublicationPolicy(true);
+    setError("");
+    try {
+      await request(`review/policies/${publicationPolicy.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ publish_manual_reviews: manual ? 1 : 0 }),
+      });
+      setPublicationPolicy({ ...publicationPolicy, manual });
+    } catch (failure) {
+      if (failure instanceof Error && failure.message === "AUTH")
+        return onAuthError();
       setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setUpdatingPublicationPolicy(false);
     }
   }
 
   const current = progress.review;
   const events = useMemo(() => current?.events || [], [current?.events]);
-  const latestByStage = useMemo(
-    () =>
-      events.reduce<Record<string, ProgressEvent>>((result, event) => {
+  const latestByStage = useMemo(() => {
+    const latest = events.reduce<Record<string, ProgressEvent>>(
+      (result, event) => {
         result[event.stage] = event;
         return result;
-      }, {}),
-    [events],
-  );
+      },
+      {},
+    );
+    const errorEvent = latest.erro;
+    if (errorEvent) {
+      const failedStage = [...workflowStages]
+        .reverse()
+        .find((stage) =>
+          ["running", "retrying"].includes(latest[stage.id]?.status || ""),
+        );
+      if (failedStage) {
+        latest[failedStage.id] = { ...errorEvent, stage: failedStage.id };
+      }
+    }
+    return latest;
+  }, [events]);
   const eventsByStage = useMemo(
     () =>
       events.reduce<Record<string, ProgressEvent[]>>((result, event) => {
@@ -354,13 +439,13 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
             events: eventsByStage[stage.id] || [],
             active: progress.active && current?.stage === stage.id,
             targetPosition:
-              index === 4
+              index === 4 || index === 7
                 ? Position.Top
                 : isTopRow
                   ? Position.Left
                   : Position.Right,
             sourcePosition:
-              index === 3
+              index === 3 || index === 6
                 ? Position.Bottom
                 : isTopRow
                   ? Position.Right
@@ -507,6 +592,20 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
                 : "Sincronização a cada 5s"}
             </span>
             <button
+              className={`publication-toggle ${publicationPolicy?.manual ? "enabled" : "disabled"}`}
+              type="button"
+              aria-pressed={publicationPolicy?.manual || false}
+              onClick={() => void togglePublicationPolicy()}
+              disabled={!publicationPolicy || updatingPublicationPolicy}
+              title={
+                publicationPolicy?.manual
+                  ? "Desabilitar para revisar antes de publicar"
+                  : "Habilitar publicação automática"
+              }
+            >
+              Publicação automática: {publicationPolicy?.manual ? "Ativa" : "Desativada"}
+            </button>
+            <button
               className="secondary-button"
               onClick={() => void load(true)}
               disabled={refreshing || Boolean(selectedReview)}
@@ -518,10 +617,20 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
         </header>
         <div className="execution-flow-canvas">
           <ReactFlow
+            key={`${selectedReview || current?.name || "empty-execution"}-${historicalRequest.current}`}
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
+            onNodeClick={(_, node) => {
+              if (
+                node.id === "pre-publicacao" &&
+                current?.name &&
+                latestByStage[node.id]?.status === "waiting"
+              ) {
+                setPreReviewName(current.name);
+              }
+            }}
             nodesConnectable={false}
             fitView
             fitViewOptions={{ padding: 0.12, maxZoom: 0.95 }}
@@ -533,6 +642,16 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
           </ReactFlow>
         </div>
       </article>
+
+      {preReviewName && (
+        <PreReviewModal
+          request={request}
+          name={preReviewName}
+          onAuthError={onAuthError}
+          onClose={() => setPreReviewName("")}
+          onComplete={() => void load(true)}
+        />
+      )}
 
       <footer className="execution-footnotes">
         <span className={metrics.queue.connected ? "online" : "offline"}>
