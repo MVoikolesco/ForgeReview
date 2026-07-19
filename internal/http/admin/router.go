@@ -32,6 +32,7 @@ func RegisterRoutes(
 	router.GET("/observability/reviews", handler.observabilityReviews)
 	router.GET("/observability/progress", handler.observabilityProgress)
 	router.POST("/reviews/manual", handler.manual)
+	router.GET("/review/settings", handler.reviewSettings)
 	router.GET("/reviews/pending", handler.pending)
 	router.Any("/reviews/pending/:action", handler.pending)
 	router.POST("/gitea/instances/test", handler.testGitea)
