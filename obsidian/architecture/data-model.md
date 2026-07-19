@@ -46,7 +46,7 @@
 | `publicando_comentario` | `publicacao` | 95 |
 | `concluido` | `publicacao` | 100 / done |
 
-O painel ainda desenha etapas históricas `planejamento`, `verificacao` e `formatacao`; o backend atual não as executa porque o pipeline antigo foi removido.
+O pipeline executa `planejamento`, revisão por grupos, `consolidacao`, `verificacao` e `formatacao`. Os eventos de cada etapa, incluindo grupo, arquivos, tentativas e falhas, são persistidos em `review_steps.metadata_json` e projetados no painel.
 
 ## Resultado JSON
 
