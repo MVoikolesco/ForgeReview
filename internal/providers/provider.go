@@ -25,6 +25,15 @@ type LLMProvider interface {
 	Name() string
 	// Review sends input to the provider and returns a parsed review result.
 	Review(ctx context.Context, input Input) (contracts.Result, error)
+	// Chat sends a raw stage prompt. Pipeline stages validate their own JSON
+	// contracts, so adapters must not parse the response before returning it.
+	Chat(ctx context.Context, prompt string, maxOutputTokens int) (string, Usage, error)
+}
+
+// Usage contains provider-reported token counts when the adapter exposes them.
+type Usage struct {
+	PromptTokens     int
+	CompletionTokens int
 }
 
 // Config contains the connection, model, credential, and timeout used by one

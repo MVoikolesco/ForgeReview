@@ -105,13 +105,30 @@ func (h *AdminHandler) observabilityProgress(c *gin.Context) {
 	events := make([]gin.H, 0, len(item.Steps))
 	for _, step := range item.Steps {
 		stage, status, percent := progressMapping(step.Step, step.Status)
-		events = append(events, gin.H{
-			"stage":     stage,
-			"status":    status,
-			"percent":   percent,
-			"message":   step.Message,
-			"timestamp": step.StartedAt,
-		})
+		event := gin.H{
+			"stage":       stage,
+			"status":      status,
+			"percent":     percent,
+			"message":     step.Message,
+			"timestamp":   step.StartedAt,
+			"metadata":    step.Metadata,
+			"duration_ms": step.DurationMS,
+			"error":       step.Error,
+		}
+		if metadata := step.Metadata; metadata != nil {
+			if value := stringValue(metadata["group_id"]); value != "" {
+				event["group_id"] = value
+			}
+			for _, key := range []string{"group_index", "total_groups", "findings", "failed_groups", "attempt", "max_attempts"} {
+				if value, ok := metadata[key]; ok {
+					event[key] = intValue(value, 0)
+				}
+			}
+			if files := stringValues(metadata["files"]); len(files) > 0 {
+				event["files"] = files
+			}
+		}
+		events = append(events, event)
 	}
 
 	stage, status, percent := progressMapping(item.Status, "")
@@ -175,13 +192,21 @@ func progressMapping(step, rawStatus string) (stage, status string, percent int)
 		status = "waiting"
 	case "processando":
 		status = "running"
+	case "retentando":
+		status = "retrying"
 	}
 
 	percentages := map[string]int{
 		"enfileirado":                5,
 		"buscando_diff":              20,
+		"preparacao":                 15,
 		"enviando_para_ia":           45,
 		"recebendo_resposta_parcial": 60,
+		"planejamento":               30,
+		"revisao":                    60,
+		"consolidacao":               75,
+		"verificacao":                88,
+		"formatacao":                 96,
 		"agregando_resultado":        80,
 		"pre-publicacao":             90,
 		"publicando_comentario":      95,
@@ -199,4 +224,18 @@ func progressMapping(step, rawStatus string) (stage, status string, percent int)
 	}
 
 	return stage, status, percent
+}
+
+func stringValues(value any) []string {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if text := stringValue(item); text != "" {
+			result = append(result, text)
+		}
+	}
+	return result
 }

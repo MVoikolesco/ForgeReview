@@ -20,6 +20,15 @@ func (p *gemini) Name() string {
 
 // Review sends one diff block to Gemini generateContent and parses its result.
 func (p *gemini) Review(ctx context.Context, input Input) (contracts.Result, error) {
+	content, _, err := p.Chat(ctx, input.Prompt+"\n\nDIFF:\n"+input.Diff, 0)
+	if err != nil {
+		return contracts.Result{}, err
+	}
+	return parseResult(content)
+}
+
+// Chat sends a raw Gemini response for a pipeline stage.
+func (p *gemini) Chat(ctx context.Context, prompt string, maxOutputTokens int) (string, Usage, error) {
 	endpoint := strings.TrimRight(p.cfg.BaseURL, "/") +
 		"/v1beta/models/" + p.cfg.Model +
 		":generateContent?key=" + p.cfg.APIKey
@@ -32,15 +41,22 @@ func (p *gemini) Review(ctx context.Context, input Input) (contracts.Result, err
 				} `json:"parts"`
 			} `json:"content"`
 		} `json:"candidates"`
+		UsageMetadata struct {
+			PromptTokenCount     int `json:"promptTokenCount"`
+			CandidatesTokenCount int `json:"candidatesTokenCount"`
+		} `json:"usageMetadata"`
 	}
 	payload := map[string]any{
 		"contents": []any{
 			map[string]any{
 				"parts": []any{
-					map[string]string{"text": input.Prompt + "\n\nDIFF:\n" + input.Diff},
+					map[string]string{"text": prompt},
 				},
 			},
 		},
+	}
+	if maxOutputTokens > 0 {
+		payload["generationConfig"] = map[string]int{"maxOutputTokens": maxOutputTokens}
 	}
 
 	err := requestJSON(
@@ -53,11 +69,10 @@ func (p *gemini) Review(ctx context.Context, input Input) (contracts.Result, err
 		&output,
 	)
 	if err != nil {
-		return contracts.Result{}, err
+		return "", Usage{}, err
 	}
 	if len(output.Candidates) == 0 || len(output.Candidates[0].Content.Parts) == 0 {
-		return contracts.Result{}, fmt.Errorf("provider returned no candidates")
+		return "", Usage{}, fmt.Errorf("provider returned no candidates")
 	}
-
-	return parseResult(output.Candidates[0].Content.Parts[0].Text)
+	return output.Candidates[0].Content.Parts[0].Text, Usage{PromptTokens: output.UsageMetadata.PromptTokenCount, CompletionTokens: output.UsageMetadata.CandidatesTokenCount}, nil
 }
