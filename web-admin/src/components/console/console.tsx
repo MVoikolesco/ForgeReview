@@ -5,6 +5,7 @@ import { ConnectionsDashboard } from "@/components/connections/connections-dashb
 import { ExecutionsFlow } from "@/components/executions/executions-flow";
 import { GiteaArea } from "@/components/gitea/gitea-area";
 import { ManualReviewModal } from "@/components/manual-review/manual-review-modal";
+import { SettingsArea } from "@/components/settings/settings-area";
 import { ThemeToggle, type Theme } from "@/components/theme-toggle";
 import { createAdminClient } from "@/lib/admin-client";
 import type { Connection, ConnectionData } from "@/lib/contracts";
@@ -25,6 +26,13 @@ const emptyData: ConnectionData = {
   connections: [],
   models: [],
   profiles: [],
+};
+
+const viewLabels: Record<ConsoleView, string> = {
+  connections: "Conexões",
+  gitea: "Gitea",
+  executions: "Execuções",
+  settings: "Configurações",
 };
 
 export function Console({
@@ -108,8 +116,7 @@ export function Console({
             <Menu size={21} />
           </button>
           <div>
-            <span className="breadcrumb">Workspace /</span>{" "}
-            {view === "connections" ? "Conexões" : "Execuções"}
+            <span className="breadcrumb">Workspace /</span> {viewLabels[view]}
           </div>
           <div className="topbar-actions">
             <ThemeToggle theme={theme} onToggle={onThemeToggle} />
@@ -170,7 +177,7 @@ export function Console({
               </div>
               <GiteaArea request={request} onAuthError={onLogout} />
             </>
-          ) : (
+          ) : view === "executions" ? (
             <>
               <div className="page-heading execution-heading">
                 <div>
@@ -183,6 +190,20 @@ export function Console({
                 </div>
               </div>
               <ExecutionsFlow request={request} onAuthError={onLogout} />
+            </>
+          ) : (
+            <>
+              <div className="page-heading">
+                <div>
+                  <span className="eyebrow">Governança do workspace</span>
+                  <h1>Configurações</h1>
+                  <p>
+                    Visualize os perfis, pipelines e contratos que orientam as
+                    próximas revisões.
+                  </p>
+                </div>
+              </div>
+              <SettingsArea request={request} onAuthError={onLogout} />
             </>
           )}
         </div>
@@ -231,9 +252,9 @@ export function Console({
           onAuthError={onLogout}
           onClose={() => setManualReviewOpen(false)}
           onSuccess={(message) => {
-           setToast({ message });
-             window.setTimeout(() => setToast(null), 5000);
-           }}
+            setToast({ message });
+            window.setTimeout(() => setToast(null), 5000);
+          }}
           onFailure={(message) => {
             setToast({ message, error: true });
             window.setTimeout(() => setToast(null), 5000);

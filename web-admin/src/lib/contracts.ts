@@ -125,3 +125,109 @@ export type GiteaPullRequest = {
   html_url?: string;
   user?: { login: string };
 };
+
+export type ReviewSettingsPolicy = {
+  id: number;
+  max_block_chars: number;
+  max_files_per_block: number;
+  publish_manual_reviews: boolean;
+  allow_autonomous_rejection: boolean;
+  context_safety_tokens: number;
+  minimum_confidence: number;
+  max_parallel_groups: number;
+  medium_severity_event: string;
+  partial_event: string;
+};
+
+export type ReviewSettingsPrompt = {
+  id: number;
+  name: string;
+  type: string;
+  stack: string;
+  content: string;
+  version: number;
+  is_active: boolean;
+  updated_at: string;
+};
+
+export type ReviewSettingsProfile = {
+  id: number;
+  name: string;
+  description: string;
+  is_default: boolean;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  model?: {
+    id: number;
+    name: string;
+    provider: string;
+    connection: string;
+    is_ready: boolean;
+  };
+  policy?: ReviewSettingsPolicy;
+  prompt?: ReviewSettingsPrompt;
+};
+
+export type ReviewSettingsStage = {
+  id: number;
+  key: string;
+  name: string;
+  position: number;
+  stage_type_key: string;
+  executor_key: string;
+  prompt_template: string;
+  model_id?: number;
+  model_name?: string;
+  is_model_ready: boolean;
+  max_output_tokens: number;
+  retry_limit: number;
+  timeout_seconds: number;
+  use_llm: boolean;
+  is_required: boolean;
+  is_type_enabled: boolean;
+  input_contract?: string;
+  output_contract?: string;
+};
+
+export type ReviewSettingsPipeline = {
+  id: number;
+  profile_id?: number;
+  profile_name?: string;
+  key: string;
+  name: string;
+  description: string;
+  is_default: boolean;
+  is_enabled: boolean;
+  version_id: number;
+  version: number;
+  status: string;
+  published_at: string;
+  stages: ReviewSettingsStage[];
+};
+
+export type ReviewSettingsContract = {
+  id: number;
+  key: string;
+  version: number;
+  response_instruction: string;
+  schema: Record<string, unknown>;
+  semantic_validator_key: string;
+};
+
+export type ReviewSettingsStageType = {
+  id: number;
+  key: string;
+  name: string;
+  executor_key: string;
+  is_system: boolean;
+  is_enabled: boolean;
+  input_contract?: ReviewSettingsContract;
+  output_contract?: ReviewSettingsContract;
+};
+
+export type ReviewSettingsData = {
+  profiles: ReviewSettingsProfile[];
+  pipelines: ReviewSettingsPipeline[];
+  stage_catalog: ReviewSettingsStageType[];
+};

@@ -1,7 +1,7 @@
 import { Brand } from "@/components/brand";
 import { Cable, ChevronLeft, GitBranch, LogOut, Settings2 } from "lucide-react";
 
-export type ConsoleView = "connections" | "executions" | "gitea";
+export type ConsoleView = "connections" | "executions" | "gitea" | "settings";
 
 type Props = {
   collapsed: boolean;
@@ -51,10 +51,13 @@ export function Sidebar({
           <GitBranch size={19} />
           <span>Execuções</span>
         </button>
-        <button className="nav-item muted" title="Em breve">
+        <button
+          className={`nav-item ${active === "settings" ? "active" : ""}`}
+          aria-current={active === "settings" ? "page" : undefined}
+          onClick={() => onNavigate("settings")}
+        >
           <Settings2 size={19} />
           <span>Configurações</span>
-          <small>breve</small>
         </button>
       </nav>
       <div className="sidebar-callout">
