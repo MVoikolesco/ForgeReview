@@ -74,9 +74,13 @@ services:
     environment:
       APP_ENVIRONMENT: ${APP_ENVIRONMENT:-production}
       API_INTERNAL_URL: http://api:8080
+      CHOKIDAR_USEPOLLING: "true"
       NEXT_TELEMETRY_DISABLED: "1"
     ports:
       - "3000:3000"
+    volumes:
+      - ./web-admin:/workspace
+      - web_node_modules:/workspace/node_modules
     depends_on:
       api:
         condition: service_healthy
@@ -84,3 +88,4 @@ services:
 volumes:
   redis_data:
   config_data:
+  web_node_modules:

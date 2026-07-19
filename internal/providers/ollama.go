@@ -19,10 +19,21 @@ func (p *ollama) Name() string {
 
 // Review sends one diff block to Ollama's chat endpoint and parses its result.
 func (p *ollama) Review(ctx context.Context, input Input) (contracts.Result, error) {
+	content, _, err := p.Chat(ctx, input.Prompt+"\n\nDIFF:\n"+input.Diff, 0)
+	if err != nil {
+		return contracts.Result{}, err
+	}
+	return parseResult(content)
+}
+
+// Chat sends a raw Ollama chat response for a pipeline stage.
+func (p *ollama) Chat(ctx context.Context, prompt string, maxOutputTokens int) (string, Usage, error) {
 	var output struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
+		PromptEvalCount int `json:"prompt_eval_count"`
+		EvalCount       int `json:"eval_count"`
 	}
 
 	payload := map[string]any{
@@ -32,9 +43,12 @@ func (p *ollama) Review(ctx context.Context, input Input) (contracts.Result, err
 		"messages": []any{
 			map[string]string{
 				"role":    "user",
-				"content": input.Prompt + "\n\nDIFF:\n" + input.Diff,
+				"content": prompt,
 			},
 		},
+	}
+	if maxOutputTokens > 0 {
+		payload["options"] = map[string]int{"num_predict": maxOutputTokens}
 	}
 	err := requestJSON(
 		ctx,
@@ -46,8 +60,7 @@ func (p *ollama) Review(ctx context.Context, input Input) (contracts.Result, err
 		&output,
 	)
 	if err != nil {
-		return contracts.Result{}, err
+		return "", Usage{}, err
 	}
-
-	return parseResult(output.Message.Content)
+	return output.Message.Content, Usage{PromptTokens: output.PromptEvalCount, CompletionTokens: output.EvalCount}, nil
 }

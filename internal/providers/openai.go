@@ -20,12 +20,25 @@ func (p *openAICompatible) Name() string {
 
 // Review sends one diff block to an OpenAI-compatible chat completion endpoint.
 func (p *openAICompatible) Review(ctx context.Context, input Input) (contracts.Result, error) {
+	content, _, err := p.Chat(ctx, input.Prompt+"\n\nDIFF:\n"+input.Diff, 0)
+	if err != nil {
+		return contracts.Result{}, err
+	}
+	return parseResult(content)
+}
+
+// Chat sends a raw OpenAI-compatible completion for a pipeline stage.
+func (p *openAICompatible) Chat(ctx context.Context, prompt string, maxOutputTokens int) (string, Usage, error) {
 	var output struct {
 		Choices []struct {
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
 	}
 
 	payload := map[string]any{
@@ -34,9 +47,12 @@ func (p *openAICompatible) Review(ctx context.Context, input Input) (contracts.R
 		"messages": []any{
 			map[string]string{
 				"role":    "user",
-				"content": input.Prompt + "\n\nDIFF:\n" + input.Diff,
+				"content": prompt,
 			},
 		},
+	}
+	if maxOutputTokens > 0 {
+		payload["max_tokens"] = maxOutputTokens
 	}
 	err := requestJSON(
 		ctx,
@@ -48,11 +64,10 @@ func (p *openAICompatible) Review(ctx context.Context, input Input) (contracts.R
 		&output,
 	)
 	if err != nil {
-		return contracts.Result{}, err
+		return "", Usage{}, err
 	}
 	if len(output.Choices) == 0 {
-		return contracts.Result{}, fmt.Errorf("provider returned no choices")
+		return "", Usage{}, fmt.Errorf("provider returned no choices")
 	}
-
-	return parseResult(output.Choices[0].Message.Content)
+	return output.Choices[0].Message.Content, Usage{PromptTokens: output.Usage.PromptTokens, CompletionTokens: output.Usage.CompletionTokens}, nil
 }

@@ -24,9 +24,8 @@
 
 ## Regressões que permanecem
 
-- O pipeline multi-etapas anterior não foi restaurado. Planner, grupos, consolidator, verifier e formatter estão ausentes.
-- Colunas de policy do pipeline antigo ainda existem no banco, mas não são executadas pelo novo `Service`.
-- `review-prompts.yaml` e variáveis `REVIEW_PLANNER_*` não são carregados pelo serviço; só prompt SQLite/default e limites básicos têm efeito.
+- O pipeline multi-etapas foi restaurado no `review.Service`: planner, grupos, consolidator, verifier e formatter usam as policies persistidas, têm fallbacks determinísticos e preservam a retentativa de contrato por grupo.
+- O prompt ativo do profile continua sendo a fonte de instruções base; os contratos específicos das etapas são compostos pelo pipeline. O arquivo legado `review-prompts.yaml` e as variáveis `REVIEW_PLANNER_*` permanecem sem consumo direto.
 - O contrato `/api/v1/reviews/:id/status` retorna o objeto completo da review, não um payload de status dedicado.
 - CORS global é `*`; não é adequado para exposição pública.
 - Credenciais Basic Auth ficam em `sessionStorage` no painel e o Compose local usa HTTP; exigir HTTPS/reverse proxy em ambientes reais.

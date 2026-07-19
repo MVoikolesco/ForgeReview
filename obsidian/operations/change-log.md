@@ -2,6 +2,9 @@
 
 ## 2026-07-18
 
+- Restaurado o pipeline de review multi-etapas sobre a arquitetura Gin: preparação e filtros, planejamento de grupos, revisão com retentativa de contrato, consolidação, verificação, formatação, fallbacks determinísticos e metadata de progresso persistida. O serviço continua usando a fila, políticas, publicação e pré-publicação atuais.
+- Restaurado o pipeline de review multiestágio no worker Gin sem alterar rotas, fila Redis, publicação manual ou o cliente Gitea. Os adapters Ollama, OpenAI-compatible e Gemini agora expõem chat bruto limitado por estágio; metadados de chamadas e eventos detalhados persistem em `review_steps` e são retornados pela observabilidade.
+- O Compose monta `web-admin/` no workspace do alvo `development`, com `node_modules` em volume nomeado e polling habilitado, para que alterações locais acionem o hot reload do Next.js sem impactar o runtime de produção.
 - O registro HTTP foi modularizado: `internal/http/router.go` conserva o único ponto de composição em `RegisterRoutes`; os domínios `health`, `webhook`, `reviews` e `admin` foram movidos para pacotes próprios, cada qual com `router.go` e `RegisterRoutes`. Os contratos de paths, métodos e autenticação foram preservados e cobertos em `internal/http/router_test.go`. Ver [[architecture/system-map|mapa do sistema]].
 
 ## 2026-07-17

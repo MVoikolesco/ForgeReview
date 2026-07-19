@@ -13,6 +13,21 @@ type Policy struct {
 	MaxFilesPerBlock      int
 	PublishManualReviews  bool
 	AllowAutonomousReject bool
+	PlannerEnabled        bool
+	ConsolidatorEnabled   bool
+	VerifierEnabled       bool
+	FormatterEnabled      bool
+	PlannerMaxTokens      int
+	GroupMaxTokens        int
+	ConsolidatorMaxTokens int
+	VerifierMaxTokens     int
+	FormatterMaxTokens    int
+	ContextSafetyTokens   int
+	MinimumConfidence     float64
+	MaxParallelGroups     int
+	MediumSeverityEvent   string
+	PartialEvent          string
+	ContractMaxAttempts   int
 }
 
 // Pending contains a generated result and the original job awaiting an
@@ -85,11 +100,18 @@ func (r *Repository) DeletePending(ctx context.Context, id string) error {
 // policy for a review job.
 func (r *Repository) Policy(ctx context.Context, job queue.ReviewJob) (Policy, error) {
 	var policy Policy
-	var publish, reject int
+	var publish, reject, planner, consolidator, verifier, formatter int
 	err := r.db.QueryRowContext(
 		ctx,
 		`SELECT pol.max_block_chars, pol.max_files_per_block,
-		        pol.publish_manual_reviews, pol.allow_autonomous_rejection
+		        pol.publish_manual_reviews, pol.allow_autonomous_rejection,
+		        pol.review_planner_enabled, pol.review_consolidator_enabled,
+		        pol.review_verifier_enabled, pol.review_formatter_enabled,
+		        pol.review_planner_max_output_tokens, pol.review_group_max_output_tokens,
+		        pol.review_consolidator_max_output_tokens, pol.review_verifier_max_output_tokens,
+		        pol.review_formatter_max_output_tokens, pol.review_context_safety_margin_tokens,
+		        pol.review_min_publish_confidence, pol.review_max_parallel_groups,
+		        pol.review_medium_severity_event, pol.review_partial_event, pol.review_final_retries
 		 FROM review_profiles rp
 		 JOIN review_policies pol ON pol.profile_id=rp.id
 		 LEFT JOIN repositories rep ON rep.review_profile_id=rp.id
@@ -102,8 +124,18 @@ func (r *Repository) Policy(ctx context.Context, job queue.ReviewJob) (Policy, e
 		&policy.MaxFilesPerBlock,
 		&publish,
 		&reject,
+		&planner, &consolidator, &verifier, &formatter,
+		&policy.PlannerMaxTokens, &policy.GroupMaxTokens,
+		&policy.ConsolidatorMaxTokens, &policy.VerifierMaxTokens,
+		&policy.FormatterMaxTokens, &policy.ContextSafetyTokens,
+		&policy.MinimumConfidence, &policy.MaxParallelGroups,
+		&policy.MediumSeverityEvent, &policy.PartialEvent, &policy.ContractMaxAttempts,
 	)
 	policy.PublishManualReviews = publish != 0
 	policy.AllowAutonomousReject = reject != 0
+	policy.PlannerEnabled = planner != 0
+	policy.ConsolidatorEnabled = consolidator != 0
+	policy.VerifierEnabled = verifier != 0
+	policy.FormatterEnabled = formatter != 0
 	return policy, err
 }

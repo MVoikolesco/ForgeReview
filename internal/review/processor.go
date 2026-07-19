@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"gitea-agents/internal/providers"
 	"gitea-agents/internal/queue"
 )
 
@@ -51,98 +50,40 @@ func (s *Service) Process(ctx context.Context, job queue.ReviewJob) error {
 	if policyErr != nil {
 		policy.MaxBlockChars = s.cfg.ReviewMaxBlockChars
 		policy.MaxFilesPerBlock = s.cfg.ReviewMaxFilesPerBlock
+		policy.PlannerEnabled = true
+		policy.ConsolidatorEnabled = true
+		policy.VerifierEnabled = true
+		policy.FormatterEnabled = true
+		policy.PlannerMaxTokens = 2000
+		policy.GroupMaxTokens = 3500
+		policy.ConsolidatorMaxTokens = 3500
+		policy.VerifierMaxTokens = 2500
+		policy.FormatterMaxTokens = 2500
+		policy.MinimumConfidence = .75
+		policy.MaxParallelGroups = 1
+		policy.MediumSeverityEvent = "REQUEST_CHANGES"
+		policy.PartialEvent = "COMMENT"
+		policy.ContractMaxAttempts = 5
 	}
-	blocks := splitDiff(rawDiff, policy.MaxBlockChars, policy.MaxFilesPerBlock)
-	if len(blocks) == 0 {
-		blocks = []string{""}
-	}
-
 	provider, err := s.providerFactory(ctx)
 	if err != nil {
 		return s.fail(ctx, id, recordStep, "enviando_para_ia", err)
 	}
 
-	result := Result{
-		ReviewID: id,
-		Provider: provider.Name(),
-		Agent:    "reviewer",
-		Comments: []Comment{},
-		Metadata: map[string]any{
-			"partial_reviews":   len(blocks),
-			"failed_blocks":     0,
-			"response_chars":    0,
-			"total_duration_ms": 0,
-		},
+	progress := func(stage, status, message string, metadata map[string]any, began time.Time, stageErr error) {
+		finished := time.Now()
+		errorText := ""
+		if stageErr != nil {
+			errorText = stageErr.Error()
+		}
+		_ = s.repo.AddStep(ctx, id, stage, status, message, metadata, began, &finished, finished.Sub(began).Milliseconds(), errorText)
 	}
-
-	for index, block := range blocks {
-		if status, statusErr := s.repo.Status(ctx, id); statusErr == nil && status == StatusCancelled {
-			return nil
-		}
-
-		stepStarted = time.Now()
-		partial, callErr := provider.Review(ctx, providers.Input{
-			Owner:       job.Owner,
-			Repository:  job.Repository,
-			PullRequest: job.PullRequest,
-			Diff:        block,
-			Prompt:      s.promptFor(ctx, job),
-		})
-		if callErr != nil {
-			incrementFailedBlocks(&result)
-			recordStep(
-				"enviando_para_ia",
-				"falhou",
-				fmt.Sprintf("Bloco %d/%d", index+1, len(blocks)),
-				stepStarted,
-				callErr,
-			)
-			continue
-		}
-		if validationErr := validateResult(partial); validationErr != nil {
-			incrementFailedBlocks(&result)
-			recordStep(
-				"recebendo_resposta_parcial",
-				"falhou",
-				fmt.Sprintf("Bloco %d/%d", index+1, len(blocks)),
-				stepStarted,
-				validationErr,
-			)
-			continue
-		}
-
-		recordStep(
-			"recebendo_resposta_parcial",
-			"concluido",
-			fmt.Sprintf("Bloco %d/%d", index+1, len(blocks)),
-			stepStarted,
-			nil,
-		)
-		result.Comments = mergeComments(result.Comments, partial.Comments)
-		if result.Summary == "" {
-			result.Summary = partial.Summary
-		}
-		result.FinalReview = partial.FinalReview
+	result, err := s.runPipeline(ctx, provider, queueInput{ID: id, Owner: job.Owner, Repository: job.Repository, PullRequest: job.PullRequest}, rawDiff, s.promptFor(ctx, job), policy, progress)
+	if err != nil {
+		return s.fail(ctx, id, recordStep, "revisao", err)
 	}
-
-	if result.Metadata["failed_blocks"].(int) == len(blocks) {
-		return s.fail(
-			ctx,
-			id,
-			recordStep,
-			"recebendo_resposta_parcial",
-			errors.New("nenhum bloco retornou uma review válida"),
-		)
-	}
-
 	result.Metadata["response_chars"] = len(rawDiff)
 	result.Metadata["total_duration_ms"] = time.Since(started).Milliseconds()
-	if result.FinalReview.GiteaEvent == "" {
-		result.FinalReview.GiteaEvent = "COMMENT"
-	}
-	if result.FinalReview.Status == "" {
-		result.FinalReview.Status = "comentado"
-	}
 	if !policy.AllowAutonomousReject && result.FinalReview.GiteaEvent == "REQUEST_CHANGES" {
 		result.FinalReview.GiteaEvent = "COMMENT"
 	}
@@ -230,9 +171,4 @@ func (s *Service) fail(
 	recordStep(name, "falhou", "A etapa falhou", time.Now(), err)
 	_ = s.repo.SetStatus(ctx, id, StatusFailed, err.Error())
 	return err
-}
-
-// incrementFailedBlocks updates the failed block count in result metadata.
-func incrementFailedBlocks(result *Result) {
-	result.Metadata["failed_blocks"] = result.Metadata["failed_blocks"].(int) + 1
 }
