@@ -137,8 +137,13 @@ func (h *ReviewHandler) Reprocess(c *gin.Context) {
 
 // Cancel marks the requested review as cancelled and writes its new status.
 func (h *ReviewHandler) Cancel(c *gin.Context) {
-	if err := h.repo.SetStatus(c.Request.Context(), c.Param("id"), review.StatusCancelled, "cancelled by operator"); err != nil {
+	cancelled, err := h.repo.Cancel(c.Request.Context(), c.Param("id"), "cancelled by operator")
+	if err != nil {
 		responses.Fail(c, http.StatusNotFound, "NOT_FOUND", "review not found")
+		return
+	}
+	if !cancelled {
+		responses.Fail(c, http.StatusConflict, "PUBLICATION_IN_PROGRESS", "review publication is already reserved")
 		return
 	}
 	responses.OK(c, http.StatusOK, gin.H{"id": c.Param("id"), "status": review.StatusCancelled})

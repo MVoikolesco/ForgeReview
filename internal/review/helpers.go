@@ -1,12 +1,9 @@
 package review
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
-
-	"gitea-agents/internal/queue"
 )
 
 var allowedSeverities = []string{"critica", "alta", "media", "baixa"}
@@ -45,32 +42,6 @@ func containsValue(values []string, value string) bool {
 		}
 	}
 	return false
-}
-
-// promptFor returns the active stored prompt or the built-in compatibility
-// prompt when no configured prompt is available.
-func (s *Service) promptFor(ctx context.Context, job queue.ReviewJob) string {
-	if s.promptLoader != nil {
-		if value := strings.TrimSpace(s.promptLoader(ctx)); value != "" {
-			return value
-		}
-	}
-	return reviewPrompt(job)
-}
-
-// reviewPrompt returns the minimal compatibility prompt for a review job.
-func reviewPrompt(job queue.ReviewJob) string {
-	return fmt.Sprintf(
-		"Você é um revisor de código. Analise apenas o diff. "+
-			"Responda somente JSON no formato "+
-			`{"comments":[{"file":"path","line":1,"severity":"alta",`+
-			`"decision_reason":"...","comment":"..."}],"summary":"...",`+
-			`"final_review":{"gitea_event":"COMMENT","status":"comentado",`+
-			`"summary":"...","observations":""}}. PR %d de %s/%s.`,
-		job.PullRequest,
-		job.Owner,
-		job.Repository,
-	)
 }
 
 // splitDiff groups file diffs by character and file limits. Individual file

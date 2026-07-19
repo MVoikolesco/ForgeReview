@@ -129,12 +129,20 @@ func (d *DB) Migrate(ctx context.Context) error {
 	return nil
 }
 
-// RequireSchema verifies that the review schema exists. Workers call this
-// method instead of applying migrations and receive an actionable startup error.
+// RequireSchema verifies that the complete database-driven review pipeline is
+// available. Workers never migrate and receive an actionable startup error.
 func (d *DB) RequireSchema(ctx context.Context) error {
-	var name string
-	if err := d.SQL.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name='reviews'").Scan(&name); err != nil {
-		return fmt.Errorf("sqlite schema is not initialized; start API first: %w", err)
+	for _, table := range []string{"reviews", "pipeline_versions", "pipeline_stages", "pipeline_executions", "stage_executions"} {
+		var name string
+		if err := d.SQL.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name); err != nil {
+			return fmt.Errorf("sqlite pipeline schema is not initialized; start API first: missing %s: %w", table, err)
+		}
+	}
+	var pipelines int
+	if err := d.SQL.QueryRowContext(ctx, `SELECT count(*) FROM pipeline_definitions pd
+		JOIN pipeline_versions pv ON pv.pipeline_definition_id=pd.id
+		WHERE pd.is_default=1 AND pd.is_enabled=1 AND pv.status='published'`).Scan(&pipelines); err != nil || pipelines == 0 {
+		return fmt.Errorf("sqlite pipeline catalog is not initialized; start API first")
 	}
 	return nil
 }

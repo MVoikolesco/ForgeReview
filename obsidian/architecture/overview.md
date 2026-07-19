@@ -5,7 +5,7 @@ O backend Go/Gin e o painel Next.js são processos separados no Compose. `cmd/ap
 - `internal/config`: ambiente e defaults.
 - `internal/database`: SQLite, migrations embutidas e seed.
 - `internal/http`: Gin, CORS, recovery, logging, Basic Auth, handlers e respostas legadas/versionadas.
-- `internal/review`: domínio, policies, pending reviews, repository e pipeline multiestágio (preparação, planejamento, revisão por grupos com retry de contrato, consolidação, verificação e formatação com fallbacks determinísticos).
+- `internal/review`: domínio, policies, pending reviews, repository e `PipelineEngine` orientado pelas versões e etapas persistidas no banco. Executors registrados implementam preparação, planejamento, revisão por grupos, consolidação, verificação, formatação e publicação.
 - `internal/queue/redis`: Redis Streams, ack, heartbeat e métricas.
 - `internal/providers`: Ollama, OpenAI-compatible/OpenRouter e Gemini.
 - `internal/integrations/gitea`: diff, publicação, catálogo e resolver de instâncias.

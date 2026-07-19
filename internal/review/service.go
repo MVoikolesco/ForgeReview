@@ -12,9 +12,8 @@ import (
 	"gitea-agents/internal/queue"
 )
 
-type providerFactory func(context.Context) (providers.LLMProvider, error)
+type providerFactory func(context.Context, *int64, *int64) (providers.LLMProvider, error)
 type giteaFactory func(context.Context, queue.ReviewJob) (*gitea.Client, error)
-type promptLoader func(context.Context) string
 
 // Service coordinates review persistence, queueing, provider execution, and
 // publication to Gitea.
@@ -24,7 +23,6 @@ type Service struct {
 	publisher       queue.Publisher
 	providerFactory providerFactory
 	giteaFactory    giteaFactory
-	promptLoader    promptLoader
 }
 
 // NewService creates a review service with queue and environment-based Gitea
@@ -34,7 +32,7 @@ func NewService(cfg config.Config, repo *Repository, publisher queue.Publisher) 
 		cfg:       cfg,
 		repo:      repo,
 		publisher: publisher,
-		providerFactory: func(context.Context) (providers.LLMProvider, error) {
+		providerFactory: func(context.Context, *int64, *int64) (providers.LLMProvider, error) {
 			return nil, errors.New("AI provider is not configured")
 		},
 		giteaFactory: func(context.Context, queue.ReviewJob) (*gitea.Client, error) {
@@ -48,12 +46,6 @@ func NewService(cfg config.Config, repo *Repository, publisher queue.Publisher) 
 func (s *Service) SetFactories(provider providerFactory, giteaClient giteaFactory) {
 	s.providerFactory = provider
 	s.giteaFactory = giteaClient
-}
-
-// SetPromptLoader configures the function used to load the active review
-// prompt. Call it during startup before processing jobs.
-func (s *Service) SetPromptLoader(loader promptLoader) {
-	s.promptLoader = loader
 }
 
 // Enqueue persists a new review, records its queued step, publishes its job,

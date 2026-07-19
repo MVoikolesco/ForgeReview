@@ -1,16 +1,11 @@
 package review
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
-	"time"
-
-	"gitea-agents/internal/providers"
 )
 
 // pipelineFile is the prepared representation used by every pipeline stage.
@@ -43,6 +38,7 @@ type pipelineFinding struct {
 	FailureScenario  string   `json:"failure_scenario"`
 	SuggestedFix     string   `json:"suggested_fix"`
 	SourceGroupID    string   `json:"source_group_id"`
+	SourceStage      string   `json:"source_stage,omitempty"`
 	SourceFindingIDs []string `json:"source_finding_ids"`
 	Introduced       bool     `json:"introduced_by_pr"`
 }
@@ -84,184 +80,10 @@ type pipelineComment struct {
 	Comment        string `json:"comment"`
 }
 
-// runPipeline restores the staged review workflow while retaining the current
-// repository result and Gitea contracts. Each stage has a deterministic fallback.
-func (s *Service) runPipeline(ctx context.Context, provider providers.LLMProvider, jobInput queueInput, rawDiff, prompt string, policy Policy, progress func(string, string, string, map[string]any, time.Time, error)) (Result, error) {
-	started := time.Now()
-	files, ignored := preparePipelineFiles(rawDiff)
-	meta := map[string]any{"pipeline_version": "2", "total_files": len(files) + ignored, "reviewed_files": len(files), "ignored_files": ignored, "stage_metrics": []map[string]any{}}
-	progress("preparacao", "concluido", fmt.Sprintf("%d arquivos preparados; %d ignorados", len(files), ignored), map[string]any{"files": filePaths(files)}, started, nil)
-	if len(files) == 0 {
-		return deterministicPipelineResult(jobInput.ID, provider.Name(), nil, "Nenhum arquivo revisavel encontrado no diff.", false, policy, meta), nil
-	}
-	call := func(stage, text string, max int) (string, error) {
-		at := time.Now()
-		response, usage, err := provider.Chat(ctx, text, safeStageTokens(text, max, policy))
-		metric := map[string]any{"stage": stage, "duration_ms": time.Since(at).Milliseconds(), "input_chars": len(text), "requested_output_tokens": max, "actual_prompt_tokens": usage.PromptTokens, "actual_completion_tokens": usage.CompletionTokens, "response_chars": len(response), "failed": err != nil}
-		meta["stage_metrics"] = append(meta["stage_metrics"].([]map[string]any), metric)
-		return response, err
-	}
-	planningStarted := time.Now()
-	progress("planejamento", "processando", "Agrupando arquivos para review", nil, planningStarted, nil)
-	plan, fallback := deterministicPlan(files, policy)
-	if policy.PlannerEnabled {
-		var candidate pipelinePlan
-		if raw, err := call("planner", stagePrompt("planner", prompt, files, nil), policy.PlannerMaxTokens); err == nil && decodeStage(raw, &candidate) == nil && validPipelinePlan(candidate, files) {
-			plan = candidate
-			fallback = false
-		}
-	}
-	meta["planner_fallback"] = fallback
-	meta["review_groups"] = len(plan.Groups)
-	progress("planejamento", "concluido", fmt.Sprintf("%d grupos de review", len(plan.Groups)), map[string]any{"fallback": fallback, "total_groups": len(plan.Groups)}, planningStarted, nil)
-
-	progress("revisao", "processando", "Revisando grupos de arquivos", map[string]any{"total_groups": len(plan.Groups)}, time.Now(), nil)
-	reviews, failed := s.reviewPipelineGroups(ctx, call, prompt, files, plan, policy, progress)
-	meta["successful_groups"] = len(reviews)
-	meta["failed_groups"] = len(failed)
-	meta["partial_review"] = len(failed) > 0
-	if len(reviews) == 0 {
-		return Result{}, fmt.Errorf("nenhum grupo retornou uma review válida")
-	}
-
-	consolidationStarted := time.Now()
-	progress("consolidacao", "processando", "Consolidando achados", nil, consolidationStarted, nil)
-	consolidated := fallbackConsolidation(reviews)
-	consolidatorFallback := true
-	if policy.ConsolidatorEnabled {
-		var candidate pipelineConsolidated
-		if raw, err := call("consolidator", stagePrompt("consolidator", prompt, files, reviews), policy.ConsolidatorMaxTokens); err == nil && decodeStage(raw, &candidate) == nil {
-			consolidated = candidate
-			consolidatorFallback = false
-		}
-	}
-	consolidated.Findings = validatePipelineFindings(consolidated.Findings, files)
-	meta["consolidator_fallback"] = consolidatorFallback
-	meta["consolidated_findings"] = len(consolidated.Findings)
-	progress("consolidacao", "concluido", fmt.Sprintf("%d achados consolidados", len(consolidated.Findings)), map[string]any{"fallback": consolidatorFallback}, consolidationStarted, nil)
-
-	approved := consolidated.Findings
-	verificationStarted := time.Now()
-	progress("verificacao", "processando", "Validando relevância dos achados", nil, verificationStarted, nil)
-	verifierFallback := false
-	if len(approved) > 0 && policy.VerifierEnabled {
-		var verification pipelineVerification
-		if raw, err := call("verifier", stagePrompt("verifier", prompt, files, consolidated), policy.VerifierMaxTokens); err == nil && decodeStage(raw, &verification) == nil {
-			approved = verifiedFindings(consolidated.Findings, verification, policy.MinimumConfidence)
-		} else {
-			verifierFallback = true
-			approved = confidenceFindings(approved, policy.MinimumConfidence)
-		}
-	} else if !policy.VerifierEnabled {
-		verifierFallback = true
-		approved = confidenceFindings(approved, policy.MinimumConfidence)
-	}
-	meta["verifier_fallback"] = verifierFallback
-	meta["confirmed_findings"] = len(approved)
-	meta["rejected_findings"] = len(consolidated.Findings) - len(approved)
-	progress("verificacao", "concluido", fmt.Sprintf("%d achados confirmados", len(approved)), map[string]any{"fallback": verifierFallback}, verificationStarted, nil)
-
-	result := deterministicPipelineResult(jobInput.ID, provider.Name(), approved, consolidated.Summary, len(failed) > 0, policy, meta)
-	formattingStarted := time.Now()
-	progress("formatacao", "processando", "Montando comentário final", nil, formattingStarted, nil)
-	formatterFallback := true
-	if policy.FormatterEnabled {
-		var formatted pipelineFormatted
-		if raw, err := call("formatter", stagePrompt("formatter", prompt, files, approved), policy.FormatterMaxTokens); err == nil && decodeStage(raw, &formatted) == nil && formatted.FinalReview.Summary != "" {
-			formatted.Comments = validFormattedComments(formatted.Comments, approved)
-			if formatted.Comments != nil {
-				result.Comments = make([]Comment, 0, len(formatted.Comments))
-				for _, comment := range formatted.Comments {
-					result.Comments = append(result.Comments, Comment{File: comment.File, Line: comment.Line, Severity: comment.Severity, DecisionReason: comment.DecisionReason, Comment: comment.Comment})
-				}
-			}
-			result.FinalReview = formatted.FinalReview
-			formatterFallback = false
-		}
-	}
-	applyPipelineDecision(&result, len(failed) > 0, policy)
-	meta["formatter_fallback"] = formatterFallback
-	meta["total_duration_ms"] = time.Since(started).Milliseconds()
-	progress("formatacao", "concluido", fmt.Sprintf("%d comentários formatados", len(result.Comments)), map[string]any{"fallback": formatterFallback}, formattingStarted, nil)
-	return result, validateResult(result)
-}
-
 // queueInput avoids coupling the pipeline mechanics to queue transport fields.
 type queueInput struct {
 	ID, Owner, Repository string
 	PullRequest           int
-}
-
-func (s *Service) reviewPipelineGroups(ctx context.Context, call func(string, string, int) (string, error), prompt string, files []pipelineFile, plan pipelinePlan, policy Policy, progress func(string, string, string, map[string]any, time.Time, error)) ([]pipelineGroupReview, []string) {
-	parallel := policy.MaxParallelGroups
-	if parallel < 1 {
-		parallel = 1
-	}
-	attempts := policy.ContractMaxAttempts
-	if attempts < 1 {
-		attempts = 1
-	}
-	type outcome struct {
-		index  int
-		review pipelineGroupReview
-		failed string
-	}
-	out := make(chan outcome, len(plan.Groups))
-	sem := make(chan struct{}, parallel)
-	var wg sync.WaitGroup
-	for i, group := range plan.Groups {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(index int, group pipelineGroup) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			stageStarted := time.Now()
-			groupFiles := selectPipelineFiles(files, group.Files)
-			progress("revisao", "processando", "Revisando grupo "+group.ID, map[string]any{"group_id": group.ID, "group_index": index + 1, "total_groups": len(plan.Groups), "files": filePaths(groupFiles)}, stageStarted, nil)
-			base := stagePrompt("reviewer", prompt, groupFiles, group)
-			var review pipelineGroupReview
-			var err error
-			for attempt := 1; attempt <= attempts; attempt++ {
-				raw, callErr := call("reviewer", base, policy.GroupMaxTokens)
-				if callErr != nil {
-					err = callErr
-					break
-				}
-				if err = decodeStage(raw, &review); err == nil {
-					review.Findings = validatePipelineFindings(review.Findings, groupFiles)
-					out <- outcome{index: index, review: review}
-					progress("revisao", "concluido", "Grupo "+group.ID+" revisado", map[string]any{"group_id": group.ID, "attempt": attempt, "max_attempts": attempts}, stageStarted, nil)
-					return
-				}
-				if attempt < attempts {
-					progress("revisao", "retentando", "Contrato inválido no grupo "+group.ID, map[string]any{"group_id": group.ID, "attempt": attempt + 1, "max_attempts": attempts}, stageStarted, err)
-					base += "\n\nRetorne exclusivamente JSON válido conforme o contrato."
-				}
-			}
-			progress("revisao", "falhou", "Grupo "+group.ID+" falhou", map[string]any{"group_id": group.ID, "attempt": attempts, "max_attempts": attempts}, stageStarted, err)
-			out <- outcome{index: index, failed: group.ID}
-		}(i, group)
-	}
-	wg.Wait()
-	close(out)
-	byIndex := make([]pipelineGroupReview, len(plan.Groups))
-	good := make([]bool, len(plan.Groups))
-	failed := []string{}
-	for item := range out {
-		if item.failed != "" {
-			failed = append(failed, item.failed)
-		} else {
-			byIndex[item.index] = item.review
-			good[item.index] = true
-		}
-	}
-	reviews := []pipelineGroupReview{}
-	for i := range byIndex {
-		if good[i] {
-			reviews = append(reviews, byIndex[i])
-		}
-	}
-	return reviews, failed
 }
 
 func preparePipelineFiles(raw string) ([]pipelineFile, int) {
@@ -344,9 +166,13 @@ func validPipelinePlan(plan pipelinePlan, files []pipelineFile) bool {
 	}
 	return len(seen) == len(files)
 }
-func stagePrompt(stage, prompt string, files []pipelineFile, data any) string {
+func stagePrompt(stage, basePrompt, stagePrompt, contract string, files []pipelineFile, data any) string {
 	b := strings.Builder{}
-	fmt.Fprintf(&b, "%s\n\n<stage>%s</stage>\n%s\n<diff>\n", prompt, stage, pipelineStageContract(stage))
+	if strings.TrimSpace(basePrompt) != "" {
+		b.WriteString(basePrompt)
+		b.WriteString("\n\n")
+	}
+	fmt.Fprintf(&b, "<stage>%s</stage>\n%s\n%s\n<diff>\n", stage, stagePrompt, contract)
 	for _, f := range files {
 		fmt.Fprintf(&b, "===== FILE %s =====\n%s\n", f.Path, f.Patch)
 	}
@@ -356,23 +182,6 @@ func stagePrompt(stage, prompt string, files []pipelineFile, data any) string {
 		fmt.Fprintf(&b, "\n<context>%s</context>", v)
 	}
 	return b.String()
-}
-
-func pipelineStageContract(stage string) string {
-	switch stage {
-	case "planner":
-		return `Responda somente JSON: {"pr_summary":"...","risk_level":"...","risk_areas":["..."],"groups":[{"id":"...","purpose":"...","files":["path"],"risk_level":"...","review_focus":["..."]}],"assumptions":["..."]}. Cada arquivo do diff deve aparecer exatamente uma vez.`
-	case "reviewer":
-		return `Responda somente JSON: {"group_id":"...","reviewed_files":["path"],"findings":[{"id":"...","file":"path","line":1,"severity":"critica|alta|media|baixa","category":"...","confidence":0.0,"decision_reason":"...","comment":"...","title":"...","evidence":"...","failure_scenario":"...","suggested_fix":"...","source_group_id":"...","introduced_by_pr":true}],"review_summary":"..."}. Reporte somente linhas adicionadas no diff.`
-	case "consolidator":
-		return `Responda somente JSON: {"findings":[...],"pr_summary":"...","overall_risk":"...","discarded_findings":[{"source_finding_id":"...","reason":"..."}]}. Preserve apenas achados comprovados no diff.`
-	case "verifier":
-		return `Responda somente JSON: {"results":[{"finding_id":"...","status":"confirmed|adjusted|rejected","confidence":0.0,"verification_reason":"...","adjusted_finding":null}]}. Confirme somente problemas com evidência suficiente.`
-	case "formatter":
-		return `Responda somente JSON: {"comments":[{"file":"path","line":1,"severity":"critica|alta|media|baixa","type":"...","decision_reason":"...","comment":"..."}],"final_review":{"gitea_event":"APPROVE|COMMENT|REQUEST_CHANGES","status":"...","summary":"...","observations":"..."}}.`
-	default:
-		return "Responda somente JSON válido conforme o contrato desta etapa."
-	}
 }
 func decodeStage(raw string, out any) error {
 	raw = strings.TrimSpace(raw)

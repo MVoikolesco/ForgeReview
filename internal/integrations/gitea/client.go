@@ -2,7 +2,9 @@ package gitea
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +15,29 @@ import (
 
 	"gitea-agents/internal/contracts"
 )
+
+// HTTPStatusError means Gitea answered and definitively rejected the request.
+type HTTPStatusError struct {
+	StatusCode int
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("gitea request failed with status %d", e.StatusCode)
+}
+
+// IsHTTPStatusError distinguishes a definitive HTTP rejection from an
+// ambiguous transport failure that may have reached Gitea.
+func IsHTTPStatusError(err error) bool {
+	var target *HTTPStatusError
+	return errors.As(err, &target)
+}
+
+// IsDefinitiveHTTPRejection reports client errors for which Gitea definitively
+// rejected the request. Server/proxy errors remain ambiguous.
+func IsDefinitiveHTTPRejection(err error) bool {
+	var target *HTTPStatusError
+	return errors.As(err, &target) && target.StatusCode >= 400 && target.StatusCode < 500
+}
 
 // Client performs authenticated requests against one Gitea API instance.
 type Client struct {
@@ -89,7 +114,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte,
 
 	data, _ := io.ReadAll(response.Body)
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("gitea request failed with status %d", response.StatusCode)
+		return nil, &HTTPStatusError{StatusCode: response.StatusCode}
 	}
 
 	return data, nil
@@ -170,7 +195,7 @@ func (c *Client) Publish(
 		event = "COMMENT"
 	}
 	payload := map[string]any{
-		"body":     result.FinalReview.Summary,
+		"body":     result.FinalReview.Summary + publicationMarker(result.ReviewID),
 		"event":    event,
 		"comments": comments,
 	}
@@ -178,4 +203,40 @@ func (c *Client) Publish(
 		"/pulls/" + strconv.Itoa(number) + "/reviews"
 	_, err := c.do(ctx, http.MethodPost, path, payload)
 	return err
+}
+
+// HasPublishedReview reconciles an uncertain local publication with reviews
+// already visible in Gitea.
+func (c *Client) HasPublishedReview(ctx context.Context, owner, repo string, number int, reviewID string) (bool, error) {
+	marker := publicationMarker(reviewID)
+	basePath := "/api/v1/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) +
+		"/pulls/" + strconv.Itoa(number) + "/reviews"
+	for page := 1; ; page++ {
+		data, err := c.do(ctx, http.MethodGet, basePath+"?limit=50&page="+strconv.Itoa(page), nil)
+		if err != nil {
+			return false, err
+		}
+		var reviews []struct {
+			Body string `json:"body"`
+		}
+		if err := json.Unmarshal(data, &reviews); err != nil {
+			return false, err
+		}
+		for _, review := range reviews {
+			if strings.Contains(review.Body, marker) {
+				return true, nil
+			}
+		}
+		if len(reviews) < 50 {
+			return false, nil
+		}
+	}
+}
+
+func publicationMarker(reviewID string) string {
+	if reviewID == "" {
+		sum := sha256.Sum256(nil)
+		reviewID = fmt.Sprintf("anonymous-%x", sum[:8])
+	}
+	return "\n\n<!-- forgereview:" + reviewID + " -->"
 }

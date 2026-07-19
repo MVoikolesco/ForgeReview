@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"gitea-agents/internal/http/responses"
+	"gitea-agents/internal/integrations/gitea"
 	"gitea-agents/internal/queue"
 	"gitea-agents/internal/review"
 
@@ -79,8 +80,15 @@ func (h *AdminHandler) pending(c *gin.Context) {
 	case "approve":
 		h.approvePending(c, id, pending)
 	case "reject":
-		_ = h.reviewRepo.DeletePending(c, id)
-		_ = h.reviewRepo.SetStatus(c, id, review.StatusCancelled, "review negada sem publicação")
+		cancelled, cancelErr := h.reviewRepo.Cancel(c, id, "review negada sem publicação")
+		if cancelErr != nil {
+			responses.LegacyError(c, http.StatusInternalServerError, "não foi possível rejeitar a review")
+			return
+		}
+		if !cancelled {
+			responses.LegacyError(c, http.StatusConflict, "a publicação da review já foi reservada")
+			return
+		}
 		responses.Legacy(c, http.StatusOK, gin.H{"accepted": true, "action": "reject"})
 	case "rerun":
 		h.rerunPending(c, id, pending)
@@ -127,6 +135,51 @@ func (h *AdminHandler) approvePending(c *gin.Context, id string, pending review.
 		return
 	}
 
+	reserved, err := h.reviewRepo.BeginPublication(c, id, pending.Result)
+	if err != nil {
+		responses.LegacyError(c, http.StatusInternalServerError, "não foi possível reservar a publicação")
+		return
+	}
+	if !reserved {
+		status, _ := h.reviewRepo.PublicationStatus(c, id)
+		if status == "publishing" || status == "uncertain" {
+			allowed, allowedErr := h.reviewRepo.PublicationReconciliationAllowed(c, id)
+			if allowedErr != nil || !allowed {
+				responses.LegacyError(c, http.StatusConflict, "publicação ainda está dentro da janela de segurança")
+				return
+			}
+			found, reconcileErr := client.HasPublishedReview(c, pending.Job.Owner, pending.Job.Repository, pending.Job.PullRequest, id)
+			if reconcileErr != nil {
+				responses.LegacyError(c, http.StatusBadGateway, "não foi possível reconciliar a publicação no Gitea")
+				return
+			}
+			if found {
+				_ = h.reviewRepo.FinishPublication(c, id, nil)
+				status = "published"
+			} else {
+				if err := h.reviewRepo.ResetPublicationForRetry(c, id); err != nil {
+					responses.LegacyError(c, http.StatusInternalServerError, "não foi possível reabrir a publicação")
+					return
+				}
+				reserved, err = h.reviewRepo.BeginPublication(c, id, pending.Result)
+				if err != nil || !reserved {
+					responses.LegacyError(c, http.StatusConflict, "não foi possível reabrir a publicação")
+					return
+				}
+			}
+		}
+		if status == "published" {
+			_ = h.reviewRepo.DeletePending(c, id)
+			_ = h.reviewRepo.SetStatus(c, id, review.StatusCompleted, "")
+			responses.Legacy(c, http.StatusOK, gin.H{"accepted": true, "action": "approve"})
+			return
+		}
+		if !reserved {
+			responses.LegacyError(c, http.StatusConflict, "publicação já está em andamento")
+			return
+		}
+	}
+
 	err = client.Publish(
 		c,
 		pending.Job.Owner,
@@ -134,6 +187,11 @@ func (h *AdminHandler) approvePending(c *gin.Context, id string, pending review.
 		pending.Job.PullRequest,
 		pending.Result,
 	)
+	if err != nil && !gitea.IsDefinitiveHTTPRejection(err) {
+		_ = h.reviewRepo.MarkPublicationUncertain(c, id, err)
+	} else {
+		_ = h.reviewRepo.FinishPublication(c, id, err)
+	}
 	if err != nil {
 		responses.LegacyError(c, http.StatusBadGateway, "não foi possível publicar a revisão no Gitea")
 		return

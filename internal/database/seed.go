@@ -34,5 +34,8 @@ func (d *DB) Seed(ctx context.Context) error {
 	}
 
 	_, err := d.SQL.ExecContext(ctx, "UPDATE ai_providers SET is_default=1 WHERE name='ollama' AND NOT EXISTS (SELECT 1 FROM ai_providers WHERE is_default=1)")
-	return err
+	if err != nil {
+		return err
+	}
+	return d.seedPipelines(ctx)
 }

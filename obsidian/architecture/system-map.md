@@ -1,6 +1,6 @@
 # Mapa do sistema
 
-Relaciona cada fronteira, responsabilidade e ponto de reaproveitamento. A fonte de verdade de comportamento é o código; esta nota descreve o estado observado em 2026-07-17.
+Relaciona cada fronteira, responsabilidade e ponto de reaproveitamento. A fonte de verdade da composição do pipeline é o banco; executors e validações permanecem no código. Esta nota descreve o estado observado em 2026-07-18.
 
 ## Processos
 
@@ -16,9 +16,9 @@ Relaciona cada fronteira, responsabilidade e ponto de reaproveitamento. A fonte 
 
 - `internal/app`: composição de configuração, banco, queue, service, provider e HTTP.
 - `internal/config`: ambiente e defaults; só aceita SQLite e `APP_MODE` `api`/`worker`.
-- `internal/database`: migrations embutidas em `internal/database/migrations/*.sql`, seed de quatro providers e verificação de schema.
+- `internal/database`: migrations embutidas em `internal/database/migrations/*.sql`, seed de providers, contratos, tipos e pipelines, além da verificação do schema completo exigido pelo worker.
 - `internal/http`: `router.go` compõe middleware, grupos e fallback. Os pacotes `health`, `webhook`, `reviews` e `admin` possuem um `router.go` próprio que registra somente as rotas do domínio; inclui Basic Auth, CORS, recovery, log e envelopes.
-- `internal/review`: `Service` coordena o fluxo; `Repository` persiste reviews, steps, policies, prompts e pendências.
+- `internal/review`: `Service` coordena o ciclo da review; `PipelineEngine` executa versões persistidas por registry; `Repository` mantém reviews, snapshots, stages, artifacts, policies, prompts, pendências e publicação idempotente.
 - `internal/queue/redis`: Redis Streams, consumer group, heartbeat, ack e métricas.
 - `internal/integrations/gitea`: diff, publicação, catálogo de organizações/repos/PRs e resolução de instância/token.
 - `internal/providers`: contrato `LLMProvider` e adaptadores Ollama, OpenAI-compatible/OpenRouter e Gemini.
@@ -35,11 +35,11 @@ Gin -> reviews + review_steps -> Redis XADD
                                       v
                          worker XREADGROUP / XACK
                                       |
-                    resolver Gitea -> diff -> splitDiff
-                                      |
-                           provider -> JSON validado
-                                      |
-                         resultado SQLite / pending_reviews
+                    resolver Gitea -> diff -> pipeline version
+                                       |
+                    executors registrados -> artifacts validados
+                                       |
+              snapshot/stages/resultado SQLite / pending_reviews
                                       |
                       aprovação -> Gitea pull review
 ```
@@ -47,7 +47,7 @@ Gin -> reviews + review_steps -> Redis XADD
 ## Regras de fronteira
 
 - O API é o único processo autorizado a migrar e seedar o banco.
-- O worker não inicia sem a tabela `reviews`.
+- O worker não inicia sem o schema do pipeline e um pipeline default publicado.
 - Jobs sem `review_id` ainda são aceitos: o worker cria um ID e persiste o job como legado de fila.
 - Jobs com `gitea_instance_id` usam essa instância; sem ID, primeiro tenta o repositório cadastrado e depois a instância default habilitada; sem configuração, cai no cliente de ambiente.
 - O token cifrado do banco é preferido. Cliente de ambiente só é fallback quando não há instância resolvida.

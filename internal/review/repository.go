@@ -73,6 +73,17 @@ func (r *Repository) DefaultPrompt(ctx context.Context) (string, error) {
 	return content, err
 }
 
+// Prompt returns the newest active prompt for the selected pipeline profile.
+func (r *Repository) Prompt(ctx context.Context, profileID *int64) (string, error) {
+	if profileID == nil {
+		return r.DefaultPrompt(ctx)
+	}
+	var content string
+	err := r.db.QueryRowContext(ctx, `SELECT content FROM review_prompts
+		WHERE profile_id=? AND is_active=1 ORDER BY version DESC,id DESC LIMIT 1`, *profileID).Scan(&content)
+	return content, err
+}
+
 // SetStatus updates a review status and associated timestamps. Terminal status
 // updates also persist message as the review error when it is non-empty.
 func (r *Repository) SetStatus(ctx context.Context, id, status, message string) error {
@@ -126,6 +137,36 @@ func (r *Repository) SetStatus(ctx context.Context, id, status, message string) 
 			id,
 		)
 	}
+}
+
+// Cancel marks a review cancelled unless publication is already reserved or
+// completed. This prevents cancellation from racing with an external effect.
+func (r *Repository) Cancel(ctx context.Context, id, message string) (bool, error) {
+	now := time.Now().UTC()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE reviews SET status=?,error_message=?,updated_at=?,finished_at=?
+		WHERE id=? AND NOT EXISTS(
+			SELECT 1 FROM review_publications rp WHERE rp.review_id=reviews.id
+			AND rp.status IN ('publishing','uncertain','published')
+		)`, StatusCancelled, message, now, now, id)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected == 0 {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM pending_reviews WHERE review_id=?`, id); err != nil {
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Status returns the persisted status for a review ID.

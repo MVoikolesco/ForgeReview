@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"gitea-agents/internal/config"
@@ -20,7 +21,7 @@ func TestMigrateAndSeed(t *testing.T) {
 	if err := db.Seed(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"ai_providers", "review_profiles", "reviews", "review_steps", "pending_reviews"} {
+	for _, table := range []string{"ai_providers", "review_profiles", "reviews", "review_steps", "pending_reviews", "stage_contracts", "stage_types", "pipeline_definitions", "pipeline_versions", "pipeline_stages", "pipeline_transitions", "pipeline_executions", "stage_executions", "stage_artifacts", "review_publications"} {
 		var name string
 		if err := db.SQL.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name); err != nil {
 			t.Fatalf("missing %s: %v", table, err)
@@ -32,5 +33,48 @@ func TestMigrateAndSeed(t *testing.T) {
 	}
 	if providers < 4 {
 		t.Fatalf("expected seeded providers, got %d", providers)
+	}
+	var stages, transitions int
+	if err := db.SQL.QueryRowContext(ctx, `SELECT count(*) FROM pipeline_stages ps
+		JOIN pipeline_versions pv ON pv.id=ps.pipeline_version_id
+		JOIN pipeline_definitions pd ON pd.id=pv.pipeline_definition_id
+		WHERE pd.key='system-default' AND pv.status='published'`).Scan(&stages); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL.QueryRowContext(ctx, `SELECT count(*) FROM pipeline_transitions pt
+		JOIN pipeline_versions pv ON pv.id=pt.pipeline_version_id
+		JOIN pipeline_definitions pd ON pd.id=pv.pipeline_definition_id
+		WHERE pd.key='system-default'`).Scan(&transitions); err != nil {
+		t.Fatal(err)
+	}
+	if stages != 7 || transitions != 6 {
+		t.Fatalf("unexpected default pipeline: stages=%d transitions=%d", stages, transitions)
+	}
+	if err := db.Seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var definitions int
+	if err := db.SQL.QueryRowContext(ctx, `SELECT count(*) FROM pipeline_definitions WHERE key='system-default'`).Scan(&definitions); err != nil {
+		t.Fatal(err)
+	}
+	if definitions != 1 {
+		t.Fatalf("pipeline seed is not idempotent: %d definitions", definitions)
+	}
+	if err := db.RequireSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.SQL.QueryContext(ctx, `SELECT key,schema_json FROM stage_contracts`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key, schema string
+		if err := rows.Scan(&key, &schema); err != nil {
+			t.Fatal(err)
+		}
+		if !json.Valid([]byte(schema)) {
+			t.Fatalf("contract %s has invalid schema: %s", key, schema)
+		}
 	}
 }

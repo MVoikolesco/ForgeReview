@@ -13,14 +13,24 @@
 | `review_policies` | limites e publicação | 1:1 profile | CRUD; limites básicos executados |
 | `gitea_instances` | endpoint, bot e token | 1:N repositories | token nunca é listado |
 | `repositories` | escopo e profile por repo | N:1 instância/profile | CRUD e seleção Gitea |
+| `stage_contracts` | contratos versionados de response | referenciado por stage types | catálogo controlado pelo sistema |
+| `stage_types` | executor e contratos suportados | 1:N `pipeline_stages` | catálogo controlado pelo sistema |
+| `pipeline_definitions` | identidade do workflow | profile opcional; 1:N versões | seed; CRUD dedicado futuro |
+| `pipeline_versions` | configuração publicada imutável | N:1 definição | uma versão publicada por definição |
+| `pipeline_stages` | instâncias ordenadas de executors | N:1 versão; modelo opcional | prompt, tokens, retry e parâmetros |
+| `pipeline_transitions` | encadeamento persistido | etapas de uma versão | execução condicional futura |
 
 ## Estado de execução
 
 | Tabela | Campos importantes | Regra |
 | --- | --- | --- |
-| `reviews` | `id`, owner/repository/PR, status, source, `job_json`, `result_json`, erro e timestamps | um registro por job; resultado final é JSON |
+| `reviews` | `id`, owner/repository/PR, pipeline/profile vinculados, status, `job_json`, `result_json`, erro e timestamps | um registro por job; versão do pipeline fica imutável após seleção |
 | `review_steps` | review, step, status, mensagem, metadata, duração, erro | append-only operacional |
 | `pending_reviews` | review, job e result | existe enquanto aguarda aprovação manual |
+| `pipeline_executions` | review, versão, status e snapshot JSON | uma linha por execução/rerun |
+| `stage_executions` | etapa, tentativa, status, duração e metadata | auditoria ordenada da execução |
+| `stage_artifacts` | tipo e payload JSON validado | output de uma execução de etapa |
+| `review_publications` | fingerprint e estado da publicação | reserva local; reconcilia a marca `forgereview` no Gitea antes de repetir envio incerto |
 | `schema_migrations` | nome/aplicação | evita reaplicar migrations |
 
 ## Estados
@@ -46,7 +56,7 @@
 | `publicando_comentario` | `publicacao` | 95 |
 | `concluido` | `publicacao` | 100 / done |
 
-O pipeline executa `planejamento`, revisão por grupos, `consolidacao`, `verificacao` e `formatacao`. Os eventos de cada etapa, incluindo grupo, arquivos, tentativas e falhas, são persistidos em `review_steps.metadata_json` e projetados no painel.
+O seed configura `preparacao`, `planejamento`, `revisao`, `consolidacao`, `verificacao`, `formatacao` e `publicacao`. O engine resolve cada executor por `stage_types.executor_key`; eventos continuam em `review_steps`, enquanto snapshots, tentativas e artifacts são persistidos nas tabelas próprias do pipeline.
 
 ## Resultado JSON
 

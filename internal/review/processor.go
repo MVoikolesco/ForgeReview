@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"gitea-agents/internal/integrations/gitea"
+	"gitea-agents/internal/providers"
 	"gitea-agents/internal/queue"
 )
 
@@ -46,29 +48,15 @@ func (s *Service) Process(ctx context.Context, job queue.ReviewJob) error {
 	}
 	recordStep("buscando_diff", "concluido", "Diff obtido", stepStarted, nil)
 
-	policy, policyErr := s.repo.Policy(ctx, job)
-	if policyErr != nil {
-		policy.MaxBlockChars = s.cfg.ReviewMaxBlockChars
-		policy.MaxFilesPerBlock = s.cfg.ReviewMaxFilesPerBlock
-		policy.PlannerEnabled = true
-		policy.ConsolidatorEnabled = true
-		policy.VerifierEnabled = true
-		policy.FormatterEnabled = true
-		policy.PlannerMaxTokens = 2000
-		policy.GroupMaxTokens = 3500
-		policy.ConsolidatorMaxTokens = 3500
-		policy.VerifierMaxTokens = 2500
-		policy.FormatterMaxTokens = 2500
-		policy.MinimumConfidence = .75
-		policy.MaxParallelGroups = 1
-		policy.MediumSeverityEvent = "REQUEST_CHANGES"
-		policy.PartialEvent = "COMMENT"
-		policy.ContractMaxAttempts = 5
-	}
-	provider, err := s.providerFactory(ctx)
+	definition, err := s.repo.Pipeline(ctx, id, job)
 	if err != nil {
-		return s.fail(ctx, id, recordStep, "enviando_para_ia", err)
+		return s.fail(ctx, id, recordStep, "preparacao", err)
 	}
+	policy, policyErr := s.repo.PolicyForProfile(ctx, definition.ProfileID)
+	if policyErr != nil {
+		policy = defaultPolicy(s.cfg.ReviewMaxBlockChars, s.cfg.ReviewMaxFilesPerBlock)
+	}
+	basePrompt, _ := s.repo.Prompt(ctx, definition.ProfileID)
 
 	progress := func(stage, status, message string, metadata map[string]any, began time.Time, stageErr error) {
 		finished := time.Now()
@@ -78,62 +66,126 @@ func (s *Service) Process(ctx context.Context, job queue.ReviewJob) error {
 		}
 		_ = s.repo.AddStep(ctx, id, stage, status, message, metadata, began, &finished, finished.Sub(began).Milliseconds(), errorText)
 	}
-	result, err := s.runPipeline(ctx, provider, queueInput{ID: id, Owner: job.Owner, Repository: job.Repository, PullRequest: job.PullRequest}, rawDiff, s.promptFor(ctx, job), policy, progress)
+	engine := NewPipelineEngine(s.repo)
+	_, err = engine.Execute(ctx, definition, PipelineExecutionInput{
+		Job:        queueInput{ID: id, Owner: job.Owner, Repository: job.Repository, PullRequest: job.PullRequest},
+		RawDiff:    rawDiff,
+		BasePrompt: basePrompt,
+		Policy:     policy,
+		Provider: func(callCtx context.Context, modelID *int64) (providers.LLMProvider, error) {
+			return s.providerFactory(callCtx, definition.ProfileID, modelID)
+		},
+		Progress: progress,
+		Publish: func(publishCtx context.Context, result Result) (StageOutcome, error) {
+			result.Metadata["response_chars"] = len(rawDiff)
+			result.Metadata["total_duration_ms"] = time.Since(started).Milliseconds()
+			if !policy.AllowAutonomousReject && result.FinalReview.GiteaEvent == "REQUEST_CHANGES" {
+				result.FinalReview.GiteaEvent = "COMMENT"
+				result.FinalReview.Status = "comentado"
+			}
+
+			resultStarted := time.Now()
+			if saveErr := s.repo.SaveResult(publishCtx, id, result); saveErr != nil {
+				return StageOutcome{}, saveErr
+			}
+			recordStep("agregando_resultado", "concluido", fmt.Sprintf("%d comentários", len(result.Comments)), resultStarted, nil)
+			if status, statusErr := s.repo.Status(publishCtx, id); statusErr == nil && status == StatusCancelled {
+				return StageOutcome{Status: "cancelled", ArtifactType: "publication_result", Artifact: map[string]string{"status": "cancelled"}}, nil
+			}
+			if job.Manual && !policy.PublishManualReviews {
+				saved, pendingErr := s.repo.SavePending(publishCtx, id, job, result)
+				if pendingErr != nil {
+					return StageOutcome{}, pendingErr
+				}
+				if !saved {
+					return StageOutcome{Status: "cancelled", ArtifactType: "publication_result", Artifact: map[string]string{"status": "cancelled"}}, nil
+				}
+				recordStep("pre-publicacao", "aguardando", "Aguardando autorização para publicar no Gitea", time.Now(), nil)
+				return StageOutcome{Status: "waiting", ArtifactType: "publication_result", Artifact: map[string]string{"status": "waiting"}}, nil
+			}
+
+			if giteaClient.BaseURL != "" {
+				reserved, reserveErr := s.repo.BeginPublication(publishCtx, id, result)
+				if reserveErr != nil {
+					return StageOutcome{}, reserveErr
+				}
+				if !reserved {
+					if status, statusErr := s.repo.Status(publishCtx, id); statusErr == nil && status == StatusCancelled {
+						return StageOutcome{Status: "cancelled", ArtifactType: "publication_result", Artifact: map[string]string{"status": "cancelled"}}, nil
+					}
+					publicationStatus, _ := s.repo.PublicationStatus(publishCtx, id)
+					if publicationStatus == "publishing" || publicationStatus == "uncertain" {
+						allowed, allowedErr := s.repo.PublicationReconciliationAllowed(publishCtx, id)
+						if allowedErr != nil {
+							return StageOutcome{}, allowedErr
+						}
+						if !allowed {
+							return StageOutcome{}, fmt.Errorf("publicação %s ainda está dentro da janela de segurança", publicationStatus)
+						}
+						found, reconcileErr := giteaClient.HasPublishedReview(publishCtx, job.Owner, job.Repository, job.PullRequest, id)
+						if reconcileErr != nil {
+							return StageOutcome{}, fmt.Errorf("não foi possível reconciliar publicação %s: %w", publicationStatus, reconcileErr)
+						}
+						if found {
+							if finishErr := s.repo.FinishPublication(publishCtx, id, nil); finishErr != nil {
+								return StageOutcome{}, finishErr
+							}
+							publicationStatus = "published"
+						} else {
+							if resetErr := s.repo.ResetPublicationForRetry(publishCtx, id); resetErr != nil {
+								return StageOutcome{}, resetErr
+							}
+							reserved, reserveErr = s.repo.BeginPublication(publishCtx, id, result)
+							if reserveErr != nil || !reserved {
+								return StageOutcome{}, fmt.Errorf("não foi possível reabrir publicação: %w", reserveErr)
+							}
+						}
+					}
+					if publicationStatus != "published" && !reserved {
+						return StageOutcome{}, fmt.Errorf("publicação já reservada com status %s", publicationStatus)
+					}
+				}
+				if reserved {
+					if status, statusErr := s.repo.Status(publishCtx, id); statusErr == nil && status == StatusCancelled {
+						return StageOutcome{Status: "cancelled", ArtifactType: "publication_result", Artifact: map[string]string{"status": "cancelled"}}, nil
+					}
+					publishStarted := time.Now()
+					publishErr := giteaClient.Publish(publishCtx, job.Owner, job.Repository, job.PullRequest, result)
+					var finishErr error
+					if publishErr != nil && !gitea.IsDefinitiveHTTPRejection(publishErr) {
+						finishErr = s.repo.MarkPublicationUncertain(publishCtx, id, publishErr)
+					} else {
+						finishErr = s.repo.FinishPublication(publishCtx, id, publishErr)
+					}
+					if publishErr == nil && finishErr != nil {
+						publishErr = finishErr
+					}
+					if publishErr != nil {
+						return StageOutcome{}, publishErr
+					}
+					recordStep("publicando_comentario", "concluido", "Resultado publicado no Gitea", publishStarted, nil)
+				}
+			}
+			if statusErr := s.repo.SetStatus(publishCtx, id, StatusCompleted, ""); statusErr != nil {
+				return StageOutcome{}, statusErr
+			}
+			return StageOutcome{ArtifactType: "publication_result", Artifact: map[string]string{"status": "published"}}, nil
+		},
+	})
 	if err != nil {
 		return s.fail(ctx, id, recordStep, "revisao", err)
 	}
-	result.Metadata["response_chars"] = len(rawDiff)
-	result.Metadata["total_duration_ms"] = time.Since(started).Milliseconds()
-	if !policy.AllowAutonomousReject && result.FinalReview.GiteaEvent == "REQUEST_CHANGES" {
-		result.FinalReview.GiteaEvent = "COMMENT"
-	}
-
-	stepStarted = time.Now()
-	if err := s.repo.SaveResult(ctx, id, result); err != nil {
-		return s.fail(ctx, id, recordStep, "agregando_resultado", err)
-	}
-	recordStep(
-		"agregando_resultado",
-		"concluido",
-		fmt.Sprintf("%d comentários", len(result.Comments)),
-		stepStarted,
-		nil,
-	)
-
-	if status, statusErr := s.repo.Status(ctx, id); statusErr == nil && status == StatusCancelled {
-		return nil
-	}
-	if job.Manual && !policy.PublishManualReviews {
-		if err := s.repo.SavePending(ctx, id, job, result); err != nil {
-			return s.fail(ctx, id, recordStep, "pre-publicacao", err)
-		}
-		recordStep(
-			"pre-publicacao",
-			"aguardando",
-			"Aguardando autorização para publicar no Gitea",
-			time.Now(),
-			nil,
-		)
-		_ = s.repo.SetStatus(ctx, id, StatusAwaitingApproval, "")
-		return nil
-	}
-
-	if giteaClient.BaseURL != "" {
-		stepStarted = time.Now()
-		if err := giteaClient.Publish(ctx, job.Owner, job.Repository, job.PullRequest, result); err != nil {
-			return s.fail(ctx, id, recordStep, "publicando_comentario", err)
-		}
-		recordStep(
-			"publicando_comentario",
-			"concluido",
-			"Resultado publicado no Gitea",
-			stepStarted,
-			nil,
-		)
-	}
-
-	_ = s.repo.SetStatus(ctx, id, StatusCompleted, "")
 	return nil
+}
+
+func defaultPolicy(maxBlockChars, maxFilesPerBlock int) Policy {
+	return Policy{
+		MaxBlockChars: maxBlockChars, MaxFilesPerBlock: maxFilesPerBlock,
+		PlannerEnabled: true, ConsolidatorEnabled: true, VerifierEnabled: true, FormatterEnabled: true,
+		PlannerMaxTokens: 2000, GroupMaxTokens: 3500, ConsolidatorMaxTokens: 3500,
+		VerifierMaxTokens: 2500, FormatterMaxTokens: 2500, MinimumConfidence: .75,
+		MaxParallelGroups: 1, MediumSeverityEvent: "REQUEST_CHANGES", PartialEvent: "COMMENT", ContractMaxAttempts: 5,
+	}
 }
 
 // stepRecorder returns a callback that appends completed or failed steps for a

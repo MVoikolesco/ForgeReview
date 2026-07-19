@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 
 	"gitea-agents/internal/queue"
@@ -37,23 +38,37 @@ type Pending struct {
 	Result Result
 }
 
-// SavePending stores or replaces the publication awaiting approval for a review.
+// SavePending stores the pending payload and transitions the review atomically.
+// It returns false when cancellation won the race.
 func (r *Repository) SavePending(
 	ctx context.Context,
 	id string,
 	job queue.ReviewJob,
 	result Result,
-) error {
+) (bool, error) {
 	jobData, err := json.Marshal(job)
 	if err != nil {
-		return err
+		return false, err
 	}
 	resultData, err := json.Marshal(result)
 	if err != nil {
-		return err
+		return false, err
 	}
-
-	_, err = r.db.ExecContext(
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	statusResult, err := tx.ExecContext(ctx, `UPDATE reviews SET status=?,updated_at=CURRENT_TIMESTAMP
+		WHERE id=? AND status!=?`, StatusAwaitingApproval, id, StatusCancelled)
+	if err != nil {
+		return false, err
+	}
+	affected, err := statusResult.RowsAffected()
+	if err != nil || affected == 0 {
+		return false, err
+	}
+	_, err = tx.ExecContext(
 		ctx,
 		`INSERT INTO pending_reviews(review_id,job_json,result_json)
 		 VALUES(?,?,?)
@@ -65,7 +80,13 @@ func (r *Repository) SavePending(
 		jobData,
 		resultData,
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Pending loads and decodes the publication awaiting approval for a review ID.
@@ -99,8 +120,22 @@ func (r *Repository) DeletePending(ctx context.Context, id string) error {
 // Policy resolves the enabled repository-specific policy or default profile
 // policy for a review job.
 func (r *Repository) Policy(ctx context.Context, job queue.ReviewJob) (Policy, error) {
+	profileID, err := r.profileID(ctx, job)
+	if err != nil {
+		return Policy{}, err
+	}
+	return r.PolicyForProfile(ctx, profileID)
+}
+
+// PolicyForProfile loads publication and semantic limits from the profile used
+// by the immutable pipeline version. Stage-specific execution settings come
+// from pipeline_stages.
+func (r *Repository) PolicyForProfile(ctx context.Context, profileID *int64) (Policy, error) {
 	var policy Policy
 	var publish, reject, planner, consolidator, verifier, formatter int
+	if profileID == nil {
+		return policy, sql.ErrNoRows
+	}
 	err := r.db.QueryRowContext(
 		ctx,
 		`SELECT pol.max_block_chars, pol.max_files_per_block,
@@ -114,11 +149,8 @@ func (r *Repository) Policy(ctx context.Context, job queue.ReviewJob) (Policy, e
 		        pol.review_medium_severity_event, pol.review_partial_event, pol.review_final_retries
 		 FROM review_profiles rp
 		 JOIN review_policies pol ON pol.profile_id=rp.id
-		 LEFT JOIN repositories rep ON rep.review_profile_id=rp.id
-		   AND rep.full_name=? AND rep.is_enabled=1
-		 WHERE rp.is_enabled=1 AND (rep.id IS NOT NULL OR rp.is_default=1)
-		 ORDER BY rep.id DESC, rp.is_default DESC LIMIT 1`,
-		job.Owner+"/"+job.Repository,
+		 WHERE rp.id=? AND rp.is_enabled=1`,
+		*profileID,
 	).Scan(
 		&policy.MaxBlockChars,
 		&policy.MaxFilesPerBlock,

@@ -61,11 +61,6 @@ func Run() error {
 			return giteaResolver.Resolve(ctx, job.GiteaInstanceID, job.Owner, job.Repository)
 		},
 	)
-	service.SetPromptLoader(func(ctx context.Context) string {
-		value, _ := repository.DefaultPrompt(ctx)
-		return value
-	})
-
 	if cfg.AppMode == "worker" {
 		return runWorker(ctx, cfg, queueClient, service, logger)
 	}
