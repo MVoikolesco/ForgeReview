@@ -4,10 +4,11 @@ COPY package*.json ./
 RUN npm ci --no-audit --no-fund
 
 FROM deps AS development
+WORKDIR /workspace
 COPY . .
 ENV NODE_ENV=development
 EXPOSE 3000
-CMD ["npm", "run", "dev"]
+CMD ["sh", "-c", "if [ ! -x node_modules/.bin/next ]; then cp -a /app/node_modules/. node_modules/; fi; exec npm run dev"]
 
 FROM deps AS builder
 COPY . .
