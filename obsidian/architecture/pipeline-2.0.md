@@ -39,6 +39,11 @@ sequência linear por `pipeline_stages.position`. `pipeline_transitions` já
 persiste o encadeamento, mas condições, fallbacks entre etapas, retomada por
 checkpoint, CRUD dedicado e editor visual continuam como próximas evoluções.
 
+O painel já possui uma área de configurações somente leitura baseada em
+`GET /api/admin/review/settings`. Ela apresenta a configuração efetiva,
+profiles, versões publicadas, etapas, prompts e contratos. Edição, criação de
+versão e publicação de uma nova definição continuam fora desta entrega.
+
 As colunas antigas de ativação e tokens em `review_policies` são usadas somente
 para migrar profiles existentes no seed inicial. Depois da migração, a fonte de
 verdade desses parâmetros é `pipeline_stages`; a edição administrativa desses

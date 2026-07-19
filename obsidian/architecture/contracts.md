@@ -17,6 +17,9 @@ Rotas especiais consumidas pelo frontend:
 - `GET /status`, `GET /observability/metrics`, `/logs`, `/reviews`, `/progress`.
 - `POST /setup/catalog`, `/setup/complete`, `/setup/add-model`.
 - `POST /reviews/manual`.
+- `GET /review/settings` agrega profiles, policies efetivas, prompt ativo,
+  pipelines publicados, stages ordenados e catálogo de tipos/contratos para a
+  tela administrativa somente leitura.
 - `GET /reviews/pending?name=...` e `POST /reviews/pending/{approve|reject|rerun}?name=...`.
 - `POST /gitea/instances/test`, `/:id/test`, `/:id/organizations`, `/:id/repositories`, `/:id/pull-requests`.
 

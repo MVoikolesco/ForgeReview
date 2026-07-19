@@ -9,6 +9,7 @@ O backend Go/Gin e o painel Next.js são processos separados no Compose. `cmd/ap
 - `internal/queue/redis`: Redis Streams, ack, heartbeat e métricas.
 - `internal/providers`: Ollama, OpenAI-compatible/OpenRouter e Gemini.
 - `internal/integrations/gitea`: diff, publicação, catálogo e resolver de instâncias.
-- `web-admin`: Next/React, cliente Basic Auth e visualização do fluxo.
+- `web-admin`: Next/React, cliente Basic Auth, visualização do fluxo e área de
+  configurações com visão geral, profiles, pipelines e catálogo de etapas.
 
 Detalhes: [[system-map|mapa do sistema]], [[data-model|modelo de dados]], [[contracts|contratos]] e [[migration-audit|auditoria]].
