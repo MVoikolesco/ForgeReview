@@ -41,6 +41,7 @@
 - Se o resultado manual ficar `aguardando_autorizacao`, usar o modal de pré-publicação; approve publica, reject cancela e rerun enfileira novamente.
 - Se o Next não subir, verificar se `APP_ENVIRONMENT` é exatamente `development` ou `production` e se o alvo correspondente existe no `web-admin/Dockerfile`.
 - Se a API repetir `exec /usr/local/bin/review-bot: no such file or directory`, o servidor está usando um artefato/container antigo. Copiar novamente todo `production/build-result`, executar `docker compose -f compose.yaml up -d --build --force-recreate` e confirmar que o Compose usa `command: ["/app/server"]`; não reutilizar containers antigos.
+- Se o ambiente de desenvolvimento registrar `su-exec: /app/server: No such file or directory`, subir com os dois arquivos Compose: `docker compose -f docker/compose.yml -f docker/compose.development.yml up -d --build --force-recreate`. O override deve executar Air, pois o estágio `development` não inclui o binário de produção.
 - O aviso `Memory overcommit must be enabled` do Redis é do kernel do host. Em Linux, habilitar com `sudo sysctl -w vm.overcommit_memory=1` e persistir `vm.overcommit_memory = 1` em `/etc/sysctl.conf`; isso é independente da falha de inicialização da API.
 - O Air observa extensões Go e arquivos de configuração permitidos, mas `web-admin`, `node_modules`, `data` e `logs` ficam excluídos do watch do backend.
 - O override de desenvolvimento mantém `redis`, `api`, `worker` e `web`; `air_tmp` guarda somente os binários temporários do Air fora do bind mount do código.

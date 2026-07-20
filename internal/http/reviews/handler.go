@@ -108,7 +108,7 @@ func (h *ReviewHandler) Create(c *gin.Context) {
 		RequestedReviewer: "manual",
 		Manual:            true,
 	}
-	item, err := h.service.Enqueue(c.Request.Context(), job, "manual")
+	item, err := h.service.Enqueue(c.Request.Context(), job, "api")
 	if err != nil {
 		responses.Fail(c, http.StatusInternalServerError, "ENQUEUE_FAILED", "could not enqueue review")
 		return

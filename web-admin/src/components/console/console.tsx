@@ -9,7 +9,7 @@ import { SettingsArea } from "@/components/settings/settings-area";
 import { ThemeToggle, type Theme } from "@/components/theme-toggle";
 import { createAdminClient } from "@/lib/admin-client";
 import type { Connection, ConnectionData } from "@/lib/contracts";
-import { Menu, Play, RefreshCw } from "lucide-react";
+import { Edit3, Menu, Play, RefreshCw, RotateCcw, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ConsoleView } from "./sidebar";
 import { Sidebar } from "./sidebar";
@@ -31,7 +31,7 @@ const emptyData: ConnectionData = {
 const viewLabels: Record<ConsoleView, string> = {
   connections: "Conexões",
   gitea: "Gitea",
-  executions: "Execuções",
+  executions: "Pipeline",
   settings: "Configurações",
 };
 
@@ -60,6 +60,11 @@ export function Console({
   const [collapsed, setCollapsed] = useState(false);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [view, setView] = useState<ConsoleView>("connections");
+  const [pipelineName, setPipelineName] = useState("");
+  const [pipelineEditing, setPipelineEditing] = useState(false);
+  const [pipelineEditRequest, setPipelineEditRequest] = useState(0);
+  const [pipelineSaveRequest, setPipelineSaveRequest] = useState(0);
+  const [pipelineDiscardRequest, setPipelineDiscardRequest] = useState(0);
 
   const refresh = useCallback(async () => {
     try {
@@ -96,6 +101,8 @@ export function Console({
         active={view}
         onNavigate={(nextView) => {
           setView(nextView);
+          if (nextView !== "executions") setPipelineName("");
+          if (nextView !== "executions") setPipelineEditing(false);
           setMobileMenu(false);
         }}
       />
@@ -116,9 +123,10 @@ export function Console({
             <Menu size={21} />
           </button>
           <div>
-            <span className="breadcrumb">Workspace /</span> {viewLabels[view]}
+            <span className="breadcrumb">Workspace /</span> {view === "executions" ? "Pipeline" : viewLabels[view]}{view === "executions" && pipelineName ? ` / ${pipelineName}` : ""}
           </div>
           <div className="topbar-actions">
+            {view === "executions" && (pipelineEditing ? <><button className="secondary-button" onClick={() => setPipelineDiscardRequest((value) => value + 1)}><RotateCcw size={16} /> Descartar</button><button className="primary-button" onClick={() => setPipelineSaveRequest((value) => value + 1)}><Save size={16} /> Salvar</button></> : <button className="primary-button" onClick={() => setPipelineEditRequest((value) => value + 1)}><Edit3 size={16} /> Editar pipeline</button>)}
             <ThemeToggle theme={theme} onToggle={onThemeToggle} />
             {view === "connections" && (
               <button
@@ -178,19 +186,7 @@ export function Console({
               <GiteaArea request={request} onAuthError={onLogout} />
             </>
           ) : view === "executions" ? (
-            <>
-              <div className="page-heading execution-heading">
-                <div>
-                  <span className="eyebrow">Observabilidade</span>
-                  <h1>Execuções</h1>
-                  <p>
-                    Acompanhe cada etapa da revisão e os logs produzidos pelo
-                    pipeline.
-                  </p>
-                </div>
-              </div>
-              <ExecutionsFlow request={request} onAuthError={onLogout} />
-            </>
+            <ExecutionsFlow request={request} onAuthError={onLogout} onPipelineName={setPipelineName} editRequest={pipelineEditRequest} saveRequest={pipelineSaveRequest} discardRequest={pipelineDiscardRequest} onEditingChange={setPipelineEditing} />
           ) : (
             <>
               <div className="page-heading">

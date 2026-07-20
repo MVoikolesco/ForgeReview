@@ -2,6 +2,41 @@
 
 ## 2026-07-20
 
+- O Pipeline Studio foi incorporado diretamente à aba Pipeline e passou a
+  ocupar toda a área útil do wrapper, sem margem própria ou overflow. O
+  cabeçalho mantém ações de descartar, salvar e publicar.
+- Movido o Pipeline Studio para Observabilidade > Execuções em modo leitura do
+  pipeline efetivo do profile padrão; a tela exibe exclusivamente o canvas. A
+  aba Configurações > Pipeline voltou a exibir o mapa compacto e a seleção da
+  versão atual. Validação: `npm --prefix web-admin run lint`.
+- O Estúdio de Execuções não possui mais cabeçalho interno: o header real do
+  Workspace mostra `Pipeline / <nome efetivo>`. Ajustado o encaixe do canvas no
+  conteúdo do painel para eliminar margem, rodapé residual e overflow lateral.
+- O menu do Estúdio passou a flutuar sobre o canvas. O inspector direito abre
+  somente ao selecionar uma etapa, exibindo seus contratos/configurações, ou ao
+  acionar o indicador de status no rodapé, que explica as rotas de erro.
+  Validação: `npm --prefix web-admin run lint`.
+- Os dois overlays do Estúdio agora iniciam fechados e possuem controles de
+  fechar; um botão no canvas abre o menu esquerdo. Os controles de zoom foram
+  reposicionados para o topo central, evitando sobreposição com os overlays.
+- Adicionado o fluxo de edição pelo header do Workspace: `Editar pipeline`
+  solicita o nome e cria um draft clonado do pipeline efetivo para o profile
+  padrão, sem selecioná-lo automaticamente. O header passa a oferecer salvar e
+  descartar durante a edição. Validação: `npm --prefix web-admin run lint`.
+  Validação: `npm --prefix web-admin run lint` e `npm --prefix web-admin run build`.
+- Corrigido o Compose de desenvolvimento: API e worker agora sobrescrevem o
+  comando de produção `/app/server` por Air no estágio `development`, que não
+  contém o binário de produção. Ver [[operations/runbook|runbook]].
+- Implementado o backend de DAG Studio: versões de pipeline agora persistem
+  transições e triggers editáveis, clonáveis e validados; o executor usa um
+  scheduler limitado e audita artifacts com a transição de origem. Adicionado
+  executor terminal `error_log`, roteamento pré-persistência por origem e
+  migrations `014_pipeline_draft_profile.sql`/`015_pipeline_dag.sql`.
+  Validação: `go test ./...`. Ver [[architecture/pipeline-2.0|pipeline 2.0]].
+- Substituída a aba Pipeline pelo Pipeline Studio em canvas: sidebar de etapas
+  e triggers, cards configuráveis com portas de contrato, conexões editáveis,
+  card terminal de erro e controles de draft/publicação. Validação: `npm
+  --prefix web-admin run lint` e `npm --prefix web-admin run build`.
 - Reorganizada a raiz: arquivos Docker foram para `docker/`, o script de release para `production/build.sh` e o artefato autocontido passou a ser gerado em `production/build-result/`; referências de Compose e documentação foram atualizadas.
 - Fixado o comando de runtime de API/worker como `/app/server` nos Compose, evitando que containers ou imagens antigas tentem executar o caminho removido `/usr/local/bin/review-bot`; o runbook agora exige recriação forçada do stack. O warning de `vm.overcommit_memory` do Redis foi documentado como ajuste do kernel do host.
 - Reorganizado o modal de edição de perfil em seções de identidade e regras de execução; estados booleanos agora usam switches acessíveis em vez de checkboxes.

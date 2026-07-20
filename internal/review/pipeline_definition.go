@@ -46,11 +46,18 @@ type PipelineStage struct {
 
 // PipelineTransition links two configured stages for a known outcome.
 type PipelineTransition struct {
+	ID           int64  `json:"id"`
 	FromStageID  int64  `json:"from_stage_id"`
 	ToStageID    *int64 `json:"to_stage_id,omitempty"`
 	Type         string `json:"type"`
 	ConditionKey string `json:"condition_key"`
 	Priority     int    `json:"priority"`
+}
+
+// PipelineTrigger controls which trusted entry points may start a version.
+type PipelineTrigger struct {
+	Source  string `json:"source"`
+	Enabled bool   `json:"enabled"`
 }
 
 // PipelineDefinition is the immutable published version used by one execution.
@@ -63,6 +70,7 @@ type PipelineDefinition struct {
 	Version     int                  `json:"version"`
 	Stages      []PipelineStage      `json:"stages"`
 	Transitions []PipelineTransition `json:"transitions"`
+	Triggers    []PipelineTrigger    `json:"triggers"`
 }
 
 // Pipeline loads and binds the immutable pipeline version selected for a review.
@@ -144,6 +152,25 @@ func (r *Repository) activePipelineVersion(ctx context.Context, profileID *int64
 	return id, err
 }
 
+// TriggerAllowed resolves the same effective published version that will be
+// bound to the review and checks its persisted source policy before persistence.
+func (r *Repository) TriggerAllowed(ctx context.Context, job queue.ReviewJob, source string) error {
+	profileID, err := r.profileID(ctx, job)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	version, err := r.activePipelineVersion(ctx, profileID)
+	if err != nil {
+		return err
+	}
+	var enabled int
+	err = r.db.QueryRowContext(ctx, `SELECT is_enabled FROM pipeline_version_triggers WHERE pipeline_version_id=? AND trigger_source=?`, version.Int64, source).Scan(&enabled)
+	if errors.Is(err, sql.ErrNoRows) || enabled == 0 {
+		return fmt.Errorf("pipeline does not allow %s trigger", source)
+	}
+	return err
+}
+
 func (r *Repository) loadPipelineVersion(ctx context.Context, versionID int64) (PipelineDefinition, error) {
 	var item PipelineDefinition
 	var profileID sql.NullInt64
@@ -208,7 +235,7 @@ func (r *Repository) loadPipelineVersion(ctx context.Context, versionID int64) (
 		return item, err
 	}
 
-	transitionRows, err := r.db.QueryContext(ctx, `SELECT from_stage_id,to_stage_id,transition_type,condition_key,priority
+	transitionRows, err := r.db.QueryContext(ctx, `SELECT id,from_stage_id,to_stage_id,transition_type,condition_key,priority
 		FROM pipeline_transitions WHERE pipeline_version_id=? ORDER BY priority,id`, versionID)
 	if err != nil {
 		return item, err
@@ -217,7 +244,7 @@ func (r *Repository) loadPipelineVersion(ctx context.Context, versionID int64) (
 	for transitionRows.Next() {
 		var transition PipelineTransition
 		var to sql.NullInt64
-		if err = transitionRows.Scan(&transition.FromStageID, &to, &transition.Type, &transition.ConditionKey, &transition.Priority); err != nil {
+		if err = transitionRows.Scan(&transition.ID, &transition.FromStageID, &to, &transition.Type, &transition.ConditionKey, &transition.Priority); err != nil {
 			return item, err
 		}
 		if to.Valid {
@@ -225,20 +252,37 @@ func (r *Repository) loadPipelineVersion(ctx context.Context, versionID int64) (
 		}
 		item.Transitions = append(item.Transitions, transition)
 	}
-	return item, transitionRows.Err()
+	if err = transitionRows.Err(); err != nil {
+		return item, err
+	}
+	triggerRows, err := r.db.QueryContext(ctx, `SELECT trigger_source,is_enabled FROM pipeline_version_triggers WHERE pipeline_version_id=? ORDER BY trigger_source`, versionID)
+	if err != nil {
+		return item, err
+	}
+	defer triggerRows.Close()
+	for triggerRows.Next() {
+		var trigger PipelineTrigger
+		var enabled int
+		if err = triggerRows.Scan(&trigger.Source, &enabled); err != nil {
+			return item, err
+		}
+		trigger.Enabled = enabled != 0
+		item.Triggers = append(item.Triggers, trigger)
+	}
+	return item, triggerRows.Err()
 }
 
 func validatePipelineDefinition(definition PipelineDefinition) error {
 	if len(definition.Stages) == 0 {
 		return errors.New("não possui etapas")
 	}
-	known := map[string]bool{"preparation": true, "planner": true, "reviewer": true, "consolidator": true, "verification": true, "formatting": true, "publication": true}
+	known := map[string]bool{"preparation": true, "planner": true, "reviewer": true, "consolidator": true, "verification": true, "formatting": true, "publication": true, "error_log": true}
 	counts := map[string]int{}
 	positions := map[string]int{}
 	expectedOutputs := map[string]string{
 		"preparation": "prepared_diff", "planner": "review_plan", "reviewer": "review_findings",
 		"consolidator": "consolidated_findings", "verification": "verified_findings",
-		"formatting": "formatted_review", "publication": "publication_result",
+		"formatting": "formatted_review", "publication": "publication_result", "error_log": "error_log",
 	}
 	lastPosition := 0
 	for _, stage := range definition.Stages {
@@ -255,23 +299,122 @@ func validatePipelineDefinition(definition PipelineDefinition) error {
 			return fmt.Errorf("contrato de saída incompatível na etapa %q", stage.Key)
 		}
 	}
-	if definition.Stages[0].ExecutorKey != "preparation" {
-		return errors.New("preparação deve ser a primeira etapa")
-	}
-	if definition.Stages[len(definition.Stages)-1].ExecutorKey != "publication" {
-		return errors.New("publicação deve ser a última etapa")
-	}
 	for _, required := range []string{"preparation", "verification", "formatting", "publication"} {
 		if counts[required] != 1 {
 			return fmt.Errorf("executor obrigatório %q deve aparecer exatamente uma vez", required)
 		}
 	}
-	if positions["verification"] >= positions["formatting"] || positions["formatting"] >= positions["publication"] {
-		return errors.New("verificação, formatação e publicação estão fora de ordem")
+	byID := map[int64]PipelineStage{}
+	incoming := map[int64]int{}
+	outgoing := map[int64]bool{}
+	for _, stage := range definition.Stages {
+		byID[stage.ID] = stage
 	}
-	for _, executor := range []string{"planner", "reviewer", "consolidator"} {
-		if position := positions[executor]; position > 0 && position >= positions["verification"] {
-			return fmt.Errorf("executor %q deve ocorrer antes da verificação", executor)
+	allowedConditions := map[string]bool{"always": true, "has_findings": true, "no_findings": true, "partial_result": true, "contract_invalid": true, "confidence_below_threshold": true}
+	seenType := map[int64]map[string]bool{}
+	adj := map[int64][]int64{}
+	for _, edge := range definition.Transitions {
+		from, ok := byID[edge.FromStageID]
+		if !ok {
+			return errors.New("transição possui origem inválida")
+		}
+		if seenType[from.ID] == nil {
+			seenType[from.ID] = map[string]bool{}
+		}
+		if seenType[from.ID][edge.Type] {
+			return fmt.Errorf("etapa %q possui mais de uma saída %s", from.Key, edge.Type)
+		}
+		seenType[from.ID][edge.Type] = true
+		if edge.Type == "retry" {
+			if edge.ToStageID != nil {
+				return errors.New("retry é interno e não pode ser uma aresta")
+			}
+			continue
+		}
+		if edge.ToStageID == nil {
+			return errors.New("transição sem destino")
+		}
+		to, ok := byID[*edge.ToStageID]
+		if !ok {
+			return errors.New("transição possui destino inválido")
+		}
+		if edge.Type != "success" && edge.Type != "failure" && edge.Type != "fallback" && edge.Type != "skip" {
+			return fmt.Errorf("tipo de transição inválido %q", edge.Type)
+		}
+		if (edge.Type == "success" || edge.Type == "skip") && !allowedConditions[edge.ConditionKey] {
+			return fmt.Errorf("condição inválida %q", edge.ConditionKey)
+		}
+		if (edge.Type == "failure" || edge.Type == "fallback") && to.ExecutorKey != "error_log" {
+			return errors.New("transições de erro devem apontar para error_log")
+		}
+		if to.ExecutorKey == "error_log" && (edge.Type == "success" || edge.Type == "skip") {
+			return errors.New("error_log aceita apenas rotas de erro")
+		}
+		if edge.Type == "success" || edge.Type == "skip" {
+			if from.OutputContract == nil || to.InputContract == nil || from.OutputContract.Key != to.InputContract.Key {
+				return fmt.Errorf("contratos incompatíveis entre %q e %q", from.Key, to.Key)
+			}
+			adj[from.ID] = append(adj[from.ID], to.ID)
+			incoming[to.ID]++
+			outgoing[from.ID] = true
+		}
+	}
+	var visit func(int64) error
+	color := map[int64]int{}
+	visit = func(id int64) error {
+		if color[id] == 1 {
+			return errors.New("DAG contém ciclo")
+		}
+		if color[id] == 2 {
+			return nil
+		}
+		color[id] = 1
+		for _, next := range adj[id] {
+			if err := visit(next); err != nil {
+				return err
+			}
+		}
+		color[id] = 2
+		return nil
+	}
+	for id := range byID {
+		if err := visit(id); err != nil {
+			return err
+		}
+	}
+	// Every mandatory stage must be reachable from the single preparation root;
+	// otherwise a structurally acyclic draft could be published but never run.
+	var root int64
+	for _, stage := range definition.Stages {
+		if stage.ExecutorKey == "preparation" {
+			root = stage.ID
+			break
+		}
+	}
+	reachable := map[int64]bool{}
+	var markReachable func(int64)
+	markReachable = func(id int64) {
+		if reachable[id] {
+			return
+		}
+		reachable[id] = true
+		for _, next := range adj[id] {
+			markReachable(next)
+		}
+	}
+	markReachable(root)
+	for _, stage := range definition.Stages {
+		if stage.ExecutorKey == "preparation" && incoming[stage.ID] != 0 {
+			return errors.New("preparação deve ser raiz")
+		}
+		if stage.ExecutorKey == "publication" && outgoing[stage.ID] {
+			return errors.New("publicação deve ser terminal")
+		}
+		if stage.ExecutorKey == "error_log" && outgoing[stage.ID] {
+			return errors.New("error_log deve ser terminal")
+		}
+		if (stage.ExecutorKey == "preparation" || stage.ExecutorKey == "verification" || stage.ExecutorKey == "formatting" || stage.ExecutorKey == "publication") && !reachable[stage.ID] {
+			return fmt.Errorf("etapa obrigatória %q não é alcançável", stage.Key)
 		}
 	}
 	return nil
@@ -336,7 +479,7 @@ func (r *Repository) recordStageAttempt(ctx context.Context, executionID int64, 
 	return err
 }
 
-func (r *Repository) finishStageExecution(ctx context.Context, executionID, stageExecutionID int64, started time.Time, status, artifactType string, artifact, metadata any, stageErr error) error {
+func (r *Repository) finishStageExecution(ctx context.Context, executionID, stageExecutionID int64, started time.Time, status, artifactType string, artifact, metadata any, stageErr error, via *PipelineTransition) error {
 	metadataJSON, _ := json.Marshal(metadata)
 	errorText := ""
 	if stageErr != nil {
@@ -355,9 +498,14 @@ func (r *Repository) finishStageExecution(ctx context.Context, executionID, stag
 	if err != nil {
 		return err
 	}
+	var sourceStage, sourceTransition any
+	if via != nil {
+		sourceStage = via.FromStageID
+		sourceTransition = via.ID
+	}
 	_, err = r.db.ExecContext(ctx, `INSERT INTO stage_artifacts(
-		pipeline_execution_id,stage_execution_id,artifact_type,payload_json) VALUES(?,?,?,?)`,
-		executionID, stageExecutionID, artifactType, payload)
+		pipeline_execution_id,stage_execution_id,artifact_type,payload_json,source_stage_id,source_transition_id) VALUES(?,?,?,?,?,?)`,
+		executionID, stageExecutionID, artifactType, payload, sourceStage, sourceTransition)
 	return err
 }
 

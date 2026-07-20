@@ -55,6 +55,10 @@ func (s *Service) Enqueue(
 	job queue.ReviewJob,
 	source string,
 ) (Review, error) {
+	source = normalizeTriggerSource(source)
+	if err := s.repo.TriggerAllowed(ctx, job, source); err != nil {
+		return Review{}, err
+	}
 	if job.ReviewID == "" {
 		job.ReviewID = NewID()
 	}
@@ -83,6 +87,15 @@ func (s *Service) Enqueue(
 	}
 
 	return s.repo.Get(ctx, job.ReviewID)
+}
+
+func normalizeTriggerSource(source string) string {
+	switch source {
+	case "webhook", "api", "manual":
+		return source
+	default:
+		return "manual"
+	}
 }
 
 // EnqueueExisting republishes a persisted job after setting its review status

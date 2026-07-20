@@ -34,15 +34,23 @@ A fundação banco-first foi implementada na migration
   `stage_executions`;
 - `review_steps` continua sendo a projeção compatível com o painel atual.
 
-O runtime hardcoded anterior foi removido. A implementação atual executa uma
-sequência linear por `pipeline_stages.position`. `pipeline_transitions` já
-persiste o encadeamento, mas condições, fallbacks entre etapas, retomada por
-checkpoint, CRUD dedicado e editor visual continuam como próximas evoluções.
+O runtime hardcoded anterior foi removido. A implementação atual interpreta um
+DAG persistido por `pipeline_transitions`, com worklist determinística limitada.
+As transições `success` usam apenas condições conhecidas; `retry` permanece
+interno ao limite da etapa, e rotas de falha/fallback terminam em `error_log`.
+O validador compartilhado rejeita ciclos, contratos incompatíveis, publicação
+não terminal e as invariantes das etapas obrigatórias. Cada versão também
+persiste os triggers `webhook`, `api` e `manual`, validados antes de criar a
+review. Ver `internal/review/pipeline_definition.go`,
+`internal/review/pipeline_engine.go` e migrations 014--015.
 
-O painel já possui uma área de configurações somente leitura baseada em
-`GET /api/admin/review/settings`. Ela apresenta a configuração efetiva,
-profiles, versões publicadas, etapas, prompts e contratos. Edição, criação de
-versão e publicação de uma nova definição continuam fora desta entrega.
+Em Observabilidade > Execuções, o Pipeline Studio exibe em modo leitura o
+pipeline efetivo do profile padrão, sem os demais cards operacionais. O canvas
+mantém a moldura, os cards e as informações do workflow. Em Configurações >
+Pipeline permanece um mapa compacto das versões publicadas, com ação para
+definir a seleção atual. As APIs continuam permitindo criar e editar drafts,
+configurar triggers, conectar etapas por contratos compatíveis, validar,
+publicar, clonar e restaurar versões.
 
 As colunas antigas de ativação e tokens em `review_policies` são usadas somente
 para migrar profiles existentes no seed inicial. Depois da migração, a fonte de
@@ -57,8 +65,7 @@ stages será exposta pelo CRUD dedicado futuro.
 - Falhas, retries, duração, tokens e outputs devem ser rastreáveis.
 - Nenhuma etapa configurável pode publicar diretamente ou executar código
   arbitrário.
-- A primeira versão deve ser linear; um DAG completo fica para uma evolução
-  posterior.
+- O grafo é acíclico entre etapas; retry permanece interno ao executor.
 - A publicação permanece uma operação de domínio controlada pelo backend.
 
 ## Arquitetura banco-first
@@ -107,8 +114,9 @@ Regras:
 - O pipeline não pode ser salvo se estiver sem uma etapa obrigatória ou se a
   ordem violar essas regras.
 
-Na primeira versão, o usuário configura uma lista ordenada. A configuração de
-ramificações, paralelismo, condicionais e merges fica fora do escopo inicial.
+O Studio persiste as conexões válidas entre portas de contrato. A execução
+processa cada chegada de entrada individualmente e mantém a origem dos
+artifacts para auditoria.
 
 ## Modelo de definição
 
@@ -443,7 +451,7 @@ Transformar preparação, planejamento, revisão, consolidação, verificação,
 formatação e publicação em executors com contratos explícitos, sem alterar a
 experiência atual.
 
-### Fase 2: pipeline linear configurável
+### Fase 2: Pipeline Studio configurável
 
 Adicionar definições versionadas, CRUD administrativo, prompts por etapa,
 validação das etapas obrigatórias e seleção de pipeline por profile ou
@@ -459,10 +467,9 @@ limites definidos pelo usuário, usando apenas schemas suportados pelo backend.
 Adicionar checkpoint, retry individual, retomada, cancelamento, timeout,
 métricas de custo e reprocessamento a partir de uma etapa.
 
-### Fase 5: workflow em DAG
-
-Adicionar dependências, paralelismo, merge, condicionais e editor visual somente
-após a versão linear demonstrar necessidade operacional.
+O DAG e o editor visual foram antecipados para a Fase 2. Extensões futuras
+incluem variáveis condicionais, filtros por tipo de arquivo e regras adicionais
+por contrato.
 
 ## Complexidade estimada
 

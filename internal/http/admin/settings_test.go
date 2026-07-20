@@ -59,7 +59,7 @@ func TestReviewSettingsReturnsPublishedPipelineCatalog(t *testing.T) {
 	if err = json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Pipelines) != 2 || len(payload.Pipelines[0].Stages) != 7 || len(payload.StageCatalog) != 8 {
+	if len(payload.Pipelines) != 2 || len(payload.Pipelines[0].Stages) != 7 || len(payload.StageCatalog) != 9 {
 		t.Fatalf("unexpected settings payload: pipelines=%d stages=%d catalog=%d", len(payload.Pipelines), len(payload.Pipelines[0].Stages), len(payload.StageCatalog))
 	}
 	if len(payload.Profiles) != 1 || payload.Profiles[0].Prompt == nil || payload.Profiles[0].Prompt.Name != "Ativo" {

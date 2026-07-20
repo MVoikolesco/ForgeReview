@@ -179,6 +179,8 @@ func builtInContracts() []contractSeed {
 		{"verified_findings", `Responda somente JSON: {"results":[{"finding_id":"...","status":"confirmed|adjusted|rejected","confidence":0.0,"verification_reason":"...","adjusted_finding":null}]}. Confirme somente problemas com evidência suficiente.`, `{"type":"object","required":["results"]}`, "verified_findings"},
 		{"formatted_review", `Responda somente JSON: {"comments":[{"file":"path","line":1,"severity":"critica|alta|media|baixa","type":"...","decision_reason":"...","comment":"..."}],"final_review":{"gitea_event":"APPROVE|COMMENT|REQUEST_CHANGES","status":"...","summary":"...","observations":"..."}}.`, `{"type":"object","required":["comments","final_review"]}`, "formatted_review"},
 		{"publication_result", "", `{"type":"object","required":["status"]}`, "publication_result"},
+		{"error_payload", "", `{"type":"object","required":["error"]}`, "error_payload"},
+		{"error_log", "", `{"type":"object","required":["error"]}`, "error_log"},
 	}
 }
 
@@ -192,6 +194,7 @@ func builtInStageTypes() []stageTypeSeed {
 		{"verification", "Verificação", "verification", "consolidated_findings", "verified_findings"},
 		{"formatting", "Formatação", "formatting", "verified_findings", "formatted_review"},
 		{"publication", "Publicação", "publication", "formatted_review", "publication_result"},
+		{"error_log", "Registro de erro", "error_log", "error_payload", "error_log"},
 	}
 }
 

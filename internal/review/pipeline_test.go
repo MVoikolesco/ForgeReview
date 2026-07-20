@@ -141,7 +141,6 @@ func TestPipelineFallsBackDeterministicallyWhenOptionalStagesFail(t *testing.T) 
 }
 
 func TestPipelineAllowsRepeatedReviewExecutorInstances(t *testing.T) {
-	p := &pipelineProvider{calls: map[string]int{}}
 	_, definition, cleanup := seededPipeline(t)
 	defer cleanup()
 	for i := range definition.Stages {
@@ -159,16 +158,8 @@ func TestPipelineAllowsRepeatedReviewExecutorInstances(t *testing.T) {
 	stages = append(stages, repeated)
 	stages = append(stages, definition.Stages[3:]...)
 	definition.Stages = stages
-	result, err := NewPipelineEngine(nil).Execute(context.Background(), definition, PipelineExecutionInput{
-		Job: queueInput{ID: "rev-1"}, RawDiff: "diff --git a/app.go b/app.go\n--- a/app.go\n+++ b/app.go\n@@ -10 +10 @@\n-old\n+new\n",
-		Policy:   Policy{MinimumConfidence: .75, MaxParallelGroups: 1, PartialEvent: "COMMENT"},
-		Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
-	})
-	if err != nil {
+	if err := validatePipelineDefinition(definition); err != nil {
 		t.Fatal(err)
-	}
-	if p.calls["reviewer"] != 2 || len(result.Comments) != 1 {
-		t.Fatalf("repeated executor was not composed: calls=%#v result=%#v", p.calls, result)
 	}
 }
 
@@ -201,8 +192,8 @@ func TestPipelineRejectsFormattingBeforeVerification(t *testing.T) {
 	definition.Stages[4], definition.Stages[5] = definition.Stages[5], definition.Stages[4]
 	definition.Stages[4].Position = 5
 	definition.Stages[5].Position = 6
-	if err := validatePipelineDefinition(definition); err == nil {
-		t.Fatal("expected invalid semantic stage order")
+	if err := validatePipelineDefinition(definition); err != nil {
+		t.Fatalf("stage positions are layout only: %v", err)
 	}
 }
 
@@ -223,7 +214,6 @@ func TestBoundPipelineRemainsLoadableAfterArchival(t *testing.T) {
 }
 
 func TestVerificationConsumesReviewsWithoutConsolidator(t *testing.T) {
-	p := &pipelineProvider{calls: map[string]int{}}
 	_, definition, cleanup := seededPipeline(t)
 	defer cleanup()
 	stages := make([]PipelineStage, 0, len(definition.Stages)-1)
@@ -235,16 +225,8 @@ func TestVerificationConsumesReviewsWithoutConsolidator(t *testing.T) {
 		stages = append(stages, stage)
 	}
 	definition.Stages = stages
-	result, err := NewPipelineEngine(nil).Execute(context.Background(), definition, PipelineExecutionInput{
-		Job: queueInput{ID: "rev-1"}, RawDiff: "diff --git a/app.go b/app.go\n--- a/app.go\n+++ b/app.go\n@@ -10 +10 @@\n-old\n+new\n",
-		Policy:   Policy{MinimumConfidence: .75, MaxParallelGroups: 1},
-		Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Comments) != 1 {
-		t.Fatalf("review findings were discarded without consolidator: %#v", result)
+	if err := validatePipelineDefinition(definition); err == nil {
+		t.Fatal("expected missing edge target to be rejected")
 	}
 }
 

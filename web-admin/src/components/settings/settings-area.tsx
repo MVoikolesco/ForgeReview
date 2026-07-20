@@ -86,14 +86,7 @@ export function SettingsArea({ request, onAuthError }: Props) {
     try {
       const response = await request<ReviewSettingsData>("review/settings");
       setData(response);
-      const defaultProfile =
-        response.profiles.find((profile) => profile.is_default && profile.is_enabled);
-      const runtimePipeline = effectivePipeline(response.pipelines, defaultProfile);
-      setSelectedPipeline((current) =>
-        response.pipelines.some((pipeline) => pipeline.id === current)
-          ? current
-          : runtimePipeline?.id ?? response.pipelines[0]?.id ?? null,
-      );
+      setSelectedPipeline((current) => response.pipelines.some((pipeline) => pipeline.id === current) ? current : response.pipelines[0]?.id ?? null);
       setError("");
     } catch (failure) {
       if (failure instanceof Error && failure.message === "AUTH") {
@@ -130,16 +123,14 @@ export function SettingsArea({ request, onAuthError }: Props) {
   const activeProfile =
     data.profiles.find((profile) => profile.is_default && profile.is_enabled);
   const activePipeline = effectivePipeline(data.pipelines, activeProfile);
-  const browsedPipeline =
-    data.pipelines.find((pipeline) => pipeline.id === selectedPipeline) ??
-    data.pipelines[0];
+  const browsedPipeline = data.pipelines.find((pipeline) => pipeline.id === selectedPipeline) ?? data.pipelines[0];
   const totalStages = data.pipelines.reduce(
     (total, pipeline) => total + pipeline.stages.length,
     0,
   );
 
   return (
-    <div className="settings-page">
+    <div className={`settings-page ${tab === "pipeline" ? "studio-embedded" : ""}`}>
       {error && <div className="banner error">{error}</div>}
       <nav className="settings-tabs" aria-label="Áreas de configuração">
         {tabs.map((item) => {
@@ -177,12 +168,7 @@ export function SettingsArea({ request, onAuthError }: Props) {
         />
       )}
       {tab === "pipeline" && (
-        <PipelineTab
-          pipelines={data.pipelines}
-          selected={browsedPipeline}
-          onSelect={setSelectedPipeline}
-          onStage={(stage) => setDetail({ kind: "stage", value: stage })}
-        />
+        <PipelineTab pipelines={data.pipelines} selected={browsedPipeline} onSelect={setSelectedPipeline} onStage={(stage) => setDetail({ kind: "stage", value: stage })} onSetCurrent={async (pipeline) => { await request(`review/pipelines/${pipeline.id}/select`, { method: "POST" }); await load(); }} />
       )}
       {tab === "catalog" && (
         <CatalogTab
@@ -316,11 +302,12 @@ function ProfilesTab({ profiles, pipelines, onOpen }: {
   );
 }
 
-function PipelineTab({ pipelines, selected, onSelect, onStage }: {
+function PipelineTab({ pipelines, selected, onSelect, onStage, onSetCurrent }: {
   pipelines: ReviewSettingsPipeline[];
   selected?: ReviewSettingsPipeline;
   onSelect: (id: number) => void;
   onStage: (stage: ReviewSettingsStage) => void;
+  onSetCurrent: (pipeline: ReviewSettingsPipeline) => Promise<void>;
 }) {
   return (
     <div className="settings-pipeline-layout">
@@ -342,7 +329,7 @@ function PipelineTab({ pipelines, selected, onSelect, onStage }: {
               <h2>{selected.name}</h2>
               <p>{selected.description}</p>
             </div>
-            <div className="settings-version-stamp"><small>Versão publicada</small><strong>v{selected.version}</strong><span>{dateLabel(selected.published_at)}</span></div>
+            <div className="settings-version-stamp"><small>Versão publicada</small><strong>v{selected.version}</strong><span>{dateLabel(selected.published_at)}</span>{!selected.is_default && <button className="secondary-button" onClick={() => void onSetCurrent(selected)}>Definir atual</button>}</div>
           </div>
           <div className="settings-stage-list">
             {selected.stages.map((stage, index) => (

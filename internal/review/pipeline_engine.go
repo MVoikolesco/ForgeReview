@@ -62,6 +62,7 @@ type pipelineRuntime struct {
 	providers         map[string]providers.LLMProvider
 	repo              *Repository
 	executionID       int64
+	currentError      map[string]any
 }
 
 type stageCallResult struct {
@@ -84,10 +85,11 @@ func NewPipelineEngine(repo *Repository) *PipelineEngine {
 		"verification": verificationExecutor{},
 		"formatting":   formattingExecutor{},
 		"publication":  publicationExecutor{},
+		"error_log":    errorLogExecutor{},
 	}}
 }
 
-// Execute runs the immutable stage sequence loaded from the database.
+// Execute runs a bounded, deterministic worklist over the immutable DAG.
 func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinition, input PipelineExecutionInput) (Result, error) {
 	if err := validatePipelineDefinition(definition); err != nil {
 		return Result{}, err
@@ -118,7 +120,54 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 	runtime.repo = e.repo
 	runtime.executionID = executionID
 	executionStatus := "completed"
+	byID := map[int64]PipelineStage{}
+	incoming := map[int64]int{}
 	for _, stage := range definition.Stages {
+		byID[stage.ID] = stage
+	}
+	for _, edge := range definition.Transitions {
+		if (edge.Type == "success" || edge.Type == "skip") && edge.ToStageID != nil {
+			incoming[*edge.ToStageID]++
+		}
+	}
+	type arrival struct {
+		stage      PipelineStage
+		via        *PipelineTransition
+		errPayload map[string]any
+	}
+	work := []arrival{}
+	for _, stage := range definition.Stages {
+		if stage.ExecutorKey == "preparation" && incoming[stage.ID] == 0 {
+			work = append(work, arrival{stage: stage})
+		}
+	}
+	maxRuns := len(definition.Stages) * (len(definition.Transitions) + 1) * 4
+	if maxRuns < 16 {
+		maxRuns = 16
+	}
+	runs, published, publicationScheduled := 0, false, false
+	for len(work) > 0 {
+		if runs >= maxRuns {
+			err := errors.New("pipeline scheduler bound exceeded")
+			if e.repo != nil {
+				_ = e.repo.FinishPipelineExecution(ctx, executionID, "failed", err)
+			}
+			return Result{}, err
+		}
+		runs++
+		item := work[0]
+		work = work[1:]
+		stage := item.stage
+		// Multiple branches may converge on the single publication stage. Its
+		// external effect is intentionally scheduled once; repository-level
+		// publication reservation remains the second line of defense.
+		if stage.ExecutorKey == "publication" {
+			if publicationScheduled {
+				continue
+			}
+			publicationScheduled = true
+		}
+		runtime.currentError = item.errPayload
 		executor, ok := e.executors[stage.ExecutorKey]
 		if !ok {
 			err := fmt.Errorf("executor %q não registrado", stage.ExecutorKey)
@@ -152,12 +201,30 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 			}
 		}
 		if e.repo != nil {
-			persistErr := e.repo.finishStageExecution(ctx, executionID, stageExecutionID, stageStarted, outcome.Status, outcome.ArtifactType, outcome.Artifact, outcome.Metadata, stageErr)
+			persistErr := e.repo.finishStageExecution(ctx, executionID, stageExecutionID, stageStarted, outcome.Status, outcome.ArtifactType, outcome.Artifact, outcome.Metadata, stageErr, item.via)
 			if stageErr == nil && persistErr != nil {
 				stageErr = persistErr
 			}
 		}
-		if stageErr != nil {
+		if stage.ExecutorKey == "publication" && stageErr == nil {
+			published = true
+		}
+		matched := false
+		for _, edge := range definition.Transitions {
+			if edge.FromStageID != stage.ID || edge.ToStageID == nil {
+				continue
+			}
+			isError := stageErr != nil
+			if (edge.Type == "failure" || edge.Type == "fallback") && isError {
+				payload := normalizedStageError(stage, edge, stageErr)
+				work = append(work, arrival{stage: byID[*edge.ToStageID], via: &edge, errPayload: payload})
+				matched = true
+			} else if (edge.Type == "success" || edge.Type == "skip") && !isError && conditionMatches(edge.ConditionKey, outcome, runtime) {
+				work = append(work, arrival{stage: byID[*edge.ToStageID], via: &edge})
+				matched = true
+			}
+		}
+		if stageErr != nil && !matched {
 			if e.repo != nil {
 				_ = e.repo.FinishPipelineExecution(ctx, executionID, "failed", stageErr)
 			}
@@ -173,6 +240,13 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 	if runtime.result.Metadata == nil {
 		runtime.result.Metadata = runtime.meta
 	}
+	if !published || len(runtime.result.Comments) == 0 && runtime.result.FinalReview.Summary == "" {
+		err := errors.New("pipeline ended without a valid published formatted result")
+		if e.repo != nil {
+			_ = e.repo.FinishPipelineExecution(ctx, executionID, "failed", err)
+		}
+		return Result{}, err
+	}
 	if err := validateResult(runtime.result); err != nil {
 		if e.repo != nil {
 			_ = e.repo.FinishPipelineExecution(ctx, executionID, "failed", err)
@@ -185,6 +259,43 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 		}
 	}
 	return runtime.result, nil
+}
+
+func normalizedStageError(stage PipelineStage, edge PipelineTransition, err error) map[string]any {
+	return map[string]any{"error": err.Error(), "source_stage": stage.Key, "transition_type": edge.Type, "condition": edge.ConditionKey}
+}
+func conditionMatches(key string, outcome StageOutcome, runtime *pipelineRuntime) bool {
+	if key == "always" {
+		return true
+	}
+	findings := 0
+	switch value := outcome.Artifact.(type) {
+	case []pipelineGroupReview:
+		for _, review := range value {
+			findings += len(review.Findings)
+		}
+	case pipelineConsolidated:
+		findings = len(value.Findings)
+	case []pipelineFinding:
+		findings = len(value)
+	}
+	switch key {
+	case "has_findings":
+		return findings > 0
+	case "no_findings":
+		return findings == 0
+	case "partial_result":
+		return len(runtime.failed) > 0
+	case "contract_invalid":
+		return false
+	case "confidence_below_threshold":
+		for _, finding := range runtime.approved {
+			if finding.Confidence < runtime.input.Policy.MinimumConfidence {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (r *pipelineRuntime) call(ctx context.Context, stage PipelineStage, marker string, files []pipelineFile, data any) (stageCallResult, error) {
@@ -546,4 +657,14 @@ func (publicationExecutor) Execute(ctx context.Context, r *pipelineRuntime, _ Pi
 		return StageOutcome{ArtifactType: "publication_result", Artifact: map[string]string{"status": "skipped"}}, nil
 	}
 	return r.input.Publish(ctx, r.result)
+}
+
+type errorLogExecutor struct{}
+
+func (errorLogExecutor) Execute(_ context.Context, r *pipelineRuntime, _ PipelineStage) (StageOutcome, error) {
+	payload := r.currentError
+	if payload == nil {
+		payload = map[string]any{"error": "unknown pipeline error"}
+	}
+	return StageOutcome{Status: "completed", ArtifactType: "error_log", Artifact: payload, Metadata: payload}, nil
 }

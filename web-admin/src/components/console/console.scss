@@ -69,8 +69,6 @@
 }
 
 .page-content {
-  max-width: 1540px;
-  margin: 0 auto;
   padding: 44px clamp(24px, 4vw, 64px) 70px;
 }
 
@@ -134,10 +132,6 @@
 }
 
 @include bp.mobile {
-  .page-content {
-    padding: 28px 16px 50px;
-  }
-
   .page-heading {
     align-items: flex-start;
 

@@ -2,6 +2,7 @@
 
 import { PreReviewModal } from "@/components/pre-review/pre-review-modal";
 import { StageLogsModal } from "@/components/stage-logs/stage-logs-modal";
+import { PipelineManager } from "@/components/settings/pipeline-manager";
 import type { AdminRequest } from "@/lib/admin-client";
 import {
   Background,
@@ -311,9 +312,14 @@ const nodeTypes = { workflow: WorkflowNode };
 type Props = {
   request: AdminRequest;
   onAuthError: () => void;
+  onPipelineName: (name: string) => void;
+  editRequest: number;
+  saveRequest: number;
+  discardRequest: number;
+  onEditingChange: (editing: boolean) => void;
 };
 
-export function ExecutionsFlow({ request, onAuthError }: Props) {
+export function ExecutionsFlow({ request, onAuthError, onPipelineName, editRequest, saveRequest, discardRequest, onEditingChange }: Props) {
   const [metrics, setMetrics] = useState<Metrics>(emptyMetrics);
   const [progress, setProgress] = useState<ProgressResponse>({ active: false });
   const [reviews, setReviews] = useState<ReviewLog[]>([]);
@@ -321,6 +327,7 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedReview, setSelectedReview] = useState("");
+  const [defaultProfileID, setDefaultProfileID] = useState<number | undefined>();
   const [selectedStageLogs, setSelectedStageLogs] = useState<{
     title: string;
     stage: string;
@@ -362,6 +369,7 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
         const defaultProfile = profiles.find(
           (profile) => profile.is_default === 1 && profile.is_enabled === 1,
         );
+        setDefaultProfileID(defaultProfile?.id);
         const defaultPolicy = defaultProfile
           ? policies.find((policy) => policy.profile_id === defaultProfile.id)
           : undefined;
@@ -571,6 +579,8 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
     metrics.queue.workers?.filter((worker) => worker.state === "processing")
       .length || 0;
 
+  return <section className="executions-view pipeline-studio-only"><PipelineManager request={request} profiles={[]} catalog={[]} onAuthError={onAuthError} onSaved={() => void load(true)} readOnly profileID={defaultProfileID} onPipelineName={onPipelineName} editRequest={editRequest} saveRequest={saveRequest} discardRequest={discardRequest} onEditingChange={onEditingChange} /></section>;
+
   return (
     <section className="executions-view">
       {error && <div className="banner error">{error}</div>}
@@ -590,7 +600,7 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
             <h2>{current?.name || "Nenhuma revisão registrada"}</h2>
             <p>
               {current?.owner
-                ? `PR #${current.pr_number} · ${current.owner}/${current.repo} · `
+                ? `PR #${current?.pr_number} · ${current?.owner}/${current?.repo} · `
                 : null}
               {current?.message ||
                 "O pipeline será preenchido assim que uma revisão for iniciada."}
@@ -638,24 +648,16 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
         </article>
       </div>
 
-      <article className="execution-flow-panel">
+      <article className="execution-flow-panel pipeline-runtime-panel">
         <header>
           <div>
-            <span className="eyebrow">
-              {selectedReview ? "Pipeline histórico" : "Pipeline em tempo real"}
-            </span>
-            <h3>Etapas da revisão</h3>
+            <span className="eyebrow">Pipeline configurado</span>
+            <h3>Pipeline efetivo do profile padrão</h3>
             <p>
-              Selecione uma etapa para inspecionar seus eventos mais recentes.
+              A configuração exibida é a que será usada pelas próximas reviews.
             </p>
           </div>
           <div className="execution-flow-actions">
-            <span>
-              <i />
-              {selectedReview
-                ? "Histórico congelado"
-                : "Sincronização a cada 5s"}
-            </span>
             <button
               className={`publication-toggle ${publicationPolicy?.manual ? "enabled" : "disabled"}`}
               type="button"
@@ -671,42 +673,9 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
               Publicação automática:{" "}
               {publicationPolicy?.manual ? "Ativa" : "Desativada"}
             </button>
-            <button
-              className="secondary-button"
-              onClick={() => void load(true)}
-              disabled={refreshing || Boolean(selectedReview)}
-            >
-              <RefreshCw className={refreshing ? "spin" : ""} size={16} />
-              Atualizar
-            </button>
           </div>
         </header>
-        <div className="execution-flow-canvas">
-          <ReactFlow
-            key={`${selectedReview || current?.name || "empty-execution"}-${historicalRequest.current}`}
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            onNodesChange={onNodesChange}
-            onNodeClick={(_, node) => {
-              if (
-                node.id === "pre-publicacao" &&
-                current?.name &&
-                latestByStage[node.id]?.status === "waiting"
-              ) {
-                setPreReviewName(current.name);
-              }
-            }}
-            nodesConnectable={false}
-            fitView
-            fitViewOptions={{ padding: 0.12, maxZoom: 0.95 }}
-            minZoom={0.45}
-            maxZoom={1.4}
-          >
-            <Background gap={24} size={1} />
-            <Controls showInteractive={false} />
-          </ReactFlow>
-        </div>
+        <PipelineManager request={request} profiles={[]} catalog={[]} onAuthError={onAuthError} onSaved={() => void load(true)} readOnly profileID={defaultProfileID} />
       </article>
 
       {preReviewName && (
@@ -723,10 +692,10 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
         <StageLogsModal
           request={request}
           reviewName={current?.name || selectedReview}
-          stage={selectedStageLogs.stage}
-          title={selectedStageLogs.title}
-          subtitle={current?.name ? `Review ${current.name}` : "Execução atual"}
-          summaryLogs={selectedStageLogs.logs}
+          stage={selectedStageLogs!.stage}
+          title={selectedStageLogs!.title}
+          subtitle={current?.name ? `Review ${current?.name}` : "Execução atual"}
+          summaryLogs={selectedStageLogs!.logs}
           onAuthError={onAuthError}
           onClose={() => setSelectedStageLogs(null)}
         />

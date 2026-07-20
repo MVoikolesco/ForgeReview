@@ -49,7 +49,7 @@ export function Sidebar({
           onClick={() => onNavigate("executions")}
         >
           <GitBranch size={19} />
-          <span>Execuções</span>
+          <span>Pipeline</span>
         </button>
         <button
           className={`nav-item ${active === "settings" ? "active" : ""}`}
