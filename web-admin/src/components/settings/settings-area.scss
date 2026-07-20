@@ -69,7 +69,7 @@
   z-index: 8;
   top: 66px;
   bottom: 16px;
-  width: 224px;
+  width: 280px;
   height: 85vh;
   overflow: auto;
   padding: 14px;
@@ -96,7 +96,7 @@
 
 .studio-inspector {
   right: 16px;
-  width: 266px;
+  width: 280px;
 }
 
 .runtime-studio .studio-sidebar,
@@ -116,9 +116,54 @@
   background: #18212ce8;
 }
 
-.studio-dialog-backdrop { position: absolute; z-index: 20; inset: 0; display: grid; place-items: center; padding: 24px; background: #071018a8; backdrop-filter: blur(5px); }
-.studio-name-dialog { width: min(100%, 420px); padding: 22px; border: 1px solid #3a4b60; border-radius: 10px; background: #151e29; box-shadow: 0 20px 60px #000b; }
-.studio-name-dialog h2 { margin: 0 0 8px; font-size: 18px; }.studio-name-dialog p { margin: 0 0 18px; color: #9cadc0; font-size: 13px; line-height: 1.5; }.studio-name-dialog input { box-sizing: border-box; width: 100%; margin-bottom: 16px; padding: 10px; border: 1px solid #3a4b60; border-radius: 6px; color: #e1eaf5; background: #0d141d; }.studio-name-dialog>div:last-child { display: flex; justify-content: flex-end; gap: 8px; }
+.studio-dialog-backdrop {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #071018a8;
+  backdrop-filter: blur(5px);
+}
+
+.studio-name-dialog {
+  width: min(100%, 420px);
+  padding: 22px;
+  border: 1px solid #3a4b60;
+  border-radius: 10px;
+  background: #151e29;
+  box-shadow: 0 20px 60px #000b;
+}
+
+.studio-name-dialog h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.studio-name-dialog p {
+  margin: 0 0 18px;
+  color: #9cadc0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.studio-name-dialog input {
+  box-sizing: border-box;
+  width: 100%;
+  margin-bottom: 16px;
+  padding: 10px;
+  border: 1px solid #3a4b60;
+  border-radius: 6px;
+  color: #e1eaf5;
+  background: #0d141d;
+}
+
+.studio-name-dialog>div:last-child {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 
 .studio-close {
   float: right;
@@ -285,6 +330,41 @@
   color: #4d91ff;
 }
 
+.studio-ports {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 13px;
+  border-bottom: 1px solid #2b3949;
+  color: #9db1c6;
+  font-size: 11px;
+}
+
+.studio-ports span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-ports span:last-child {
+  justify-content: flex-end;
+}
+
+.studio-ports.reversed { flex-direction: row-reverse; }
+
+.studio-ports i {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #111923;
+}
+
 .studio-fields {
   display: grid;
   gap: 7px;
@@ -437,6 +517,228 @@
   .studio-inspector {
     display: none;
   }
+}
+
+.studio-run-log {
+  padding: 10px;
+  min-height: 76px;
+  color: #aebdcd;
+  font-size: 11px;
+}
+
+.studio-run-log header {
+  padding: 0 0 7px;
+  border: 0;
+  color: #9fb1c5;
+  font-size: 10px;
+  text-transform: capitalize;
+}
+
+.studio-run-log header strong {
+  color: #dce7f3;
+}
+
+.studio-run-log header>span:last-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.studio-log-button {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  border: 1px solid #3c4e62;
+  border-radius: 50%;
+  color: #a9c4e8;
+  background: #162233;
+}
+
+.studio-run-log p {
+  min-height: 27px;
+  margin: 0 0 8px;
+  line-height: 1.35;
+}
+
+.studio-run-log>div {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #2a3747;
+}
+
+.studio-run-log>div i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #4d91ff;
+}
+
+.studio-run-log.running>div i,
+.studio-run-log.retrying>div i {
+  background: #e6a34e;
+}
+
+.studio-run-log.failed>div i {
+  background: #e25f67;
+}
+
+.studio-inspector-status {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #31445a;
+  border-radius: 7px;
+  background: #101923;
+}
+
+.studio-inspector-status header {
+  display: flex;
+  justify-content: space-between;
+  color: #b7c8da;
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.studio-inspector-status p {
+  margin: 0;
+  color: #93a6bb;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.studio-inspector-status>i {
+  height: 4px;
+  border-radius: 4px;
+  background: #4d91ff;
+}
+
+.studio-inspector-status.failed>i {
+  background: #e25f67;
+}
+
+.studio-readonly-config {
+  display: grid;
+  gap: 8px;
+}
+
+.studio-readonly-config>strong {
+  color: #9eb1c7;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.studio-canvas .studio-runtime-edge .react-flow__edge-path {
+  stroke-dasharray: 7 5;
+  stroke: #6d9fe6;
+}
+
+.studio-canvas .react-flow__edge-text,
+.studio-canvas .react-flow__edge-textbg { display: none; }
+
+.studio-canvas .react-flow__edge.animated .react-flow__edge-path {
+  stroke-dasharray: 7 5;
+  animation: studio-edge-flow .7s linear infinite;
+}
+
+@keyframes studio-edge-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+/* Runtime cards follow the previous execution flow's reading scale. */
+.studio-node {
+  width: 310px;
+}
+
+.studio-node header {
+  padding: 11px 13px;
+  font-size: 15px;
+}
+
+.studio-node>small {
+  padding: 9px 13px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.studio-run-log {
+  padding: 13px;
+  min-height: 96px;
+  font-size: 13px;
+}
+
+.studio-run-log header {
+  padding-bottom: 9px;
+  font-size: 12px;
+}
+
+.studio-run-log p {
+  min-height: 36px;
+  margin-bottom: 10px;
+}
+
+.studio-sidebar,
+.studio-inspector {
+  width: 272px;
+  padding: 18px;
+}
+
+.studio-inspector {
+  width: 306px;
+}
+
+.studio-sidebar strong,
+.studio-inspector>strong {
+  font-size: 13px;
+}
+
+.studio-sidebar button {
+  min-height: 42px;
+  padding: 11px;
+  font-size: 14px;
+}
+
+.studio-sidebar button small,
+.studio-trigger {
+  font-size: 12px;
+}
+
+.studio-fields label,
+.studio-inspector label {
+  gap: 5px;
+  font-size: 12px;
+}
+
+.studio-node input,
+.studio-node textarea,
+.studio-inspector input,
+.studio-inspector textarea,
+.studio-inspector select {
+  min-height: 34px;
+  padding: 7px 8px;
+  font-size: 13px;
+}
+
+.studio-inspector-status {
+  gap: 10px;
+  padding: 13px;
+}
+
+.studio-inspector-status header,
+.studio-inspector-status p {
+  font-size: 13px;
+}
+
+.studio-readonly-config {
+  gap: 10px;
+}
+
+.studio-readonly-config>strong {
+  font-size: 12px;
 }
 
 .settings-tabs {

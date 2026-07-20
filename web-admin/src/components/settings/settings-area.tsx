@@ -452,6 +452,7 @@ function ProfileDetail({ profile, request, onAuthError, onSaved }: { profile: Re
     minimum_confidence: policy?.minimum_confidence ?? 0.75,
     max_parallel_groups: policy?.max_parallel_groups ?? 1,
     allow_autonomous_rejection: policy?.allow_autonomous_rejection ?? false,
+    publish_manual_reviews: policy?.publish_manual_reviews ?? false,
     enable_detailed_stage_logs: policy?.enable_detailed_stage_logs ?? false,
   });
   const [saving, setSaving] = useState(false);
@@ -479,6 +480,7 @@ function ProfileDetail({ profile, request, onAuthError, onSaved }: { profile: Re
         if (Number(form.minimum_confidence) !== policy.minimum_confidence) policyPatch.review_min_publish_confidence = Number(form.minimum_confidence);
         if (Number(form.max_parallel_groups) !== policy.max_parallel_groups) policyPatch.review_max_parallel_groups = Number(form.max_parallel_groups);
         if (form.allow_autonomous_rejection !== policy.allow_autonomous_rejection) policyPatch.allow_autonomous_rejection = form.allow_autonomous_rejection ? 1 : 0;
+        if (form.publish_manual_reviews !== policy.publish_manual_reviews) policyPatch.publish_manual_reviews = form.publish_manual_reviews ? 1 : 0;
         if (form.enable_detailed_stage_logs !== policy.enable_detailed_stage_logs) policyPatch.enable_detailed_stage_logs = form.enable_detailed_stage_logs ? 1 : 0;
         if (Object.keys(policyPatch).length > 0) {
           await request(`review/policies/${policy.id}`, {
@@ -523,6 +525,7 @@ function ProfileDetail({ profile, request, onAuthError, onSaved }: { profile: Re
           <label><span>Confiança mínima</span><input type="number" min="0" max="1" step="0.01" value={form.minimum_confidence} onChange={(event) => setForm((current) => ({ ...current, minimum_confidence: Number(event.target.value) }))} /></label>
           <label><span>Grupos paralelos</span><input type="number" min="1" step="1" value={form.max_parallel_groups} onChange={(event) => setForm((current) => ({ ...current, max_parallel_groups: Number(event.target.value) }))} /></label>
           <SwitchField checked={form.allow_autonomous_rejection} label="Permitir rejeição autônoma" onChange={(checked) => setForm((current) => ({ ...current, allow_autonomous_rejection: checked }))} />
+          <SwitchField checked={form.publish_manual_reviews} label="Exigir aprovação antes de publicar" onChange={(checked) => setForm((current) => ({ ...current, publish_manual_reviews: checked }))} />
           <SwitchField checked={form.enable_detailed_stage_logs} label="Logs detalhados por etapa" onChange={(checked) => setForm((current) => ({ ...current, enable_detailed_stage_logs: checked }))} />
         </div>
         </>

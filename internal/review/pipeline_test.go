@@ -163,6 +163,49 @@ func TestPipelineAllowsRepeatedReviewExecutorInstances(t *testing.T) {
 	}
 }
 
+func TestPipelineDefinitionAllowsMultipleCompatibleSuccessTransitions(t *testing.T) {
+	_, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+
+	definition = pipelineWithPlannerFanOut(definition)
+	if err := validatePipelineDefinition(definition); err != nil {
+		t.Fatalf("expected compatible success fan-out to be valid: %v", err)
+	}
+}
+
+func TestPipelineSchedulesAllCompatibleSuccessFanOutDestinations(t *testing.T) {
+	p := &pipelineProvider{calls: map[string]int{}}
+	_, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+
+	definition = pipelineWithPlannerFanOut(definition)
+	publications := 0
+	result, err := NewPipelineEngine(nil).Execute(context.Background(), definition, PipelineExecutionInput{
+		Job:     queueInput{ID: "rev-1"},
+		RawDiff: "diff --git a/app.go b/app.go\n--- a/app.go\n+++ b/app.go\n@@ -10 +10 @@\n-old\n+new\n",
+		Policy:  Policy{MinimumConfidence: .75, MaxParallelGroups: 1},
+		Provider: func(context.Context, *int64) (providers.LLMProvider, error) {
+			return p, nil
+		},
+		Publish: func(context.Context, Result) (StageOutcome, error) {
+			publications++
+			return StageOutcome{ArtifactType: "publication_result"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.calls["planner"] != 2 {
+		t.Fatalf("expected both planner destinations to run, got calls=%#v", p.calls)
+	}
+	if publications != 1 {
+		t.Fatalf("expected publication to be scheduled once, got %d", publications)
+	}
+	if len(result.Comments) != 1 {
+		t.Fatalf("unexpected fan-out result: %#v", result)
+	}
+}
+
 func TestPipelinePersistsFailedStageStatus(t *testing.T) {
 	repo, definition, cleanup := seededPipeline(t)
 	defer cleanup()
@@ -341,6 +384,31 @@ func seededPipeline(t *testing.T) (*Repository, PipelineDefinition, func()) {
 		t.Fatal(err)
 	}
 	return repo, definition, func() { _ = db.Close() }
+}
+
+func pipelineWithPlannerFanOut(definition PipelineDefinition) PipelineDefinition {
+	branch := definition.Stages[1]
+	branch.ID = 999
+	branch.Key = "planejamento-secundario"
+	branch.Name = "Planejamento secundário"
+	branch.Position = len(definition.Stages) + 1
+	definition.Stages = append(definition.Stages, branch)
+
+	branchID := branch.ID
+	definition.Transitions = append(definition.Transitions, PipelineTransition{
+		FromStageID:  definition.Stages[0].ID,
+		ToStageID:    &branchID,
+		Type:         "success",
+		ConditionKey: "always",
+		Priority:     1,
+	})
+	definition.Transitions = append(definition.Transitions, PipelineTransition{
+		FromStageID:  branch.ID,
+		ToStageID:    definition.Transitions[1].ToStageID,
+		Type:         "success",
+		ConditionKey: "always",
+	})
+	return definition
 }
 
 func containsEvent(events []string, want string) bool {

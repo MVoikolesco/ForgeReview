@@ -311,20 +311,12 @@ func validatePipelineDefinition(definition PipelineDefinition) error {
 		byID[stage.ID] = stage
 	}
 	allowedConditions := map[string]bool{"always": true, "has_findings": true, "no_findings": true, "partial_result": true, "contract_invalid": true, "confidence_below_threshold": true}
-	seenType := map[int64]map[string]bool{}
 	adj := map[int64][]int64{}
 	for _, edge := range definition.Transitions {
 		from, ok := byID[edge.FromStageID]
 		if !ok {
 			return errors.New("transição possui origem inválida")
 		}
-		if seenType[from.ID] == nil {
-			seenType[from.ID] = map[string]bool{}
-		}
-		if seenType[from.ID][edge.Type] {
-			return fmt.Errorf("etapa %q possui mais de uma saída %s", from.Key, edge.Type)
-		}
-		seenType[from.ID][edge.Type] = true
 		if edge.Type == "retry" {
 			if edge.ToStageID != nil {
 				return errors.New("retry é interno e não pode ser uma aresta")

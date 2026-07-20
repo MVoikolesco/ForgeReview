@@ -118,6 +118,10 @@ O Studio persiste as conexões válidas entre portas de contrato. A execução
 processa cada chegada de entrada individualmente e mantém a origem dos
 artifacts para auditoria.
 
+Uma etapa pode emitir múltiplas transições compatíveis para realizar fan-out;
+todas as saídas elegíveis são executadas. A publicação continua única e
+idempotente.
+
 ## Modelo de definição
 
 Uma definição de pipeline deve ser versionada e conter, no mínimo:

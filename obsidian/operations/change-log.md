@@ -23,6 +23,28 @@
   solicita o nome e cria um draft clonado do pipeline efetivo para o profile
   padrão, sem selecioná-lo automaticamente. O header passa a oferecer salvar e
   descartar durante a edição. Validação: `npm --prefix web-admin run lint`.
+- O inspector de uma etapa agora separa os modos: em visualização mostra status
+  e progresso da execução com configuração somente leitura; em edição expõe os
+  parâmetros completos para alteração. Validação: `npm --prefix web-admin run lint`.
+- Aumentada a escala tipográfica e espacial do Pipeline Studio para se alinhar
+  ao flow operacional anterior: cards, logs, sidebar, inspector e controles
+  agora priorizam leitura sem zoom. Validação: `npm --prefix web-admin run lint`.
+- Restaurados indicadores operacionais no Studio: etapas concluídas projetam
+  100%, cards abrem o modal de logs e a pré-publicação aparece entre formatação
+  e publicação quando o profile exige autorização manual. A flag
+  `publish_manual_reviews` passou a ser editável nas regras do profile para
+  habilitar ou bypassar esse fluxo. Ramificações compatíveis agora fazem fan-out
+  para todas as saídas elegíveis; validação: `go test ./...` e `npm --prefix
+  web-admin run lint`.
+- Ajustadas as portas dos cards do Studio para o subheader de contratos: cada
+  etapa mostra uma entrada e uma saída tipadas, sem handles externos. As linhas
+  herdam a cor do contrato de saída e os rótulos técnicos intermediários foram
+  ocultados. Validação: `go test ./...` e `npm --prefix web-admin run lint`.
+- Cada etapa agora configura o lado esquerdo ou direito de entrada e saída no
+  inspector de edição. O canvas default organiza o fluxo em duas faixas, com
+  retorno à esquerda na segunda, e as conexões usam os handles e as cores dos
+  contratos correspondentes. Validação: `go test ./...` e `npm --prefix
+  web-admin run lint`.
   Validação: `npm --prefix web-admin run lint` e `npm --prefix web-admin run build`.
 - Corrigido o Compose de desenvolvimento: API e worker agora sobrescrevem o
   comando de produção `/app/server` por Air no estágio `development`, que não
