@@ -46,7 +46,7 @@ func (p *pipelineProvider) Chat(_ context.Context, prompt string, _ int) (string
 		}
 		return `{"findings":[{"id":"f1","file":"app.go","line":10,"severity":"alta","confidence":0.9,"decision_reason":"new behavior fails","comment":"handle the error","introduced_by_pr":true}]}`, providers.Usage{}, nil
 	case "consolidator":
-		return `{"findings":[{"id":"f1","file":"app.go","line":10,"severity":"alta","confidence":0.9,"decision_reason":"new behavior fails","comment":"handle the error","introduced_by_pr":true}],"pr_summary":"consolidated"}`, providers.Usage{}, nil
+		return `{"findings":[{"id":"f1","file":"app.go","line":10,"end_line":10,"severity":"alta","confidence":0.9,"decision_reason":"new behavior fails","comment":"handle the error","introduced_by_pr":true}],"pr_summary":"consolidated"}`, providers.Usage{}, nil
 	case "verifier":
 		return `{"results":[{"finding_id":"f1","status":"confirmed","confidence":0.9}]}`, providers.Usage{}, nil
 	case "formatter":

@@ -38,7 +38,7 @@ mkdir -p "${BUILD_DIR}"
 
 current_tag=0
 if [[ -f "${COMPOSE_FILE}" ]]; then
-  current_tag="$(sed -nE 's/^[[:space:]]*image:[[:space:]]*forgereview-runtime:local-v([0-9]+)[[:space:]]*$/\1/p' "${COMPOSE_FILE}" | sort -n | tail -n 1)"
+  current_tag="$(sed -nE 's/^[[:space:]]*image:[[:space:]]*forgereview-runtime:prod-v([0-9]+)[[:space:]]*$/\1/p' "${COMPOSE_FILE}" | sort -n | tail -n 1)"
   current_tag="${current_tag:-0}"
 fi
 next_tag=$((current_tag + 1))
@@ -144,7 +144,7 @@ services:
       retries: 10
 
   api:
-    image: forgereview-runtime:local-v${next_tag}
+    image: forgereview-runtime:prod-v${next_tag}
     build: .
     restart: unless-stopped
     env_file:
@@ -155,6 +155,7 @@ services:
       DATABASE_DSN: /data/forgereview.db
       REDIS_ADDR: redis:6379
       REVIEW_PROMPT_CONFIG_PATH: /app/config/review-prompts.yaml
+    command: ["/app/server"]
     ports:
       - "8088:8080"
     volumes:
@@ -169,7 +170,7 @@ services:
         condition: service_healthy
 
   worker:
-    image: forgereview-runtime:local-v${next_tag}
+    image: forgereview-runtime:prod-v${next_tag}
     build: .
     restart: unless-stopped
     env_file:
@@ -180,6 +181,7 @@ services:
       REDIS_ADDR: redis:6379
       REDIS_CONSUMER: worker-1
       REVIEW_PROMPT_CONFIG_PATH: /app/config/review-prompts.yaml
+    command: ["/app/server"]
     volumes:
       - ./data:/data
     depends_on:
@@ -202,9 +204,9 @@ else
 fi
 
 printf '\nArtefato de production recriado com sucesso.\n'
-printf 'Imagem: forgereview-runtime:local-v%s\n' "${next_tag}"
+printf 'Imagem: forgereview-runtime:prod-v%s\n' "${next_tag}"
 printf 'Frontend: %s\n' "${BUILD_DIR}/web"
 printf 'Binario: %s\n' "${BUILD_DIR}/server"
 printf 'Env preservado em: %s\n' "${ENV_FILE}"
 printf 'Dados persistentes: %s\n' "${BUILD_DIR}/data"
-printf 'Proximo passo: copie production/build-result para o servidor e execute docker compose -f compose.yaml up -d --build.\n'
+printf 'Proximo passo: copie production/build-result para o servidor e execute docker compose -f compose.yaml up -d --build --force-recreate.\n'

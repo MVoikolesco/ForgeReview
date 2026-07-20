@@ -34,6 +34,7 @@ Todas as rotas `/api/v1/*` exigem Basic Auth e usam `{success,data,error}`. Rota
 - `final_review` preserva `gitea_event`, `status`, `summary` e `observations`.
 - O backend recalcula `gitea_event`/`status` a partir dos achados válidos e normaliza `summary`/`observations` para não publicar texto contraditório com a decisão final.
 - O parser das respostas de stage aceita fences Markdown e tenta reparar JSON truncado por fechamento ausente antes de falhar o contrato da etapa.
+- Achados de review aceitam `end_line` opcional no contrato interno, alinhado aos prompts técnicos que podem retornar intervalos de linhas; isso evita rejeitar a consolidação por campo desconhecido.
 - `GET /observability/progress` já retorna todos os eventos persistidos em `review_steps`; o flow usa esses eventos no modal de diagnóstico por etapa, sem criar uma segunda fonte de logs no Redis.
 - Logs detalhados de prompt/resposta só são persistidos quando `review_policies.enable_detailed_stage_logs=1` para o profile em uso.
 - Edições do perfil/policy usam `PATCH` parcial; o painel não reenvia valores inalterados.

@@ -28,6 +28,7 @@ type pipelineFinding struct {
 	ID               string   `json:"id"`
 	File             string   `json:"file"`
 	Line             int      `json:"line"`
+	EndLine          int      `json:"end_line,omitempty"`
 	Severity         string   `json:"severity"`
 	Category         string   `json:"category"`
 	Confidence       float64  `json:"confidence"`

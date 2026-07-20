@@ -28,6 +28,7 @@ services:
       PORT: 8080
       REDIS_ADDR: redis:6379
       DATABASE_DSN: /data/forgereview.db
+    command: ["/app/server"]
     ports:
       - "8088:8080"
     extra_hosts:
@@ -54,6 +55,7 @@ services:
       REDIS_ADDR: redis:6379
       REDIS_CONSUMER: worker-1
       DATABASE_DSN: /data/forgereview.db
+    command: ["/app/server"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

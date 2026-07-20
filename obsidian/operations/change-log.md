@@ -3,6 +3,7 @@
 ## 2026-07-20
 
 - Reorganizada a raiz: arquivos Docker foram para `docker/`, o script de release para `production/build.sh` e o artefato autocontido passou a ser gerado em `production/build-result/`; referências de Compose e documentação foram atualizadas.
+- Fixado o comando de runtime de API/worker como `/app/server` nos Compose, evitando que containers ou imagens antigas tentem executar o caminho removido `/usr/local/bin/review-bot`; o runbook agora exige recriação forçada do stack. O warning de `vm.overcommit_memory` do Redis foi documentado como ajuste do kernel do host.
 - Reorganizado o modal de edição de perfil em seções de identidade e regras de execução; estados booleanos agora usam switches acessíveis em vez de checkboxes.
 - O salvamento do perfil passou a enviar `PATCH` mínimo, somente com os campos alterados. A flag de logs detalhados requer a aplicação da migration `013_detailed_stage_logs.sql`; ambientes ainda em `012` não possuem a coluna no banco.
 - Ajustados os tamanhos mínimos de tipografia dos componentes recentes de flow, logs e configurações para priorizar legibilidade, elevando textos pequenos para a faixa de 10px e 12px.
@@ -11,6 +12,7 @@
 - O ambiente dev do Next passou a manter `.next` em volume separado e usar `WATCHPACK_POLLING=true`, evitando corrupção do React Client Manifest no bind mount e restaurando a detecção de alterações pelo hot reload.
 - O flow ganhou um botão de diagnóstico em cada card que abre um modal com todos os eventos persistidos da etapa, incluindo status, duração, tentativas, grupos, arquivos e erros. O modal reutiliza o padrão visual de pré-review; os eventos continuam no SQLite, sem duplicação no Redis.
 - O parser das etapas LLM agora tenta recuperar JSON truncado por `unexpected EOF` fechando aspas, colchetes e chaves pendentes antes de declarar `Contrato inválido`, reduzindo falhas repetidas no reviewer por resposta cortada do modelo.
+- Corrigido o contrato de achados do pipeline para aceitar `end_line`, campo previsto pelo prompt técnico. Respostas válidas de consolidação deixam de cair no fallback determinístico por causa de `DisallowUnknownFields`; cobertura adicionada ao teste do pipeline.
 - O card `pre-publicacao` do flow agora passa para 100% no frontend assim que existe progresso em `publicacao`, evitando ficar visualmente preso em 90% após a autorização manual.
 - O backend passou a normalizar `final_review.summary` e `final_review.observations` depois da decisão final, impedindo publicações `aprovado` com texto pedindo correção; o prompt do formatter também foi alinhado para usar `APPROVE` em vez de `APPROVED`.
 - A observabilidade do flow agora sintetiza um evento terminal de `publicacao` quando a review já está `concluido`, evitando que aprovações manuais publicadas permaneçam visualmente presas em `pre-publicacao` a 90%.

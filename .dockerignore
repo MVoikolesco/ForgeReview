@@ -9,6 +9,7 @@ web-admin/dist
 .tmp-go
 logs
 data
-Prod
+production/build-result
+production/.env
 *.exe
 *.test
