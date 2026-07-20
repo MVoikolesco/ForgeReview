@@ -18,6 +18,9 @@ func (p *gemini) Name() string {
 	return "google_gemini"
 }
 
+// Model returns the configured model identifier.
+func (p *gemini) Model() string { return p.cfg.Model }
+
 // Review sends one diff block to Gemini generateContent and parses its result.
 func (p *gemini) Review(ctx context.Context, input Input) (contracts.Result, error) {
 	content, _, err := p.Chat(ctx, input.Prompt+"\n\nDIFF:\n"+input.Diff, 0)

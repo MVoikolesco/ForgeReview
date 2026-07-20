@@ -32,12 +32,24 @@ func TestPublishMarkerAllowsReconciliation(t *testing.T) {
 	defer server.Close()
 
 	client := New(server.URL, "token")
-	result := contracts.Result{ReviewID: "rev-1", Comments: []contracts.Comment{}, FinalReview: contracts.FinalReview{GiteaEvent: "COMMENT", Summary: "review"}}
+	result := contracts.Result{
+		ReviewID: "rev-1", Model: "gpt-oss:120b", Comments: []contracts.Comment{},
+		FinalReview: contracts.FinalReview{GiteaEvent: "COMMENT", Status: "aprovado", Summary: "review", Observations: "Nenhum problema relevante foi confirmado."},
+		Metadata: map[string]any{
+			"total_duration_ms": 43501,
+			"stage_metrics":     []map[string]any{{"actual_prompt_tokens": 12, "actual_completion_tokens": 8}},
+		},
+	}
 	if err := client.Publish(context.Background(), "acme", "app", 1, result); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(publishedBody, "<!-- forgereview:rev-1 -->") {
 		t.Fatalf("publication marker missing: %q", publishedBody)
+	}
+	for _, expected := range []string{"> status: aprovado", "> elapsed time: 43.501s", "> model: gpt-oss:120b", "> tokens: 20 (prompt: 12, completion: 8)", "Nenhum problema relevante foi confirmado."} {
+		if !strings.Contains(publishedBody, expected) {
+			t.Fatalf("publication envelope missing %q: %q", expected, publishedBody)
+		}
 	}
 	found, err := client.HasPublishedReview(context.Background(), "acme", "app", 1, "rev-1")
 	if err != nil || !found {

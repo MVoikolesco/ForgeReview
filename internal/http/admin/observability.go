@@ -130,6 +130,7 @@ func (h *AdminHandler) observabilityProgress(c *gin.Context) {
 		}
 		events = append(events, event)
 	}
+	events = appendTerminalReviewEvent(item, events)
 
 	stage, status, percent := progressMapping(item.Status, "")
 	if len(events) > 0 {
@@ -224,6 +225,27 @@ func progressMapping(step, rawStatus string) (stage, status string, percent int)
 	}
 
 	return stage, status, percent
+}
+
+func appendTerminalReviewEvent(item review.Review, events []gin.H) []gin.H {
+	if item.Status != review.StatusCompleted {
+		return events
+	}
+	if len(events) > 0 {
+		last := events[len(events)-1]
+		if stringValue(last["stage"]) == "publicacao" &&
+			stringValue(last["status"]) == "done" &&
+			intValue(last["percent"], 0) == 100 {
+			return events
+		}
+	}
+	return append(events, gin.H{
+		"stage":     "publicacao",
+		"status":    "done",
+		"percent":   100,
+		"message":   "Review publicada no Gitea",
+		"timestamp": item.UpdatedAt,
+	})
 }
 
 func stringValues(value any) []string {

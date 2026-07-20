@@ -180,6 +180,27 @@ function formatSize(value: number) {
   return `${Math.ceil(value / 1024)} KB`;
 }
 
+function resolveNodeProgress(
+  stageId: string,
+  event: ProgressEvent | undefined,
+  latestByStage: Record<string, ProgressEvent>,
+) {
+  if (
+    stageId === "pre-publicacao" &&
+    event?.status === "waiting" &&
+    latestByStage.publicacao
+  ) {
+    return { status: "done", percent: 100 };
+  }
+  return {
+    status: event?.status || "pending",
+    percent:
+      event?.status === "done"
+        ? 100
+        : Math.max(0, Math.min(100, event?.percent || 0)),
+  };
+}
+
 function WorkflowNode({ data, selected }: NodeProps<Node<StageNodeData>>) {
   const status = data.status || "pending";
   const expanded =
@@ -422,10 +443,11 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
       workflowStages.map((stage, index) => {
         const event = latestByStage[stage.id];
         const isTopRow = index < 4;
-        const percent =
-          event?.status === "done"
-            ? 100
-            : Math.max(0, Math.min(100, event?.percent || 0));
+        const { status, percent } = resolveNodeProgress(
+          stage.id,
+          event,
+          latestByStage,
+        );
         return {
           id: stage.id,
           type: "workflow",
@@ -433,7 +455,7 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
           data: {
             title: stage.title,
             subtitle: stage.subtitle,
-            status: event?.status || "pending",
+            status,
             percent,
             message: event?.message,
             events: eventsByStage[stage.id] || [],

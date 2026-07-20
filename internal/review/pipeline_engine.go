@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -198,6 +199,9 @@ func (r *pipelineRuntime) call(ctx context.Context, stage PipelineStage, marker 
 	r.providerMu.Unlock()
 	r.metricsMu.Lock()
 	r.providerName = provider.Name()
+	if model, ok := provider.(providers.ModelName); ok {
+		r.meta["model"] = model.Model()
+	}
 	r.metricsMu.Unlock()
 	prompt := stagePrompt(marker, r.input.BasePrompt, stage.PromptTemplate, stageContractInstruction(stage), files, data)
 	at := time.Now()
@@ -283,7 +287,7 @@ func (reviewerExecutor) Execute(ctx context.Context, r *pipelineRuntime, stage P
 	r.meta["failed_groups"] = len(r.failed)
 	r.meta["partial_review"] = len(r.failed) > 0
 	if len(reviews) == 0 {
-		return StageOutcome{}, errors.New("nenhum grupo retornou uma review válida")
+		return StageOutcome{}, fmt.Errorf("nenhum grupo retornou uma review válida: %s", strings.Join(failed, "; "))
 	}
 	metadata := map[string]any{"successful_groups": len(reviews), "failed_groups": len(failed), "source_stage": stage.Key}
 	return StageOutcome{ArtifactType: "review_findings", Artifact: reviews, Metadata: metadata}, nil
@@ -324,8 +328,13 @@ func reviewGroups(ctx context.Context, r *pipelineRuntime, stage PipelineStage, 
 					err = callErr
 					if auditErr := r.recordAttempt(ctx, stage, attempt, attemptStarted, map[string]any{"group_id": group.ID}, err); auditErr != nil {
 						err = fmt.Errorf("%v; persistir tentativa: %w", err, auditErr)
+						break
 					}
-					break
+					if attempt < attempts {
+						r.input.Progress(stage.Key, "retentando", fmt.Sprintf("Falha ao consultar o provider no grupo %s: %v", group.ID, err), map[string]any{"group_id": group.ID, "attempt": attempt + 1, "max_attempts": attempts}, stageStarted, err)
+						continue
+					}
+					continue
 				}
 				if err = decodeStage(raw, &review); err == nil {
 					review.GroupID = group.ID
@@ -351,7 +360,7 @@ func reviewGroups(ctx context.Context, r *pipelineRuntime, stage PipelineStage, 
 				}
 			}
 			r.input.Progress(stage.Key, "falhou", "Grupo "+group.ID+" falhou", map[string]any{"group_id": group.ID, "attempt": attempts, "max_attempts": attempts}, stageStarted, err)
-			out <- outcome{index: index, failed: group.ID}
+			out <- outcome{index: index, failed: fmt.Sprintf("%s: %v", group.ID, err)}
 		}(i, group)
 	}
 	wg.Wait()
@@ -441,6 +450,9 @@ func (formattingExecutor) Execute(ctx context.Context, r *pipelineRuntime, stage
 		summary = "Nenhum arquivo revisavel encontrado no diff."
 	}
 	result := deterministicPipelineResult(r.input.Job.ID, r.providerName, r.approved, summary, len(r.failed) > 0, r.input.Policy, r.meta)
+	if model, ok := r.meta["model"].(string); ok {
+		result.Model = model
+	}
 	fallback := true
 	if len(r.files) > 0 && stage.UseLLM {
 		var formatted pipelineFormatted

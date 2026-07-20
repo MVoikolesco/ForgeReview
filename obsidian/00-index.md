@@ -8,3 +8,4 @@
 - [[architecture/migration-audit|Auditoria da migração e lacunas]]
 - [[operations/runbook|Runbook Docker/operação]]
 - [[operations/change-log|Change log]]
+- Documento de desenvolvimento local: `docs/development.md`

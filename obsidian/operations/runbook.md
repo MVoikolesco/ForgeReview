@@ -3,9 +3,10 @@
 ## Subir
 
 1. Copiar `.env.example` para `.env` e trocar credenciais, URL/token Gitea e chave AES de 32 bytes.
-2. Escolher `APP_ENVIRONMENT=development` para `npm run dev` ou `production` para build/`next start`.
-3. Executar `docker compose up -d --build`.
-4. Verificar `docker compose ps`, `curl http://localhost:8088/health` e `http://localhost:3000`.
+2. Escolher `APP_ENVIRONMENT=development` para hot reload ou `production` para build/`next start`.
+3. Em desenvolvimento, executar `docker compose -f docker-compose.yml -f docker-compose.development.yml up -d --build`; o Go usa Air e o Next continua no serviço `web`.
+4. Em produção, executar `docker compose up -d --build`.
+5. Verificar `docker compose ps`, `curl http://localhost:8088/health` e `http://localhost:3000`.
 
 ## Ordem de inicialização
 
@@ -21,6 +22,9 @@
 - Next: `docker compose logs --tail=100 web`.
 - Redis e jobs: `/api/admin/observability/metrics` autenticado.
 - Fluxo e steps: `/api/admin/observability/progress?name=<review_id>` autenticado.
+- Quando a etapa `revisao` falhar em todos os grupos, o erro da review identifica cada grupo e a causa retornada pelo provider. Consultar também os steps persistidos para distinguir erro de conexão de contrato JSON inválido.
+- Redis local fica no serviço `redis`, porta `6379` no host, banco `0`, stream `gitea:review-jobs` e grupo `gitea-reviewers`; a fila contém jobs, não a configuração do provider.
+- Se aparecer `provider credential could not be decrypted`, a `GITEA_TOKEN_ENCRYPTION_KEY` do API e do worker não corresponde à usada para salvar a credencial, ou não possui 32 bytes; recadastrar a credencial após corrigir a variável.
 
 ## Persistência e segurança
 
@@ -33,6 +37,8 @@
 ## Falhas conhecidas
 
 - Se a API falhar em migration, não iniciar o worker; corrigir schema e reiniciar API.
-- Se um provider falhar, o job fica `falhou`, o worker continua e a métrica `failed` incrementa.
+- Se um provider falhar, a etapa de revisão retenta até o `RetryLimit`; se todos os grupos falharem, o job fica `falhou`, o worker continua e a métrica `failed` incrementa.
 - Se o resultado manual ficar `aguardando_autorizacao`, usar o modal de pré-publicação; approve publica, reject cancela e rerun enfileira novamente.
 - Se o Next não subir, verificar se `APP_ENVIRONMENT` é exatamente `development` ou `production` e se o alvo correspondente existe no `web-admin/Dockerfile`.
+- O Air observa extensões Go e arquivos de configuração permitidos, mas `web-admin`, `node_modules`, `data` e `logs` ficam excluídos do watch do backend.
+- O override de desenvolvimento mantém `redis`, `api`, `worker` e `web`; `air_tmp` guarda somente os binários temporários do Air fora do bind mount do código.

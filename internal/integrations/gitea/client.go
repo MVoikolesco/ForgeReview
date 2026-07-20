@@ -195,7 +195,7 @@ func (c *Client) Publish(
 		event = "COMMENT"
 	}
 	payload := map[string]any{
-		"body":     result.FinalReview.Summary + publicationMarker(result.ReviewID),
+		"body":     publicationBody(result) + publicationMarker(result.ReviewID),
 		"event":    event,
 		"comments": comments,
 	}
@@ -203,6 +203,74 @@ func (c *Client) Publish(
 		"/pulls/" + strconv.Itoa(number) + "/reviews"
 	_, err := c.do(ctx, http.MethodPost, path, payload)
 	return err
+}
+
+// publicationBody preserves the operator-facing envelope used by the former
+// review pipeline while keeping the new structured result as its source.
+func publicationBody(result contracts.Result) string {
+	var b strings.Builder
+	if status := strings.TrimSpace(result.FinalReview.Status); status != "" {
+		fmt.Fprintf(&b, "> status: %s\n", status)
+	}
+	if elapsed := metadataDuration(result.Metadata); elapsed != "" || result.Model != "" {
+		promptTokens := metadataTokenSum(result.Metadata, "actual_prompt_tokens")
+		completionTokens := metadataTokenSum(result.Metadata, "actual_completion_tokens")
+		fmt.Fprintf(&b, "> elapsed time: %s\n> model: %s\n> tokens: %d (prompt: %d, completion: %d)\n\n", elapsed, result.Model, promptTokens+completionTokens, promptTokens, completionTokens)
+	}
+	if summary := strings.TrimSpace(result.FinalReview.Summary); summary != "" {
+		b.WriteString(summary)
+	}
+	if observations := strings.TrimSpace(result.FinalReview.Observations); observations != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(observations)
+	}
+	if b.Len() == 0 {
+		b.WriteString("Review automatizado concluído.")
+	}
+	return b.String()
+}
+
+func metadataDuration(metadata map[string]any) string {
+	ms := metadataInt(metadata["total_duration_ms"])
+	if ms <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.3fs", float64(ms)/1000)
+}
+
+func metadataTokenSum(metadata map[string]any, key string) int {
+	total := 0
+	switch metrics := metadata["stage_metrics"].(type) {
+	case []map[string]any:
+		for _, metric := range metrics {
+			total += metadataInt(metric[key])
+		}
+	case []any:
+		for _, item := range metrics {
+			if metric, ok := item.(map[string]any); ok {
+				total += metadataInt(metric[key])
+			}
+		}
+	}
+	return total
+}
+
+func metadataInt(value any) int {
+	switch number := value.(type) {
+	case int:
+		return number
+	case int64:
+		return int(number)
+	case float64:
+		return int(number)
+	case string:
+		parsed, _ := strconv.Atoi(number)
+		return parsed
+	default:
+		return 0
+	}
 }
 
 // HasPublishedReview reconciles an uncertain local publication with reviews

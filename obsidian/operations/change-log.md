@@ -1,5 +1,18 @@
 # Change log
 
+## 2026-07-20
+
+- O parser das etapas LLM agora tenta recuperar JSON truncado por `unexpected EOF` fechando aspas, colchetes e chaves pendentes antes de declarar `Contrato inválido`, reduzindo falhas repetidas no reviewer por resposta cortada do modelo.
+- O card `pre-publicacao` do flow agora passa para 100% no frontend assim que existe progresso em `publicacao`, evitando ficar visualmente preso em 90% após a autorização manual.
+- O backend passou a normalizar `final_review.summary` e `final_review.observations` depois da decisão final, impedindo publicações `aprovado` com texto pedindo correção; o prompt do formatter também foi alinhado para usar `APPROVE` em vez de `APPROVED`.
+- A observabilidade do flow agora sintetiza um evento terminal de `publicacao` quando a review já está `concluido`, evitando que aprovações manuais publicadas permaneçam visualmente presas em `pre-publicacao` a 90%.
+- A etapa de revisão agora retenta falhas de consulta ao provider conforme `RetryLimit` e preserva a causa por grupo quando todos os grupos falham. Ver [[architecture/pipeline-2.0|pipeline 2.0]] e [[operations/runbook|runbook]].
+- O progresso da etapa registra a causa da falha do provider, e a resolução de conexão/modelo preserva o erro de configuração para diagnóstico sem registrar credenciais.
+- A resolução do provider não ignora mais falhas ao descriptografar credenciais; o worker diferencia credencial inválida de rejeição HTTP 401.
+- A publicação Gitea voltou a incluir status, duração, modelo, tokens e observação de aprovação no corpo, mantendo o marcador `forgereview:<id>` para reconciliação.
+- Adicionado ambiente Docker de desenvolvimento com Air para API e worker Go, volume temporário dedicado e override que força o Next.js do `web-admin` em desenvolvimento sem incluí-lo no watch do backend.
+- Criado o documento `docs/development.md` com inicialização, hot reload, diagnóstico, persistência e limpeza segura dos volumes. Ver também [[runbook|runbook]].
+
 ## 2026-07-18
 
 - Ativada a área de Configurações do console com tabs dedicadas para visão geral, perfis, pipeline e tipos de etapa. A UI usa cards e modais responsivos, replica a seleção efetiva do runtime e consome o novo endpoint agregado e somente leitura `GET /api/admin/review/settings`.

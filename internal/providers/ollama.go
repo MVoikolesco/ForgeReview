@@ -17,6 +17,9 @@ func (p *ollama) Name() string {
 	return "ollama"
 }
 
+// Model returns the configured model identifier.
+func (p *ollama) Model() string { return p.cfg.Model }
+
 // Review sends one diff block to Ollama's chat endpoint and parses its result.
 func (p *ollama) Review(ctx context.Context, input Input) (contracts.Result, error) {
 	content, _, err := p.Chat(ctx, input.Prompt+"\n\nDIFF:\n"+input.Diff, 0)

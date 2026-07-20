@@ -18,6 +18,9 @@ func (p *openAICompatible) Name() string {
 	return p.cfg.Name
 }
 
+// Model returns the configured model identifier.
+func (p *openAICompatible) Model() string { return p.cfg.Model }
+
 // Review sends one diff block to an OpenAI-compatible chat completion endpoint.
 func (p *openAICompatible) Review(ctx context.Context, input Input) (contracts.Result, error) {
 	content, _, err := p.Chat(ctx, input.Prompt+"\n\nDIFF:\n"+input.Diff, 0)

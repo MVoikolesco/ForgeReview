@@ -188,14 +188,81 @@ func decodeStage(raw string, out any) error {
 	raw = strings.TrimPrefix(raw, "```json")
 	raw = strings.TrimPrefix(raw, "```")
 	raw = strings.TrimSuffix(raw, "```")
-	if err := decodeStageJSON(strings.TrimSpace(raw), out); err == nil {
+	cleaned := strings.TrimSpace(raw)
+	if err := decodeStageJSON(cleaned, out); err == nil {
 		return nil
+	} else if repaired, ok := repairTruncatedJSONObject(cleaned, err); ok {
+		if decodeErr := decodeStageJSON(repaired, out); decodeErr == nil {
+			return nil
+		}
 	}
-	start, end := strings.Index(raw, "{"), strings.LastIndex(raw, "}")
+	start, end := strings.Index(cleaned, "{"), strings.LastIndex(cleaned, "}")
 	if start >= 0 && end > start {
-		return decodeStageJSON(raw[start:end+1], out)
+		candidate := cleaned[start : end+1]
+		if err := decodeStageJSON(candidate, out); err == nil {
+			return nil
+		}
+	} else if start >= 0 {
+		candidate := cleaned[start:]
+		if repaired, ok := repairTruncatedJSONObject(candidate, fmt.Errorf("unexpected EOF")); ok {
+			if err := decodeStageJSON(repaired, out); err == nil {
+				return nil
+			}
+		}
 	}
 	return fmt.Errorf("resposta não contém um objeto JSON")
+}
+
+func repairTruncatedJSONObject(raw string, decodeErr error) (string, bool) {
+	if !strings.Contains(strings.ToLower(decodeErr.Error()), "unexpected eof") {
+		return "", false
+	}
+	stack := make([]rune, 0, 8)
+	inString := false
+	escaped := false
+	for _, ch := range raw {
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{', '[':
+			stack = append(stack, ch)
+		case '}':
+			if len(stack) > 0 && stack[len(stack)-1] == '{' {
+				stack = stack[:len(stack)-1]
+			}
+		case ']':
+			if len(stack) > 0 && stack[len(stack)-1] == '[' {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+	var repaired strings.Builder
+	repaired.WriteString(raw)
+	if inString {
+		repaired.WriteByte('"')
+	}
+	for i := len(stack) - 1; i >= 0; i-- {
+		if stack[i] == '{' {
+			repaired.WriteByte('}')
+		} else {
+			repaired.WriteByte(']')
+		}
+	}
+	return repaired.String(), true
 }
 
 func decodeStageJSON(raw string, out any) error {
@@ -394,5 +461,78 @@ func applyPipelineDecision(r *Result, partial bool, p Policy) {
 	} else {
 		r.FinalReview.GiteaEvent = "APPROVE"
 		r.FinalReview.Status = "aprovado"
+		if r.FinalReview.Observations == "" {
+			r.FinalReview.Observations = "Nenhum problema relevante foi confirmado."
+		}
 	}
+	normalizeFinalReviewText(r, partial)
+}
+
+func normalizeFinalReviewText(r *Result, partial bool) {
+	technicalSummary := strings.TrimSpace(r.Summary)
+	switch r.FinalReview.GiteaEvent {
+	case "APPROVE":
+		r.FinalReview.Summary = "Nenhum problema relevante foi confirmado."
+		if technicalSummary != "" {
+			r.FinalReview.Observations = "Resumo técnico: " + technicalSummary
+		} else {
+			r.FinalReview.Observations = "Review pronta para aprovação."
+		}
+	case "REQUEST_CHANGES":
+		if len(r.Comments) == 1 {
+			r.FinalReview.Summary = "Foi identificado 1 problema que precisa de correção antes da aprovação."
+		} else {
+			r.FinalReview.Summary = fmt.Sprintf("Foram identificados %d problemas que precisam de correção antes da aprovação.", len(r.Comments))
+		}
+		r.FinalReview.Observations = finalReviewObservations(technicalSummary, r.Comments, "Ajustes obrigatórios:")
+	case "COMMENT":
+		if partial {
+			r.FinalReview.Summary = "A revisão foi concluída parcialmente e exige validação manual."
+			r.FinalReview.Observations = finalReviewObservations(technicalSummary, r.Comments, "Resultado parcial:")
+			return
+		}
+		if len(r.Comments) == 0 {
+			r.FinalReview.Summary = "A revisão não encontrou bloqueios, mas o resultado deve ser publicado como comentário."
+			r.FinalReview.Observations = finalReviewObservations(technicalSummary, nil, "Observações:")
+			return
+		}
+		if len(r.Comments) == 1 {
+			r.FinalReview.Summary = "Foi identificado 1 ponto de atenção sem bloqueio automático."
+		} else {
+			r.FinalReview.Summary = fmt.Sprintf("Foram identificados %d pontos de atenção sem bloqueio automático.", len(r.Comments))
+		}
+		r.FinalReview.Observations = finalReviewObservations(technicalSummary, r.Comments, "Pontos de atenção:")
+	}
+}
+
+func finalReviewObservations(technicalSummary string, comments []Comment, heading string) string {
+	parts := []string{}
+	if technicalSummary != "" {
+		parts = append(parts, technicalSummary)
+	}
+	if len(comments) == 0 {
+		if len(parts) == 0 {
+			return "Sem observações adicionais."
+		}
+		return strings.Join(parts, "\n\n")
+	}
+	var findings strings.Builder
+	findings.WriteString(heading)
+	limit := len(comments)
+	if limit > 3 {
+		limit = 3
+	}
+	for i := 0; i < limit; i++ {
+		comment := comments[i]
+		message := strings.TrimSpace(comment.DecisionReason)
+		if message == "" {
+			message = strings.TrimSpace(comment.Comment)
+		}
+		fmt.Fprintf(&findings, "\n- %s:%d - %s", comment.File, comment.Line, message)
+	}
+	if len(comments) > limit {
+		fmt.Fprintf(&findings, "\n- ... e mais %d achado(s).", len(comments)-limit)
+	}
+	parts = append(parts, findings.String())
+	return strings.Join(parts, "\n\n")
 }

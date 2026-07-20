@@ -31,5 +31,9 @@ Todas as rotas `/api/v1/*` exigem Basic Auth e usam `{success,data,error}`. Rota
 
 - `comments[]` preserva `file`, `line`, `severity`, `decision_reason` e `comment`.
 - `final_review` preserva `gitea_event`, `status`, `summary` e `observations`.
+- O backend recalcula `gitea_event`/`status` a partir dos achados válidos e normaliza `summary`/`observations` para não publicar texto contraditório com a decisão final.
+- O parser das respostas de stage aceita fences Markdown e tenta reparar JSON truncado por fechamento ausente antes de falhar o contrato da etapa.
 - Steps internos são traduzidos para stages legados do flow; [[data-model|mapeamento completo]].
 - Estados de pré-publicação são `aguardando_autorizacao` no banco e `waiting` no painel.
+- Quando a review já está `concluido`, a observabilidade adiciona um evento terminal sintético de `publicacao` para o painel não permanecer preso no último `review_step` intermediário.
+- O frontend também trata `pre-publicacao` como concluída quando já existe evento em `publicacao`, para o card histórico não permanecer em 90% após a autorização manual.

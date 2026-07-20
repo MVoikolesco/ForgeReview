@@ -181,7 +181,7 @@ func TestPipelinePersistsFailedStageStatus(t *testing.T) {
 		Policy:   Policy{MinimumConfidence: .75, MaxParallelGroups: 1},
 		Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
 	})
-	if err == nil {
+	if err == nil || !strings.Contains(err.Error(), "provider unavailable") {
 		t.Fatal("expected pipeline failure")
 	}
 	var status string
@@ -263,6 +263,72 @@ func TestVerificationDoesNotRestoreFindingsDiscardedByConsolidator(t *testing.T)
 	}
 	if len(result.Comments) != 0 || result.FinalReview.GiteaEvent != "APPROVE" {
 		t.Fatalf("discarded findings were restored: %#v", result)
+	}
+}
+
+func TestDecodeStageRepairsUnexpectedEOF(t *testing.T) {
+	raw := `{"group_id":"G1","reviewed_files":["app.go"],"findings":[{"id":"f1","file":"app.go","line":10,"severity":"alta","category":"correctness","confidence":0.9,"decision_reason":"quebra o fluxo","comment":"corrija a validação","introduced_by_pr":true}],"review_summary":"ok"`
+	var review pipelineGroupReview
+
+	if err := decodeStage(raw, &review); err != nil {
+		t.Fatalf("expected truncated JSON to be repaired: %v", err)
+	}
+	if review.GroupID != "G1" || len(review.Findings) != 1 {
+		t.Fatalf("unexpected repaired review: %#v", review)
+	}
+}
+
+func TestApplyPipelineDecisionOverridesContradictoryApprovalText(t *testing.T) {
+	result := Result{
+		Summary: "Nenhum defeito bloqueante encontrado no diff.",
+		FinalReview: FinalReview{
+			Summary:      "Erro de sintaxe crítico encontrado e necessidade de corrigir antes da aprovação.",
+			Observations: "Corrija o campo antes de aprovar.",
+		},
+	}
+
+	applyPipelineDecision(&result, false, Policy{})
+
+	if result.FinalReview.GiteaEvent != "APPROVE" || result.FinalReview.Status != "aprovado" {
+		t.Fatalf("unexpected approval decision: %#v", result.FinalReview)
+	}
+	if result.FinalReview.Summary != "Nenhum problema relevante foi confirmado." {
+		t.Fatalf("unexpected normalized approval summary: %q", result.FinalReview.Summary)
+	}
+	if strings.Contains(result.FinalReview.Observations, "Corrija") {
+		t.Fatalf("approval observations kept contradictory text: %q", result.FinalReview.Observations)
+	}
+	if !strings.Contains(result.FinalReview.Observations, "Resumo técnico") {
+		t.Fatalf("approval observations lost deterministic context: %q", result.FinalReview.Observations)
+	}
+}
+
+func TestApplyPipelineDecisionOverridesContradictoryRejectionText(t *testing.T) {
+	result := Result{
+		Summary: "O diff introduz uma falha concreta.",
+		Comments: []Comment{{
+			File:           "component.tsx",
+			Line:           14,
+			Severity:       "alta",
+			DecisionReason: "o atributo min ficou inválido e quebra o HTML",
+			Comment:        "corrija o atributo min",
+		}},
+		FinalReview: FinalReview{
+			Summary:      "Aprovado sem ressalvas.",
+			Observations: "Tudo certo.",
+		},
+	}
+
+	applyPipelineDecision(&result, false, Policy{})
+
+	if result.FinalReview.GiteaEvent != "REQUEST_CHANGES" || result.FinalReview.Status != "reprovado" {
+		t.Fatalf("unexpected rejection decision: %#v", result.FinalReview)
+	}
+	if !strings.Contains(result.FinalReview.Summary, "precisa de correção") {
+		t.Fatalf("unexpected normalized rejection summary: %q", result.FinalReview.Summary)
+	}
+	if !strings.Contains(result.FinalReview.Observations, "component.tsx:14") {
+		t.Fatalf("rejection observations lost finding context: %q", result.FinalReview.Observations)
 	}
 }
 

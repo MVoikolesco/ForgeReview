@@ -30,6 +30,11 @@ type LLMProvider interface {
 	Chat(ctx context.Context, prompt string, maxOutputTokens int) (string, Usage, error)
 }
 
+// ModelName is implemented by adapters that expose their configured model.
+type ModelName interface {
+	Model() string
+}
+
 // Usage contains provider-reported token counts when the adapter exposes them.
 type Usage struct {
 	PromptTokens     int

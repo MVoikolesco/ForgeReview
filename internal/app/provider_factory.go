@@ -44,12 +44,16 @@ func providerFactory(db *sql.DB, cfg config.Config) func(context.Context, *int64
 			selectedProfile,
 		).Scan(&provider, &baseURL, &model, &ciphertext, &timeout)
 		if err != nil {
-			return nil, fmt.Errorf("review provider is not configured")
+			return nil, fmt.Errorf("review provider is not configured: %w", err)
 		}
 
 		key := ""
 		if ciphertext != "" {
-			key, _ = security.Decrypt(ciphertext)
+			var decryptErr error
+			key, decryptErr = security.Decrypt(ciphertext)
+			if decryptErr != nil {
+				return nil, fmt.Errorf("provider credential could not be decrypted: %w", decryptErr)
+			}
 		}
 
 		return providers.New(providers.Config{
