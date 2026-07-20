@@ -16,11 +16,13 @@ services:
 
   api:
     image: forgereview:local
-    build: .
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: gitea-ai-reviewer-api
     restart: unless-stopped
     env_file:
-      - .env
+      - ../.env
     environment:
       APP_MODE: api
       PORT: 8080
@@ -46,7 +48,7 @@ services:
     container_name: gitea-ai-reviewer-worker
     restart: unless-stopped
     env_file:
-      - .env
+      - ../.env
     environment:
       APP_MODE: worker
       REDIS_ADDR: redis:6379
@@ -55,8 +57,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./prompts:/app/prompts:ro
-      - ./config:/app/config:ro
+      - ../prompts:/app/prompts:ro
+      - ../config:/app/config:ro
       - config_data:/data
     depends_on:
       redis:
@@ -67,7 +69,8 @@ services:
   web:
     image: forgereview-web:local
     build:
-      context: ./web-admin
+      context: ../web-admin
+      dockerfile: Dockerfile
       target: ${APP_ENVIRONMENT:-production}
     container_name: gitea-ai-reviewer-web
     restart: unless-stopped
@@ -79,7 +82,7 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./web-admin:/workspace
+      - ../web-admin:/workspace
       - web_node_modules:/workspace/node_modules
     depends_on:
       api:

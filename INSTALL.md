@@ -10,8 +10,8 @@
 
 ```sh
 cp .env.example .env
-docker compose up -d --build
-docker compose ps
+docker compose -f docker/compose.yml up -d --build
+docker compose -f docker/compose.yml ps
 ```
 
 No `.env`, configure apenas bootstrap, infraestrutura e segredos:
@@ -45,15 +45,15 @@ A área **Operação** exibe heartbeat dos workers, tamanho e pendências da fil
 ## Diagnóstico
 
 ```sh
-docker compose ps
-docker compose logs --tail=100 api worker web
+docker compose -f docker/compose.yml ps
+docker compose -f docker/compose.yml logs --tail=100 api worker web
 ```
 
 Todos os serviços devem aparecer como ativos e API/Redis como saudáveis. Para recriar containers sem apagar o SQLite:
 
 ```sh
-docker compose down
-docker compose up -d --build --force-recreate
+docker compose -f docker/compose.yml down
+docker compose -f docker/compose.yml up -d --build --force-recreate
 ```
 
 Não acrescente `-v` ao comando `down` se quiser preservar as configurações.

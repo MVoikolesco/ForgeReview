@@ -4,9 +4,9 @@
 
 1. Copiar `.env.example` para `.env` e trocar credenciais, URL/token Gitea e chave AES de 32 bytes.
 2. Escolher `APP_ENVIRONMENT=development` para hot reload ou `production` para build/`next start`.
-3. Em desenvolvimento, executar `docker compose -f docker-compose.yml -f docker-compose.development.yml up -d --build`; o Go usa Air e o Next continua no serviço `web`.
-4. Em produção, executar `docker compose up -d --build`.
-5. Verificar `docker compose ps`, `curl http://localhost:8088/health` e `http://localhost:3000`.
+3. Em desenvolvimento, executar `docker compose -f docker/compose.yml -f docker/compose.development.yml up -d --build`; o Go usa Air e o Next continua no serviço `web`.
+4. Em produção, executar `bash production/build.sh` e depois, no artefato, `docker compose -f production/build-result/compose.yaml up -d --build`.
+5. Verificar `docker compose -f production/build-result/compose.yaml ps`, `curl http://localhost:8088/health` e `http://localhost:3000`.
 
 ## Ordem de inicialização
 

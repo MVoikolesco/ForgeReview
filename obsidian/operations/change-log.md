@@ -2,6 +2,8 @@
 
 ## 2026-07-20
 
+- Reorganizada a raiz: arquivos Docker foram para `docker/`, o script de release para `production/build.sh` e o artefato autocontido passou a ser gerado em `production/build-result/`; referências de Compose e documentação foram atualizadas.
+- Reorganizado o modal de edição de perfil em seções de identidade e regras de execução; estados booleanos agora usam switches acessíveis em vez de checkboxes.
 - O salvamento do perfil passou a enviar `PATCH` mínimo, somente com os campos alterados. A flag de logs detalhados requer a aplicação da migration `013_detailed_stage_logs.sql`; ambientes ainda em `012` não possuem a coluna no banco.
 - Ajustados os tamanhos mínimos de tipografia dos componentes recentes de flow, logs e configurações para priorizar legibilidade, elevando textos pequenos para a faixa de 10px e 12px.
 - O modal de detalhes de perfil deixou de ser somente leitura e agora permite editar nome, descrição, estado padrão/habilitado e a policy principal, incluindo a flag de logs detalhados.

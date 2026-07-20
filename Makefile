@@ -13,7 +13,10 @@ test:
 	go test ./...
 
 docker:
-	docker compose up --build
+	docker compose -f docker/compose.yml up --build
+
+production:
+	bash production/build.sh
 
 fmt:
 	go fmt ./...

@@ -1,19 +1,21 @@
 services:
   api:
     build:
-      context: .
+      context: ..
+      dockerfile: docker/Dockerfile
       target: development
     volumes:
-      - ./:/app
+      - ../:/app
       - air_tmp:/app/tmp
       - config_data:/data
 
   worker:
     build:
-      context: .
+      context: ..
+      dockerfile: docker/Dockerfile
       target: development
     volumes:
-      - ./:/app
+      - ../:/app
       - air_tmp:/app/tmp
       - config_data:/data
 

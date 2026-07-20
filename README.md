@@ -39,8 +39,8 @@ APP_MODE=worker go run ./cmd/server
 - qualquer outro valor, por padrão `production`: build Next e `npm run start`.
 
 ```sh
-APP_ENVIRONMENT=development docker compose up -d --build
-docker compose up -d --build
+APP_ENVIRONMENT=development docker compose -f docker/compose.yml -f docker/compose.development.yml up -d --build
+docker compose -f docker/compose.yml up -d --build
 ```
 
 Em desenvolvimento o Next é acessível em `http://localhost:3000` e reescreve `/api/*` para `api:8080`. A API continua acessível em `http://localhost:8088`. Em produção o serviço `web` executa o servidor Next; a imagem Go também contém uma exportação estática de fallback em `/app/web`.
@@ -68,7 +68,9 @@ O painel usa `/api/admin/*`, incluindo recursos CRUD, setup/catalog, observabili
 5. O resultado é salvo. Reviews manuais aguardam em `pending_reviews` quando a policy não permite publicação automática.
 6. Aprovação publica o review no Gitea; rejeição cancela sem publicar; reexecução retorna ao Redis.
 
-O SQLite não persiste diff bruto, prompts montados nem respostas intermediárias. Persiste metadados, steps, resultado final e resultado pendente de autorização.
+O SQLite não persiste diff bruto, prompts montados nem respostas intermediárias por padrão. Quando `enable_detailed_stage_logs` está ativa na policy, persiste os detalhes necessários para diagnóstico das etapas.
+
+O build de produção fica em `production/`. Execute `make production` ou `bash production/build.sh`; o resultado autocontido é gerado em `production/build-result/`.
 
 ## Configuração
 

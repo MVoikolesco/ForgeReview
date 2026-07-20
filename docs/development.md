@@ -13,8 +13,8 @@ Defina o ambiente do frontend como desenvolvimento e suba os quatro serviços:
 
 ```bash
 APP_ENVIRONMENT=development docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.development.yml \
+  -f docker/compose.yml \
+  -f docker/compose.development.yml \
   up -d --build --force-recreate
 ```
 
@@ -51,18 +51,18 @@ O watcher usa `WATCHPACK_POLLING`, que é a variável reconhecida pelo Next.js.
 ## Logs E Diagnóstico
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.development.yml logs -f api
-docker compose -f docker-compose.yml -f docker-compose.development.yml logs -f worker
-docker compose -f docker-compose.yml -f docker-compose.development.yml logs -f web
-docker compose -f docker-compose.yml -f docker-compose.development.yml ps
+docker compose -f docker/compose.yml -f docker/compose.development.yml logs -f api
+docker compose -f docker/compose.yml -f docker/compose.development.yml logs -f worker
+docker compose -f docker/compose.yml -f docker/compose.development.yml logs -f web
+docker compose -f docker/compose.yml -f docker/compose.development.yml ps
 ```
 
 Para verificar a fila Redis:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.development.yml exec redis \
+docker compose -f docker/compose.yml -f docker/compose.development.yml exec redis \
   redis-cli XINFO STREAM gitea:review-jobs
-docker compose -f docker-compose.yml -f docker-compose.development.yml exec redis \
+docker compose -f docker/compose.yml -f docker/compose.development.yml exec redis \
   redis-cli XPENDING gitea:review-jobs gitea-reviewers
 ```
 
@@ -82,29 +82,29 @@ Não use `docker compose down -v` durante o desenvolvimento se quiser preservar
 credenciais, banco ou fila. Para parar sem apagar volumes:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.development.yml down
+docker compose -f docker/compose.yml -f docker/compose.development.yml down
 ```
 
 Para reconstruir apenas o backend depois de alterar o Dockerfile ou o Air:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.development.yml \
+docker compose -f docker/compose.yml -f docker/compose.development.yml \
   up -d --build --force-recreate api worker
 ```
 
 ## Problemas Comuns
 
 Se o Air tentar criar um caminho inexistente em `/app/tmp`, confirme que o
-serviço foi iniciado com `docker-compose.development.yml` e que o volume
+serviço foi iniciado com `docker/compose.development.yml` e que o volume
 `air_tmp` está montado.
 
 Se o Next exibir `Could not find the module ... in the React Client Manifest`,
 recrie somente o cache do frontend e o serviço web:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.development.yml down
-docker compose -f docker-compose.yml -f docker-compose.development.yml run --rm --entrypoint sh web -lc 'rm -rf /workspace/.next/*'
-APP_ENVIRONMENT=development docker compose -f docker-compose.yml -f docker-compose.development.yml up -d --build --force-recreate web
+docker compose -f docker/compose.yml -f docker/compose.development.yml down
+docker compose -f docker/compose.yml -f docker/compose.development.yml run --rm --entrypoint sh web -lc 'rm -rf /workspace/.next/*'
+APP_ENVIRONMENT=development docker compose -f docker/compose.yml -f docker/compose.development.yml up -d --build --force-recreate web
 ```
 
 Se o provider responder `401`, revise a API key cadastrada no painel. Se

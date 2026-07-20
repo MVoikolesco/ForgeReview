@@ -2,11 +2,12 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROD_DIR="${ROOT_DIR}/Prod"
-COMPOSE_FILE="${PROD_DIR}/compose.yaml"
-ENV_FILE="${PROD_DIR}/.env"
-ENV_STAGE="${PROD_DIR}/.env.build"
+PRODUCTION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${PRODUCTION_DIR}/.." && pwd)"
+BUILD_DIR="${PRODUCTION_DIR}/build-result"
+COMPOSE_FILE="${BUILD_DIR}/compose.yaml"
+ENV_FILE="${BUILD_DIR}/.env"
+ENV_STAGE="${PRODUCTION_DIR}/.env.build"
 WEB_DIR="${ROOT_DIR}/web-admin"
 
 require_command() {
@@ -26,14 +27,14 @@ for path in \
   "${ROOT_DIR}/config/review-prompts.yaml" \
   "${WEB_DIR}/package.json" \
   "${WEB_DIR}/package-lock.json" \
-  "${ROOT_DIR}/docker-entrypoint.sh"; do
+  "${ROOT_DIR}/docker/docker-entrypoint.sh"; do
   if [[ ! -e "${path}" ]]; then
     printf 'Erro: caminho obrigatorio nao encontrado: %s\n' "${path}" >&2
     exit 1
   fi
 done
 
-mkdir -p "${PROD_DIR}"
+mkdir -p "${BUILD_DIR}"
 
 current_tag=0
 if [[ -f "${COMPOSE_FILE}" ]]; then
@@ -44,10 +45,12 @@ next_tag=$((current_tag + 1))
 
 if [[ -f "${ENV_FILE}" ]]; then
   cp "${ENV_FILE}" "${ENV_STAGE}"
+elif [[ -f "${PRODUCTION_DIR}/.env" ]]; then
+  cp "${PRODUCTION_DIR}/.env" "${ENV_STAGE}"
 elif [[ -f "${ROOT_DIR}/.env" ]]; then
   cp "${ROOT_DIR}/.env" "${ENV_STAGE}"
 else
-  printf 'Erro: nenhum .env encontrado em Prod/.env ou na raiz do projeto.\n' >&2
+  printf 'Erro: nenhum .env encontrado em production/build-result/.env, production/.env ou na raiz do projeto.\n' >&2
   printf 'Crie o .env de producao antes de executar o build.\n' >&2
   exit 1
 fi
@@ -58,29 +61,30 @@ cleanup() {
 trap cleanup EXIT
 
 rm -rf \
-  "${PROD_DIR}/app" \
-  "${PROD_DIR}/prompts" \
-  "${PROD_DIR}/web" \
-  "${PROD_DIR}/server" \
-  "${PROD_DIR}/Dockerfile" \
-  "${PROD_DIR}/docker-entrypoint.sh"
+  "${BUILD_DIR}/app" \
+  "${BUILD_DIR}/prompts" \
+  "${BUILD_DIR}/web" \
+  "${BUILD_DIR}/server" \
+  "${BUILD_DIR}/Dockerfile" \
+  "${BUILD_DIR}/docker-entrypoint.sh" \
+  "${BUILD_DIR}/compose.yaml"
 
-mkdir -p "${PROD_DIR}/app/config" "${PROD_DIR}/prompts" "${PROD_DIR}/web"
+mkdir -p "${BUILD_DIR}/app/config" "${BUILD_DIR}/prompts" "${BUILD_DIR}/web"
 
 printf 'Compilando binario Linux estatico...\n'
 (
   cd "${ROOT_DIR}"
-  CGO_ENABLED=0 GOOS=linux GOARCH="${GOARCH:-amd64}" go build -o "${PROD_DIR}/server.tmp" ./cmd/server
+  CGO_ENABLED=0 GOOS=linux GOARCH="${GOARCH:-amd64}" go build -o "${BUILD_DIR}/server.tmp" ./cmd/server
 )
-mv "${PROD_DIR}/server.tmp" "${PROD_DIR}/server"
-chmod 0755 "${PROD_DIR}/server"
+mv "${BUILD_DIR}/server.tmp" "${BUILD_DIR}/server"
+chmod 0755 "${BUILD_DIR}/server"
 
 printf 'Compilando painel Next.js estatico...\n'
 (
   cd "${WEB_DIR}"
   npm ci --no-audit --no-fund
   npm run lint
-  NEXT_TELEMETRY_DISABLED=1 npm run build
+  NEXT_OUTPUT=export NEXT_TELEMETRY_DISABLED=1 npm run build
 )
 
 if [[ ! -f "${WEB_DIR}/out/index.html" ]]; then
@@ -89,16 +93,16 @@ if [[ ! -f "${WEB_DIR}/out/index.html" ]]; then
 fi
 
 printf 'Sincronizando artefatos da aplicacao...\n'
-cp -R "${ROOT_DIR}/prompts/." "${PROD_DIR}/prompts/"
-cp "${ROOT_DIR}/config/review-prompts.yaml" "${PROD_DIR}/app/config/review-prompts.yaml"
-chmod -R a+rX "${PROD_DIR}/prompts" "${PROD_DIR}/app/config"
-cp -R "${WEB_DIR}/out/." "${PROD_DIR}/web/"
-cp "${ROOT_DIR}/docker-entrypoint.sh" "${PROD_DIR}/docker-entrypoint.sh"
-chmod 0755 "${PROD_DIR}/docker-entrypoint.sh"
+cp -R "${ROOT_DIR}/prompts/." "${BUILD_DIR}/prompts/"
+cp "${ROOT_DIR}/config/review-prompts.yaml" "${BUILD_DIR}/app/config/review-prompts.yaml"
+chmod -R a+rX "${BUILD_DIR}/prompts" "${BUILD_DIR}/app/config"
+cp -R "${WEB_DIR}/out/." "${BUILD_DIR}/web/"
+cp "${ROOT_DIR}/docker/docker-entrypoint.sh" "${BUILD_DIR}/docker-entrypoint.sh"
+chmod 0755 "${BUILD_DIR}/docker-entrypoint.sh"
 
-mkdir -p "${PROD_DIR}/data"
+mkdir -p "${BUILD_DIR}/data"
 
-cat > "${PROD_DIR}/Dockerfile" <<'EOF'
+cat > "${BUILD_DIR}/Dockerfile" <<'EOF'
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates su-exec \
@@ -197,10 +201,10 @@ else
   printf 'Aviso: Docker nao encontrado; validacao do Compose foi ignorada.\n'
 fi
 
-printf '\nPasta Prod recriada com sucesso.\n'
+printf '\nArtefato de production recriado com sucesso.\n'
 printf 'Imagem: forgereview-runtime:local-v%s\n' "${next_tag}"
-printf 'Frontend: %s\n' "${PROD_DIR}/web"
-printf 'Binario: %s\n' "${PROD_DIR}/server"
+printf 'Frontend: %s\n' "${BUILD_DIR}/web"
+printf 'Binario: %s\n' "${BUILD_DIR}/server"
 printf 'Env preservado em: %s\n' "${ENV_FILE}"
-printf 'Dados persistentes: %s\n' "${PROD_DIR}/data"
-printf 'Proximo passo: copie a pasta Prod para o servidor e execute docker compose up -d --build.\n'
+printf 'Dados persistentes: %s\n' "${BUILD_DIR}/data"
+printf 'Proximo passo: copie production/build-result para o servidor e execute docker compose -f compose.yaml up -d --build.\n'

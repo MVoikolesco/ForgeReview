@@ -25,4 +25,5 @@ logs/
 coverage.*
 
 .DS_Store
-Prod
+production/build-result
+production/.env

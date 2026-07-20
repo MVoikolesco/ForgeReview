@@ -30,7 +30,7 @@ RUN apk add --no-cache ca-certificates su-exec \
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --chmod=0755 docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
     && chown -R app:app /app
