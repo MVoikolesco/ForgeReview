@@ -191,7 +191,7 @@ export function SettingsArea({ request, onAuthError }: Props) {
         />
       )}
 
-      {detail && <SettingsDetail detail={detail} onClose={closeDetail} />}
+      {detail && <SettingsDetail detail={detail} onClose={closeDetail} request={request} onAuthError={onAuthError} onSaved={() => void load()} />}
     </div>
   );
 }
@@ -397,7 +397,7 @@ function CatalogTab({ types, onOpen }: {
   );
 }
 
-function SettingsDetail({ detail, onClose }: { detail: Detail; onClose: () => void }) {
+function SettingsDetail({ detail, onClose, request, onAuthError, onSaved }: { detail: Detail; onClose: () => void; request: AdminRequest; onAuthError: () => void; onSaved: () => void; }) {
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
@@ -440,11 +440,11 @@ function SettingsDetail({ detail, onClose }: { detail: Detail; onClose: () => vo
     <div className="settings-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section ref={dialogRef} className="settings-modal" role="dialog" aria-modal="true" aria-label="Detalhes da configuração">
         <header>
-          <div><span className="eyebrow">Configuração somente leitura</span><h2>{detail.value.name}</h2></div>
+          <div><span className="eyebrow">{detail.kind === "profile" ? "Configuração editável" : "Configuração somente leitura"}</span><h2>{detail.value.name}</h2></div>
           <button ref={closeRef} onClick={onClose} aria-label="Fechar"><X size={19} /></button>
         </header>
         <div className="settings-modal-content">
-          {detail.kind === "profile" && <ProfileDetail profile={detail.value} />}
+          {detail.kind === "profile" && <ProfileDetail profile={detail.value} request={request} onAuthError={onAuthError} onSaved={onSaved} />}
           {detail.kind === "stage" && <StageDetail stage={detail.value} />}
           {detail.kind === "type" && <TypeDetail type={detail.value} />}
         </div>
@@ -453,28 +453,99 @@ function SettingsDetail({ detail, onClose }: { detail: Detail; onClose: () => vo
   );
 }
 
-function ProfileDetail({ profile }: { profile: ReviewSettingsProfile }) {
+function ProfileDetail({ profile, request, onAuthError, onSaved }: { profile: ReviewSettingsProfile; request: AdminRequest; onAuthError: () => void; onSaved: () => void; }) {
   const policy = profile.policy;
+  const [form, setForm] = useState({
+    name: profile.name,
+    description: profile.description || "",
+    is_enabled: profile.is_enabled,
+    is_default: profile.is_default,
+    max_block_chars: policy?.max_block_chars ?? 12000,
+    max_files_per_block: policy?.max_files_per_block ?? 4,
+    minimum_confidence: policy?.minimum_confidence ?? 0.75,
+    max_parallel_groups: policy?.max_parallel_groups ?? 1,
+    allow_autonomous_rejection: policy?.allow_autonomous_rejection ?? false,
+    enable_detailed_stage_logs: policy?.enable_detailed_stage_logs ?? false,
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function save() {
+    setSaving(true);
+    setError("");
+    try {
+      const profilePatch: Record<string, unknown> = {};
+      if (form.name !== profile.name) profilePatch.name = form.name;
+      if (form.description !== (profile.description || "")) profilePatch.description = form.description;
+      if (form.is_enabled !== profile.is_enabled) profilePatch.is_enabled = form.is_enabled ? 1 : 0;
+      if (form.is_default !== profile.is_default) profilePatch.is_default = form.is_default ? 1 : 0;
+      if (Object.keys(profilePatch).length > 0) {
+        await request(`review/profiles/${profile.id}`, {
+          method: "PATCH",
+          body: JSON.stringify(profilePatch),
+        });
+      }
+      if (policy?.id) {
+        const policyPatch: Record<string, unknown> = {};
+        if (Number(form.max_block_chars) !== policy.max_block_chars) policyPatch.max_block_chars = Number(form.max_block_chars);
+        if (Number(form.max_files_per_block) !== policy.max_files_per_block) policyPatch.max_files_per_block = Number(form.max_files_per_block);
+        if (Number(form.minimum_confidence) !== policy.minimum_confidence) policyPatch.review_min_publish_confidence = Number(form.minimum_confidence);
+        if (Number(form.max_parallel_groups) !== policy.max_parallel_groups) policyPatch.review_max_parallel_groups = Number(form.max_parallel_groups);
+        if (form.allow_autonomous_rejection !== policy.allow_autonomous_rejection) policyPatch.allow_autonomous_rejection = form.allow_autonomous_rejection ? 1 : 0;
+        if (form.enable_detailed_stage_logs !== policy.enable_detailed_stage_logs) policyPatch.enable_detailed_stage_logs = form.enable_detailed_stage_logs ? 1 : 0;
+        if (Object.keys(policyPatch).length > 0) {
+          await request(`review/policies/${policy.id}`, {
+            method: "PATCH",
+            body: JSON.stringify(policyPatch),
+          });
+        }
+      }
+      onSaved();
+    } catch (failure) {
+      if (failure instanceof Error && failure.message === "AUTH") return onAuthError();
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <>
+      {error && <div className="banner error">{error}</div>}
       <div className="settings-detail-summary">
         <span className="settings-avatar large">{initials(profile.name)}</span>
         <div><strong>{profile.model?.name || "Sem modelo"}</strong><small>{profile.model ? `${profile.model.provider} · ${profile.model.connection}` : "Nenhuma rota de IA vinculada"}</small></div>
         <span className={`settings-state ${profile.is_enabled ? "enabled" : "disabled"}`}>{profile.is_enabled ? "Ativo" : "Inativo"}</span>
       </div>
-      <h3 className="settings-detail-title">Policy efetiva</h3>
-      {policy ? (
-        <div className="settings-detail-grid">
-          <DetailFact label="Bloco máximo" value={`${policy.max_block_chars.toLocaleString("pt-BR")} caracteres`} />
-          <DetailFact label="Arquivos por grupo" value={String(policy.max_files_per_block)} />
-          <DetailFact label="Confiança mínima" value={percent(policy.minimum_confidence)} />
-          <DetailFact label="Grupos paralelos" value={String(policy.max_parallel_groups)} />
-          <DetailFact label="Margem de contexto" value={`${policy.context_safety_tokens.toLocaleString("pt-BR")} tokens`} />
-          <DetailFact label="Severidade média" value={policy.medium_severity_event} />
-          <DetailFact label="Resultado parcial" value={policy.partial_event} />
-          <DetailFact label="Rejeição autônoma" value={policy.allow_autonomous_rejection ? "Permitida" : "Protegida"} />
+      <section className="settings-edit-section">
+        <div className="settings-edit-heading"><div><h3>Identidade e estado</h3><p>Defina como este perfil aparece e se pode ser usado pelo runtime.</p></div></div>
+        <div className="settings-form-grid">
+        <label><span>Nome</span><input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} /></label>
+        <label><span>Descrição</span><input value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} /></label>
+        <SwitchField checked={form.is_enabled} label="Perfil habilitado" onChange={(checked) => setForm((current) => ({ ...current, is_enabled: checked }))} />
+        <SwitchField checked={form.is_default} label="Perfil padrão" onChange={(checked) => setForm((current) => ({ ...current, is_default: checked }))} />
         </div>
+      </section>
+      <section className="settings-edit-section">
+        <div className="settings-edit-heading"><div><h3>Regras de execução</h3><p>Limites aplicados às revisões deste perfil.</p></div>{policy && <span className="settings-edit-badge">Policy #{policy.id}</span>}</div>
+      {policy ? (
+        <>
+        <div className="settings-form-grid policy">
+          <label><span>Bloco máximo</span><input type="number" value={form.max_block_chars} onChange={(event) => setForm((current) => ({ ...current, max_block_chars: Number(event.target.value) }))} /></label>
+          <label><span>Arquivos por grupo</span><input type="number" value={form.max_files_per_block} onChange={(event) => setForm((current) => ({ ...current, max_files_per_block: Number(event.target.value) }))} /></label>
+          <label><span>Confiança mínima</span><input type="number" min="0" max="1" step="0.01" value={form.minimum_confidence} onChange={(event) => setForm((current) => ({ ...current, minimum_confidence: Number(event.target.value) }))} /></label>
+          <label><span>Grupos paralelos</span><input type="number" min="1" step="1" value={form.max_parallel_groups} onChange={(event) => setForm((current) => ({ ...current, max_parallel_groups: Number(event.target.value) }))} /></label>
+          <SwitchField checked={form.allow_autonomous_rejection} label="Permitir rejeição autônoma" onChange={(checked) => setForm((current) => ({ ...current, allow_autonomous_rejection: checked }))} />
+          <SwitchField checked={form.enable_detailed_stage_logs} label="Logs detalhados por etapa" onChange={(checked) => setForm((current) => ({ ...current, enable_detailed_stage_logs: checked }))} />
+        </div>
+        </>
       ) : <p className="settings-muted">Este perfil não possui policy vinculada.</p>}
+      </section>
+      <div className="settings-detail-actions">
+        <button className="primary-button" onClick={() => void save()} disabled={saving}>
+          {saving ? <RefreshCw className="spin" size={16} /> : <Check size={16} />} Salvar alterações
+        </button>
+      </div>
       <h3 className="settings-detail-title">Prompt base</h3>
       {profile.prompt ? (
         <div className="settings-prompt-block">
@@ -483,6 +554,16 @@ function ProfileDetail({ profile }: { profile: ReviewSettingsProfile }) {
         </div>
       ) : <p className="settings-muted">As instruções específicas de cada etapa serão utilizadas.</p>}
     </>
+  );
+}
+
+function SwitchField({ checked, label, onChange }: { checked: boolean; label: string; onChange: (checked: boolean) => void }) {
+  return (
+    <label className="settings-switch">
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <span className="settings-switch-track" aria-hidden="true"><i /></span>
+      <span>{label}</span>
+    </label>
   );
 }
 

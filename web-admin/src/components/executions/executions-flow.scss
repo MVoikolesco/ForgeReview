@@ -422,6 +422,10 @@
   }
 }
 
+.execution-node>header {
+  position: relative;
+}
+
 .react-flow__node.selected .execution-node {
   border-color: #77a2ed;
   box-shadow: 0 0 0 4px rgba(79, 140, 255, .12), 0 18px 42px rgba(35, 91, 190, .17);
@@ -435,7 +439,7 @@
   padding: 4px 8px;
   color: #718078;
   background: #f0f3f1;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: .5px;
   text-transform: uppercase;
@@ -449,9 +453,41 @@
 }
 
 .execution-node-percent {
-  color: tokens.$muted;
-  font-size: 9px;
-  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+
+  span {
+    color: tokens.$muted;
+    font-size: 10px;
+    font-weight: 800;
+  }
+
+  .execution-node-logs-button {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid tokens.$line;
+    border-radius: 50%;
+    background: tokens.$surface;
+    color: tokens.$muted;
+    cursor: pointer;
+    z-index: 2;
+
+    &:hover,
+    &:focus-visible {
+      border-color: #3974dc;
+      color: #3974dc;
+      outline: none;
+    }
+
+    &:disabled {
+      opacity: .38;
+      cursor: not-allowed;
+    }
+  }
 }
 
 .execution-node-progress {
@@ -563,14 +599,14 @@
   time,
   footer span {
     color: #8a96a8;
-    font-size: 8px;
+    font-size: 10px;
     white-space: nowrap;
   }
 
   p {
     margin: 0;
     color: #3569bd;
-    font-size: 8px;
+    font-size: 10px;
     font-weight: 700;
   }
 

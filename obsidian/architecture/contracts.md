@@ -15,6 +15,7 @@ Recursos CRUD: `ai/providers`, `ai/connections`, `ai/models`, `ai/model-paramete
 Rotas especiais consumidas pelo frontend:
 
 - `GET /status`, `GET /observability/metrics`, `/logs`, `/reviews`, `/progress`.
+- `GET /observability/stage-logs?name=...&stage=...` retorna tentativas persistidas, artefatos e metadados detalhados de uma etapa.
 - `POST /setup/catalog`, `/setup/complete`, `/setup/add-model`.
 - `POST /reviews/manual`.
 - `GET /review/settings` agrega profiles, policies efetivas, prompt ativo,
@@ -33,6 +34,9 @@ Todas as rotas `/api/v1/*` exigem Basic Auth e usam `{success,data,error}`. Rota
 - `final_review` preserva `gitea_event`, `status`, `summary` e `observations`.
 - O backend recalcula `gitea_event`/`status` a partir dos achados válidos e normaliza `summary`/`observations` para não publicar texto contraditório com a decisão final.
 - O parser das respostas de stage aceita fences Markdown e tenta reparar JSON truncado por fechamento ausente antes de falhar o contrato da etapa.
+- `GET /observability/progress` já retorna todos os eventos persistidos em `review_steps`; o flow usa esses eventos no modal de diagnóstico por etapa, sem criar uma segunda fonte de logs no Redis.
+- Logs detalhados de prompt/resposta só são persistidos quando `review_policies.enable_detailed_stage_logs=1` para o profile em uso.
+- Edições do perfil/policy usam `PATCH` parcial; o painel não reenvia valores inalterados.
 - Steps internos são traduzidos para stages legados do flow; [[data-model|mapeamento completo]].
 - Estados de pré-publicação são `aguardando_autorizacao` no banco e `waiting` no painel.
 - Quando a review já está `concluido`, a observabilidade adiciona um evento terminal sintético de `publicacao` para o painel não permanecer preso no último `review_step` intermediário.

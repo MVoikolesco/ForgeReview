@@ -44,6 +44,9 @@ O Air não observa:
 - `vendor`
 
 O frontend possui seu próprio hot reload pelo Next.js no serviço `web`.
+O cache `.next` fica em um volume separado (`web_next_cache`) para não ser
+gerado no bind mount do Docker Desktop, evitando manifests RSC inconsistentes.
+O watcher usa `WATCHPACK_POLLING`, que é a variável reconhecida pelo Next.js.
 
 ## Logs E Diagnóstico
 
@@ -94,6 +97,15 @@ docker compose -f docker-compose.yml -f docker-compose.development.yml \
 Se o Air tentar criar um caminho inexistente em `/app/tmp`, confirme que o
 serviço foi iniciado com `docker-compose.development.yml` e que o volume
 `air_tmp` está montado.
+
+Se o Next exibir `Could not find the module ... in the React Client Manifest`,
+recrie somente o cache do frontend e o serviço web:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.development.yml down
+docker compose -f docker-compose.yml -f docker-compose.development.yml run --rm --entrypoint sh web -lc 'rm -rf /workspace/.next/*'
+APP_ENVIRONMENT=development docker compose -f docker-compose.yml -f docker-compose.development.yml up -d --build --force-recreate web
+```
 
 Se o provider responder `401`, revise a API key cadastrada no painel. Se
 aparecer `provider credential could not be decrypted`, confirme que API e

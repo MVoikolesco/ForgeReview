@@ -252,6 +252,11 @@ export const resources: Resource[] = [
         type: "boolean",
       },
       {
+        key: "enable_detailed_stage_logs",
+        label: "Logs detalhados por etapa",
+        type: "boolean",
+      },
+      {
         key: "unload_model_after_review",
         label: "Descarregar modelo",
         type: "boolean",

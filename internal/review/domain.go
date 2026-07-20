@@ -62,3 +62,24 @@ type Review struct {
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 	Steps       []Step     `json:"steps,omitempty"`
 }
+
+// StageArtifact records one persisted artifact linked to one stage execution.
+type StageArtifact struct {
+	Type    string `json:"type"`
+	Payload any    `json:"payload,omitempty"`
+}
+
+// StageExecutionLog records one persisted stage execution or retry attempt.
+type StageExecutionLog struct {
+	ID           int64           `json:"id"`
+	StageKey     string          `json:"stage_key"`
+	Attempt      int             `json:"attempt"`
+	Status       string          `json:"status"`
+	ArtifactType string          `json:"artifact_type,omitempty"`
+	Metadata     map[string]any  `json:"metadata,omitempty"`
+	StartedAt    time.Time       `json:"started_at"`
+	FinishedAt   *time.Time      `json:"finished_at,omitempty"`
+	DurationMS   int64           `json:"duration_ms,omitempty"`
+	Error        string          `json:"error,omitempty"`
+	Artifacts    []StageArtifact `json:"artifacts,omitempty"`
+}

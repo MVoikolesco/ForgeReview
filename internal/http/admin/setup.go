@@ -377,8 +377,8 @@ func (h *AdminHandler) completeSetup(c *gin.Context) {
 		c,
 		`INSERT INTO review_policies(
 			profile_id,max_block_chars,max_files_per_block,review_concurrency,
-			review_final_retries,publish_manual_reviews,allow_autonomous_rejection
-		) VALUES(?,?,?,?,?,?,?)`,
+			review_final_retries,publish_manual_reviews,allow_autonomous_rejection,enable_detailed_stage_logs
+		) VALUES(?,?,?,?,?,?,?,?)`,
 		profileID,
 		intValue(input.Policy["max_block_chars"], h.cfg.ReviewMaxBlockChars),
 		intValue(input.Policy["max_files_per_block"], h.cfg.ReviewMaxFilesPerBlock),
@@ -386,6 +386,7 @@ func (h *AdminHandler) completeSetup(c *gin.Context) {
 		intValue(input.Policy["review_final_retries"], 5),
 		boolIntValue(input.Policy["publish_manual_reviews"]),
 		boolIntValue(input.Policy["allow_autonomous_rejection"]),
+		boolIntValue(input.Policy["enable_detailed_stage_logs"]),
 	)
 	if err != nil {
 		responses.LegacyError(c, http.StatusBadRequest, "could not create review policy")

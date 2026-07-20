@@ -192,7 +192,9 @@
   font-weight: 700;
   cursor: pointer;
 
-  input { accent-color: #2869c7; }
+  input {
+    accent-color: #2869c7;
+  }
 }
 
 .close-button {
@@ -347,13 +349,13 @@
       display: block;
       margin-top: 5px;
       color: #939e97;
-      font-size: 8px;
+      font-size: 10px;
       font-weight: 400;
     }
 
     em {
       color: #a0aaa4;
-      font-size: 8px;
+      font-size: 10px;
       font-weight: 400;
       font-style: normal;
     }
@@ -392,7 +394,7 @@
 
   small {
     color: tokens.$muted;
-    font-size: 8px;
+    font-size: 10px;
   }
 
   strong {
@@ -446,7 +448,7 @@
   p {
     margin: 2px 0 0;
     color: #7588a7;
-    font-size: 8px;
+    font-size: 10px;
   }
 }
 
@@ -528,7 +530,7 @@
   code {
     margin-top: 4px;
     color: #909a94;
-    font-size: 8px;
+    font-size: 10px;
   }
 }
 
@@ -556,7 +558,7 @@
   small {
     display: block;
     color: #9aa49e;
-    font-size: 8px;
+    font-size: 10px;
   }
 
   strong {
@@ -633,7 +635,7 @@
 
   small {
     color: #929d96;
-    font-size: 8px;
+    font-size: 10px;
   }
 
   strong {

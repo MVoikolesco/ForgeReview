@@ -22,5 +22,12 @@ services:
       target: development
     environment:
       APP_ENVIRONMENT: development
+      WATCHPACK_POLLING: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
     ports:
       - "3010:3000"
+    volumes:
+      - web_next_cache:/workspace/.next
+
+volumes:
+  web_next_cache:

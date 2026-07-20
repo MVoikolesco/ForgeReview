@@ -161,6 +161,56 @@ func (h *AdminHandler) observabilityProgress(c *gin.Context) {
 	})
 }
 
+func (h *AdminHandler) observabilityStageLogs(c *gin.Context) {
+	id := c.Query("name")
+	stageKey := c.Query("stage")
+	if id == "" || stageKey == "" {
+		responses.LegacyError(c, http.StatusBadRequest, "name e stage são obrigatórios")
+		return
+	}
+	entries, err := h.reviewRepo.StageExecutionLogs(c, id, stageKey)
+	if err != nil {
+		responses.LegacyError(c, http.StatusInternalServerError, "could not load stage logs")
+		return
+	}
+	out := make([]gin.H, 0, len(entries))
+	for _, entry := range entries {
+		item := gin.H{
+			"id":            entry.ID,
+			"stage_key":     entry.StageKey,
+			"attempt":       entry.Attempt,
+			"status":        entry.Status,
+			"artifact_type": entry.ArtifactType,
+			"metadata":      entry.Metadata,
+			"started_at":    entry.StartedAt,
+			"finished_at":   entry.FinishedAt,
+			"duration_ms":   entry.DurationMS,
+			"error":         entry.Error,
+			"artifacts":     entry.Artifacts,
+		}
+		if metadata := entry.Metadata; metadata != nil {
+			if value := stringValue(metadata["group_id"]); value != "" {
+				item["group_id"] = value
+			}
+			for _, key := range []string{"group_index", "total_groups", "attempt", "max_attempts", "input_chars", "response_chars", "requested_output_tokens", "actual_prompt_tokens", "actual_completion_tokens", "duration_ms"} {
+				if value, ok := metadata[key]; ok {
+					item[key] = intValue(value, 0)
+				}
+			}
+			for _, key := range []string{"prompt", "response", "provider", "model"} {
+				if value := stringValue(metadata[key]); value != "" {
+					item[key] = value
+				}
+			}
+			if files := stringValues(metadata["files"]); len(files) > 0 {
+				item["files"] = files
+			}
+		}
+		out = append(out, item)
+	}
+	responses.Legacy(c, http.StatusOK, gin.H{"name": id, "stage": stageKey, "entries": out})
+}
+
 // progressMapping converts persisted review steps to frontend stages, statuses,
 // and approximate completion percentages.
 func progressMapping(step, rawStatus string) (stage, status string, percent int) {

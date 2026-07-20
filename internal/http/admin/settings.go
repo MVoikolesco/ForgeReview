@@ -38,16 +38,17 @@ type settingsModel struct {
 }
 
 type settingsPolicy struct {
-	ID                    int64   `json:"id"`
-	MaxBlockChars         int     `json:"max_block_chars"`
-	MaxFilesPerBlock      int     `json:"max_files_per_block"`
-	PublishManualReviews  bool    `json:"publish_manual_reviews"`
-	AllowAutonomousReject bool    `json:"allow_autonomous_rejection"`
-	ContextSafetyTokens   int     `json:"context_safety_tokens"`
-	MinimumConfidence     float64 `json:"minimum_confidence"`
-	MaxParallelGroups     int     `json:"max_parallel_groups"`
-	MediumSeverityEvent   string  `json:"medium_severity_event"`
-	PartialEvent          string  `json:"partial_event"`
+	ID                      int64   `json:"id"`
+	MaxBlockChars           int     `json:"max_block_chars"`
+	MaxFilesPerBlock        int     `json:"max_files_per_block"`
+	PublishManualReviews    bool    `json:"publish_manual_reviews"`
+	AllowAutonomousReject   bool    `json:"allow_autonomous_rejection"`
+	EnableDetailedStageLogs bool    `json:"enable_detailed_stage_logs"`
+	ContextSafetyTokens     int     `json:"context_safety_tokens"`
+	MinimumConfidence       float64 `json:"minimum_confidence"`
+	MaxParallelGroups       int     `json:"max_parallel_groups"`
+	MediumSeverityEvent     string  `json:"medium_severity_event"`
+	PartialEvent            string  `json:"partial_event"`
 }
 
 type settingsPrompt struct {
@@ -141,7 +142,7 @@ func (h *AdminHandler) settingsProfiles(c *gin.Context) ([]settingsProfile, erro
 	rows, err := h.db.QueryContext(c, `SELECT rp.id,rp.name,rp.description,rp.is_default,rp.is_enabled,rp.created_at,rp.updated_at,
 		m.id,m.display_name,p.display_name,ac.name,m.is_enabled,ac.is_enabled,p.is_enabled,
 		pol.id,pol.max_block_chars,pol.max_files_per_block,pol.publish_manual_reviews,
-		pol.allow_autonomous_rejection,pol.review_context_safety_margin_tokens,
+		pol.allow_autonomous_rejection,pol.enable_detailed_stage_logs,pol.review_context_safety_margin_tokens,
 		pol.review_min_publish_confidence,pol.review_max_parallel_groups,
 		pol.review_medium_severity_event,pol.review_partial_event
 		FROM review_profiles rp
@@ -162,12 +163,12 @@ func (h *AdminHandler) settingsProfiles(c *gin.Context) ([]settingsProfile, erro
 		var modelName, providerName, connectionName sql.NullString
 		var modelEnabled, connectionEnabled, providerEnabled sql.NullInt64
 		var policyID sql.NullInt64
-		var maxBlockChars, maxFiles, publish, reject, safety, parallel sql.NullInt64
+		var maxBlockChars, maxFiles, publish, reject, detailedLogs, safety, parallel sql.NullInt64
 		var confidence sql.NullFloat64
 		var mediumEvent, partialEvent sql.NullString
 		if err = rows.Scan(&item.ID, &item.Name, &item.Description, &isDefault, &isEnabled, &item.CreatedAt, &item.UpdatedAt,
 			&modelID, &modelName, &providerName, &connectionName, &modelEnabled, &connectionEnabled, &providerEnabled,
-			&policyID, &maxBlockChars, &maxFiles, &publish, &reject, &safety, &confidence, &parallel, &mediumEvent, &partialEvent); err != nil {
+			&policyID, &maxBlockChars, &maxFiles, &publish, &reject, &detailedLogs, &safety, &confidence, &parallel, &mediumEvent, &partialEvent); err != nil {
 			return nil, err
 		}
 		item.IsDefault = isDefault != 0
@@ -179,7 +180,8 @@ func (h *AdminHandler) settingsProfiles(c *gin.Context) ([]settingsProfile, erro
 		if policyID.Valid {
 			item.Policy = &settingsPolicy{ID: policyID.Int64, MaxBlockChars: int(maxBlockChars.Int64), MaxFilesPerBlock: int(maxFiles.Int64),
 				PublishManualReviews: publish.Int64 != 0, AllowAutonomousReject: reject.Int64 != 0,
-				ContextSafetyTokens: int(safety.Int64), MinimumConfidence: confidence.Float64,
+				EnableDetailedStageLogs: detailedLogs.Int64 != 0,
+				ContextSafetyTokens:     int(safety.Int64), MinimumConfidence: confidence.Float64,
 				MaxParallelGroups: int(parallel.Int64), MediumSeverityEvent: mediumEvent.String, PartialEvent: partialEvent.String}
 		}
 		items = append(items, item)

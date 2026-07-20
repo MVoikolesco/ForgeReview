@@ -14,6 +14,7 @@ type Policy struct {
 	MaxFilesPerBlock      int
 	PublishManualReviews  bool
 	AllowAutonomousReject bool
+	DetailedStageLogs     bool
 	PlannerEnabled        bool
 	ConsolidatorEnabled   bool
 	VerifierEnabled       bool
@@ -132,14 +133,14 @@ func (r *Repository) Policy(ctx context.Context, job queue.ReviewJob) (Policy, e
 // from pipeline_stages.
 func (r *Repository) PolicyForProfile(ctx context.Context, profileID *int64) (Policy, error) {
 	var policy Policy
-	var publish, reject, planner, consolidator, verifier, formatter int
+	var publish, reject, detailedLogs, planner, consolidator, verifier, formatter int
 	if profileID == nil {
 		return policy, sql.ErrNoRows
 	}
 	err := r.db.QueryRowContext(
 		ctx,
 		`SELECT pol.max_block_chars, pol.max_files_per_block,
-		        pol.publish_manual_reviews, pol.allow_autonomous_rejection,
+		        pol.publish_manual_reviews, pol.allow_autonomous_rejection, pol.enable_detailed_stage_logs,
 		        pol.review_planner_enabled, pol.review_consolidator_enabled,
 		        pol.review_verifier_enabled, pol.review_formatter_enabled,
 		        pol.review_planner_max_output_tokens, pol.review_group_max_output_tokens,
@@ -156,6 +157,7 @@ func (r *Repository) PolicyForProfile(ctx context.Context, profileID *int64) (Po
 		&policy.MaxFilesPerBlock,
 		&publish,
 		&reject,
+		&detailedLogs,
 		&planner, &consolidator, &verifier, &formatter,
 		&policy.PlannerMaxTokens, &policy.GroupMaxTokens,
 		&policy.ConsolidatorMaxTokens, &policy.VerifierMaxTokens,
@@ -165,6 +167,7 @@ func (r *Repository) PolicyForProfile(ctx context.Context, profileID *int64) (Po
 	)
 	policy.PublishManualReviews = publish != 0
 	policy.AllowAutonomousReject = reject != 0
+	policy.DetailedStageLogs = detailedLogs != 0
 	policy.PlannerEnabled = planner != 0
 	policy.ConsolidatorEnabled = consolidator != 0
 	policy.VerifierEnabled = verifier != 0

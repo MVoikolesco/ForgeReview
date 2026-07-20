@@ -133,6 +133,100 @@ func (r *Repository) Steps(ctx context.Context, id string) ([]Step, error) {
 	return items, rows.Err()
 }
 
+// StageExecutionLogs returns all persisted execution and retry rows for one review stage.
+func (r *Repository) StageExecutionLogs(ctx context.Context, reviewID, stageKey string) ([]StageExecutionLog, error) {
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT se.id,se.stage_key,se.attempt,se.status,se.artifact_type,se.metadata_json,
+		        se.started_at,se.finished_at,se.duration_ms,se.error_message
+		 FROM stage_executions se
+		 JOIN pipeline_executions pe ON pe.id=se.pipeline_execution_id
+		 WHERE pe.review_id=? AND se.stage_key=?
+		 ORDER BY se.started_at,se.id`,
+		reviewID,
+		stageKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []StageExecutionLog{}
+	ids := make([]int64, 0, 8)
+	byID := map[int64]int{}
+	for rows.Next() {
+		var item StageExecutionLog
+		var metadata, started, finished, errorText sql.NullString
+		if err = rows.Scan(
+			&item.ID,
+			&item.StageKey,
+			&item.Attempt,
+			&item.Status,
+			&item.ArtifactType,
+			&metadata,
+			&started,
+			&finished,
+			&item.DurationMS,
+			&errorText,
+		); err != nil {
+			return nil, err
+		}
+		item.StartedAt = parseTime(started.String)
+		item.FinishedAt = parseTimePtr(finished.String)
+		item.Error = errorText.String
+		_ = json.Unmarshal([]byte(metadata.String), &item.Metadata)
+		byID[item.ID] = len(items)
+		ids = append(ids, item.ID)
+		items = append(items, item)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return items, nil
+	}
+
+	artifactRows, err := r.db.QueryContext(
+		ctx,
+		`SELECT stage_execution_id,artifact_type,payload_json
+		 FROM stage_artifacts
+		 WHERE stage_execution_id IN (
+		   SELECT se.id FROM stage_executions se
+		   JOIN pipeline_executions pe ON pe.id=se.pipeline_execution_id
+		   WHERE pe.review_id=? AND se.stage_key=?
+		 )
+		 ORDER BY id`,
+		reviewID,
+		stageKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer artifactRows.Close()
+	for artifactRows.Next() {
+		var stageExecutionID int64
+		var artifactType, payload sql.NullString
+		if err = artifactRows.Scan(&stageExecutionID, &artifactType, &payload); err != nil {
+			return nil, err
+		}
+		index, ok := byID[stageExecutionID]
+		if !ok {
+			continue
+		}
+		artifact := StageArtifact{Type: artifactType.String}
+		if payload.String != "" {
+			var value any
+			if json.Unmarshal([]byte(payload.String), &value) == nil {
+				artifact.Payload = value
+			} else {
+				artifact.Payload = payload.String
+			}
+		}
+		items[index].Artifacts = append(items[index].Artifacts, artifact)
+	}
+	return items, artifactRows.Err()
+}
+
 // populateReview converts nullable database values into a Review value.
 func populateReview(
 	item *Review,

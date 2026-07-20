@@ -78,6 +78,7 @@ const defaults: SetupDraft = {
     review_own_pull_requests: false,
     publish_manual_reviews: false,
     allow_autonomous_rejection: false,
+    enable_detailed_stage_logs: false,
     unload_model_after_review: false,
   },
 };

@@ -31,6 +31,7 @@ func RegisterRoutes(
 	})
 	router.GET("/observability/reviews", handler.observabilityReviews)
 	router.GET("/observability/progress", handler.observabilityProgress)
+	router.GET("/observability/stage-logs", handler.observabilityStageLogs)
 	router.POST("/reviews/manual", handler.manual)
 	router.GET("/review/settings", handler.reviewSettings)
 	router.GET("/reviews/pending", handler.pending)

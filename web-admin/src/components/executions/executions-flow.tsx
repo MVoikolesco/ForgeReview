@@ -1,6 +1,7 @@
 "use client";
 
 import { PreReviewModal } from "@/components/pre-review/pre-review-modal";
+import { StageLogsModal } from "@/components/stage-logs/stage-logs-modal";
 import type { AdminRequest } from "@/lib/admin-client";
 import {
   Background,
@@ -13,7 +14,7 @@ import {
   type Node,
   type NodeProps,
 } from "@xyflow/react";
-import { Clock3, HardDrive, RefreshCw } from "lucide-react";
+import { AlertCircle, Clock3, HardDrive, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Worker = {
@@ -47,6 +48,8 @@ type ProgressEvent = {
   attempt?: number;
   max_attempts?: number;
   timestamp?: string;
+  duration_ms?: number;
+  error?: string;
 };
 
 type ReviewProgress = {
@@ -87,6 +90,7 @@ type ReviewPolicy = {
   id: number;
   profile_id: number;
   publish_manual_reviews: number | boolean;
+  enable_detailed_stage_logs: number | boolean;
 };
 
 type StageNodeData = {
@@ -99,6 +103,8 @@ type StageNodeData = {
   active: boolean;
   targetPosition: Position;
   sourcePosition: Position;
+  onOpenLogs: () => void;
+  canOpenLogs: boolean;
 };
 
 const emptyMetrics: Metrics = {
@@ -217,7 +223,23 @@ function WorkflowNode({ data, selected }: NodeProps<Node<StageNodeData>>) {
           <i />
           {statusLabel(status)}
         </span>
-        <span className="execution-node-percent">{data.percent}%</span>
+        <span className="execution-node-percent">
+          <span>{data.percent}%</span>
+          <button
+            className="execution-node-logs-button"
+            type="button"
+            aria-label={`Ver logs da etapa ${data.title}`}
+            title={`Ver logs da etapa ${data.title}`}
+            disabled={!data.canOpenLogs}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (!data.canOpenLogs) return;
+              data.onOpenLogs();
+            }}
+          >
+            <AlertCircle size={14} />
+          </button>
+        </span>
       </header>
       <strong>{data.title}</strong>
       <small>{data.message || data.subtitle}</small>
@@ -299,10 +321,16 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedReview, setSelectedReview] = useState("");
+  const [selectedStageLogs, setSelectedStageLogs] = useState<{
+    title: string;
+    stage: string;
+    logs: ProgressEvent[];
+  } | null>(null);
   const [preReviewName, setPreReviewName] = useState("");
   const [publicationPolicy, setPublicationPolicy] = useState<{
     id: number;
     manual: boolean;
+    detailedLogs: boolean;
   } | null>(null);
   const [updatingPublicationPolicy, setUpdatingPublicationPolicy] =
     useState(false);
@@ -315,14 +343,19 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
     async (showRefreshing = false) => {
       if (showRefreshing) setRefreshing(true);
       try {
-        const [metricsResult, progressResult, reviewsResult, profiles, policies] =
-          await Promise.all([
-            request<Metrics>("observability/metrics"),
-            request<ProgressResponse>("observability/progress"),
-            request<ReviewLog[]>("observability/reviews"),
-            request<ReviewProfile[]>("review/profiles"),
-            request<ReviewPolicy[]>("review/policies"),
-          ]);
+        const [
+          metricsResult,
+          progressResult,
+          reviewsResult,
+          profiles,
+          policies,
+        ] = await Promise.all([
+          request<Metrics>("observability/metrics"),
+          request<ProgressResponse>("observability/progress"),
+          request<ReviewLog[]>("observability/reviews"),
+          request<ReviewProfile[]>("review/profiles"),
+          request<ReviewPolicy[]>("review/policies"),
+        ]);
         setMetrics(metricsResult);
         setProgress(progressResult);
         setReviews(reviewsResult || []);
@@ -339,6 +372,9 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
                 manual:
                   defaultPolicy.publish_manual_reviews === true ||
                   Number(defaultPolicy.publish_manual_reviews) === 1,
+                detailedLogs:
+                  defaultPolicy.enable_detailed_stage_logs === true ||
+                  Number(defaultPolicy.enable_detailed_stage_logs) === 1,
               }
             : null,
         );
@@ -460,6 +496,13 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
             message: event?.message,
             events: eventsByStage[stage.id] || [],
             active: progress.active && current?.stage === stage.id,
+            onOpenLogs: () =>
+              setSelectedStageLogs({
+                title: stage.title,
+                stage: stage.id,
+                logs: eventsByStage[stage.id] || [],
+              }),
+            canOpenLogs: publicationPolicy?.detailedLogs === true,
             targetPosition:
               index === 4 || index === 7
                 ? Position.Top
@@ -475,7 +518,7 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
           },
         };
       }),
-    [current?.stage, eventsByStage, latestByStage, progress.active],
+    [current?.stage, eventsByStage, latestByStage, progress.active, publicationPolicy?.detailedLogs],
   );
 
   const edges = useMemo<Edge[]>(() => {
@@ -625,7 +668,8 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
                   : "Habilitar publicação automática"
               }
             >
-              Publicação automática: {publicationPolicy?.manual ? "Ativa" : "Desativada"}
+              Publicação automática:{" "}
+              {publicationPolicy?.manual ? "Ativa" : "Desativada"}
             </button>
             <button
               className="secondary-button"
@@ -672,6 +716,19 @@ export function ExecutionsFlow({ request, onAuthError }: Props) {
           onAuthError={onAuthError}
           onClose={() => setPreReviewName("")}
           onComplete={() => void load(true)}
+        />
+      )}
+
+      {selectedStageLogs && (
+        <StageLogsModal
+          request={request}
+          reviewName={current?.name || selectedReview}
+          stage={selectedStageLogs.stage}
+          title={selectedStageLogs.title}
+          subtitle={current?.name ? `Review ${current.name}` : "Execução atual"}
+          summaryLogs={selectedStageLogs.logs}
+          onAuthError={onAuthError}
+          onClose={() => setSelectedStageLogs(null)}
         />
       )}
 

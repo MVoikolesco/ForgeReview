@@ -97,6 +97,7 @@ export type SetupDraft = {
     review_own_pull_requests: boolean;
     publish_manual_reviews: boolean;
     allow_autonomous_rejection: boolean;
+    enable_detailed_stage_logs: boolean;
     unload_model_after_review: boolean;
   };
 };
@@ -132,6 +133,7 @@ export type ReviewSettingsPolicy = {
   max_files_per_block: number;
   publish_manual_reviews: boolean;
   allow_autonomous_rejection: boolean;
+  enable_detailed_stage_logs: boolean;
   context_safety_tokens: number;
   minimum_confidence: number;
   max_parallel_groups: number;

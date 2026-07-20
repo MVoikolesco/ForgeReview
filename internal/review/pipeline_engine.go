@@ -64,6 +64,16 @@ type pipelineRuntime struct {
 	executionID       int64
 }
 
+type stageCallResult struct {
+	Prompt                string
+	Response              string
+	Usage                 providers.Usage
+	Provider              string
+	Model                 string
+	RequestedOutputTokens int
+	DurationMS            int64
+}
+
 // NewPipelineEngine creates the only orchestration runtime used by reviews.
 func NewPipelineEngine(repo *Repository) *PipelineEngine {
 	return &PipelineEngine{repo: repo, executors: map[string]StageExecutor{
@@ -177,9 +187,9 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 	return runtime.result, nil
 }
 
-func (r *pipelineRuntime) call(ctx context.Context, stage PipelineStage, marker string, files []pipelineFile, data any) (string, error) {
+func (r *pipelineRuntime) call(ctx context.Context, stage PipelineStage, marker string, files []pipelineFile, data any) (stageCallResult, error) {
 	if r.input.Provider == nil {
-		return "", errors.New("AI provider is not configured")
+		return stageCallResult{}, errors.New("AI provider is not configured")
 	}
 	providerKey := "profile"
 	if stage.ModelID != nil {
@@ -192,22 +202,27 @@ func (r *pipelineRuntime) call(ctx context.Context, stage PipelineStage, marker 
 		provider, err = r.input.Provider(ctx, stage.ModelID)
 		if err != nil {
 			r.providerMu.Unlock()
-			return "", err
+			return stageCallResult{}, err
 		}
 		r.providers[providerKey] = provider
 	}
 	r.providerMu.Unlock()
+	prompt := stagePrompt(marker, r.input.BasePrompt, stage.PromptTemplate, stageContractInstruction(stage), files, data)
+	call := stageCallResult{Prompt: prompt, Provider: provider.Name(), RequestedOutputTokens: stage.MaxOutputTokens}
 	r.metricsMu.Lock()
 	r.providerName = provider.Name()
 	if model, ok := provider.(providers.ModelName); ok {
 		r.meta["model"] = model.Model()
+		call.Model = model.Model()
 	}
 	r.metricsMu.Unlock()
-	prompt := stagePrompt(marker, r.input.BasePrompt, stage.PromptTemplate, stageContractInstruction(stage), files, data)
 	at := time.Now()
 	response, usage, err := provider.Chat(ctx, prompt, safeStageTokens(prompt, stage.MaxOutputTokens, r.input.Policy))
+	call.Response = response
+	call.Usage = usage
+	call.DurationMS = time.Since(at).Milliseconds()
 	metric := map[string]any{
-		"stage": stage.Key, "duration_ms": time.Since(at).Milliseconds(), "input_chars": len(prompt),
+		"stage": stage.Key, "duration_ms": call.DurationMS, "input_chars": len(prompt),
 		"requested_output_tokens": stage.MaxOutputTokens, "actual_prompt_tokens": usage.PromptTokens,
 		"actual_completion_tokens": usage.CompletionTokens, "response_chars": len(response), "failed": err != nil,
 		"provider": provider.Name(), "model_id": stage.ModelID,
@@ -215,7 +230,27 @@ func (r *pipelineRuntime) call(ctx context.Context, stage PipelineStage, marker 
 	r.metricsMu.Lock()
 	r.meta["stage_metrics"] = append(r.meta["stage_metrics"].([]map[string]any), metric)
 	r.metricsMu.Unlock()
-	return response, err
+	return call, err
+}
+
+func callMetadata(base map[string]any, call stageCallResult) map[string]any {
+	metadata := map[string]any{}
+	for key, value := range base {
+		metadata[key] = value
+	}
+	metadata["prompt"] = call.Prompt
+	metadata["response"] = call.Response
+	metadata["provider"] = call.Provider
+	metadata["requested_output_tokens"] = call.RequestedOutputTokens
+	metadata["actual_prompt_tokens"] = call.Usage.PromptTokens
+	metadata["actual_completion_tokens"] = call.Usage.CompletionTokens
+	metadata["input_chars"] = len(call.Prompt)
+	metadata["response_chars"] = len(call.Response)
+	metadata["duration_ms"] = call.DurationMS
+	if call.Model != "" {
+		metadata["model"] = call.Model
+	}
+	return metadata
 }
 
 func stageContractInstruction(stage PipelineStage) string {
@@ -253,17 +288,22 @@ func (plannerExecutor) Execute(ctx context.Context, r *pipelineRuntime, stage Pi
 	started := time.Now()
 	r.input.Progress(stage.Key, "processando", "Agrupando arquivos para review", nil, started, nil)
 	plan, fallback := deterministicPlan(r.files, r.input.Policy)
+	var plannerCall stageCallResult
 	if len(r.files) > 0 && stage.UseLLM {
 		var candidate pipelinePlan
-		if raw, err := r.call(ctx, stage, "planner", r.files, nil); err == nil && decodeStage(raw, &candidate) == nil && validPipelinePlan(candidate, r.files) {
+		if call, err := r.call(ctx, stage, "planner", r.files, nil); err == nil && decodeStage(call.Response, &candidate) == nil && validPipelinePlan(candidate, r.files) {
 			plan = candidate
 			fallback = false
+			plannerCall = call
 		}
 	}
 	r.plan = plan
 	r.meta["planner_fallback"] = fallback
 	r.meta["review_groups"] = len(plan.Groups)
 	metadata := map[string]any{"fallback": fallback, "total_groups": len(plan.Groups)}
+	if r.input.Policy.DetailedStageLogs && plannerCall.Prompt != "" {
+		metadata = callMetadata(metadata, plannerCall)
+	}
 	r.input.Progress(stage.Key, "concluido", fmt.Sprintf("%d grupos de review", len(plan.Groups)), metadata, started, nil)
 	return StageOutcome{ArtifactType: "review_plan", Artifact: plan, Metadata: metadata}, nil
 }
@@ -323,10 +363,14 @@ func reviewGroups(ctx context.Context, r *pipelineRuntime, stage PipelineStage, 
 			var err error
 			for attempt := 1; attempt <= attempts; attempt++ {
 				attemptStarted := time.Now().UTC()
-				raw, callErr := r.call(ctx, stage, "reviewer", groupFiles, group)
+				call, callErr := r.call(ctx, stage, "reviewer", groupFiles, group)
+				attemptMetadata := map[string]any{"group_id": group.ID}
+				if r.input.Policy.DetailedStageLogs {
+					attemptMetadata = callMetadata(attemptMetadata, call)
+				}
 				if callErr != nil {
 					err = callErr
-					if auditErr := r.recordAttempt(ctx, stage, attempt, attemptStarted, map[string]any{"group_id": group.ID}, err); auditErr != nil {
+					if auditErr := r.recordAttempt(ctx, stage, attempt, attemptStarted, attemptMetadata, err); auditErr != nil {
 						err = fmt.Errorf("%v; persistir tentativa: %w", err, auditErr)
 						break
 					}
@@ -336,14 +380,14 @@ func reviewGroups(ctx context.Context, r *pipelineRuntime, stage PipelineStage, 
 					}
 					continue
 				}
-				if err = decodeStage(raw, &review); err == nil {
+				if err = decodeStage(call.Response, &review); err == nil {
 					review.GroupID = group.ID
 					review.ReviewedFiles = group.Files
 					review.Findings = validatePipelineFindings(review.Findings, groupFiles)
 					for i := range review.Findings {
 						review.Findings[i].SourceStage = stage.Key
 					}
-					if auditErr := r.recordAttempt(ctx, stage, attempt, attemptStarted, map[string]any{"group_id": group.ID}, nil); auditErr != nil {
+					if auditErr := r.recordAttempt(ctx, stage, attempt, attemptStarted, attemptMetadata, nil); auditErr != nil {
 						err = fmt.Errorf("persistir tentativa: %w", auditErr)
 						break
 					}
@@ -351,7 +395,7 @@ func reviewGroups(ctx context.Context, r *pipelineRuntime, stage PipelineStage, 
 					r.input.Progress(stage.Key, "concluido", "Grupo "+group.ID+" revisado", map[string]any{"group_id": group.ID, "attempt": attempt, "max_attempts": attempts}, stageStarted, nil)
 					return
 				}
-				if auditErr := r.recordAttempt(ctx, stage, attempt, attemptStarted, map[string]any{"group_id": group.ID}, err); auditErr != nil {
+				if auditErr := r.recordAttempt(ctx, stage, attempt, attemptStarted, attemptMetadata, err); auditErr != nil {
 					err = fmt.Errorf("%v; persistir tentativa: %w", err, auditErr)
 					break
 				}
@@ -392,11 +436,13 @@ func (consolidatorExecutor) Execute(ctx context.Context, r *pipelineRuntime, sta
 	r.input.Progress(stage.Key, "processando", "Consolidando achados", nil, started, nil)
 	consolidated := fallbackConsolidation(r.reviews)
 	fallback := true
+	var consolidatorCall stageCallResult
 	if len(r.files) > 0 && stage.UseLLM {
 		var candidate pipelineConsolidated
-		if raw, err := r.call(ctx, stage, "consolidator", r.files, r.reviews); err == nil && decodeStage(raw, &candidate) == nil {
+		if call, err := r.call(ctx, stage, "consolidator", r.files, r.reviews); err == nil && decodeStage(call.Response, &candidate) == nil {
 			consolidated = candidate
 			fallback = false
+			consolidatorCall = call
 		}
 	}
 	consolidated.Findings = validatePipelineFindings(consolidated.Findings, r.files)
@@ -405,6 +451,9 @@ func (consolidatorExecutor) Execute(ctx context.Context, r *pipelineRuntime, sta
 	r.meta["consolidator_fallback"] = fallback
 	r.meta["consolidated_findings"] = len(consolidated.Findings)
 	metadata := map[string]any{"fallback": fallback, "findings": len(consolidated.Findings)}
+	if r.input.Policy.DetailedStageLogs && consolidatorCall.Prompt != "" {
+		metadata = callMetadata(metadata, consolidatorCall)
+	}
 	r.input.Progress(stage.Key, "concluido", fmt.Sprintf("%d achados consolidados", len(consolidated.Findings)), metadata, started, nil)
 	return StageOutcome{ArtifactType: "consolidated_findings", Artifact: consolidated, Metadata: metadata}, nil
 }
@@ -419,10 +468,12 @@ func (verificationExecutor) Execute(ctx context.Context, r *pipelineRuntime, sta
 	}
 	approved := r.consolidated.Findings
 	fallback := false
+	var verifierCall stageCallResult
 	if len(approved) > 0 && stage.UseLLM {
 		var verification pipelineVerification
-		if raw, err := r.call(ctx, stage, "verifier", r.files, r.consolidated); err == nil && decodeStage(raw, &verification) == nil {
+		if call, err := r.call(ctx, stage, "verifier", r.files, r.consolidated); err == nil && decodeStage(call.Response, &verification) == nil {
 			approved = verifiedFindings(r.consolidated.Findings, verification, r.input.Policy.MinimumConfidence)
+			verifierCall = call
 		} else {
 			fallback = true
 			approved = confidenceFindings(approved, r.input.Policy.MinimumConfidence)
@@ -436,6 +487,9 @@ func (verificationExecutor) Execute(ctx context.Context, r *pipelineRuntime, sta
 	r.meta["confirmed_findings"] = len(approved)
 	r.meta["rejected_findings"] = len(r.consolidated.Findings) - len(approved)
 	metadata := map[string]any{"fallback": fallback, "confirmed": len(approved)}
+	if r.input.Policy.DetailedStageLogs && verifierCall.Prompt != "" {
+		metadata = callMetadata(metadata, verifierCall)
+	}
 	r.input.Progress(stage.Key, "concluido", fmt.Sprintf("%d achados confirmados", len(approved)), metadata, started, nil)
 	return StageOutcome{ArtifactType: "verified_findings", Artifact: approved, Metadata: metadata}, nil
 }
@@ -454,9 +508,10 @@ func (formattingExecutor) Execute(ctx context.Context, r *pipelineRuntime, stage
 		result.Model = model
 	}
 	fallback := true
+	var formatterCall stageCallResult
 	if len(r.files) > 0 && stage.UseLLM {
 		var formatted pipelineFormatted
-		if raw, err := r.call(ctx, stage, "formatter", r.files, r.approved); err == nil && decodeStage(raw, &formatted) == nil && formatted.FinalReview.Summary != "" {
+		if call, err := r.call(ctx, stage, "formatter", r.files, r.approved); err == nil && decodeStage(call.Response, &formatted) == nil && formatted.FinalReview.Summary != "" {
 			formatted.Comments = validFormattedComments(formatted.Comments, r.approved)
 			if formatted.Comments != nil {
 				result.Comments = make([]Comment, 0, len(formatted.Comments))
@@ -466,6 +521,7 @@ func (formattingExecutor) Execute(ctx context.Context, r *pipelineRuntime, stage
 			}
 			result.FinalReview = formatted.FinalReview
 			fallback = false
+			formatterCall = call
 		}
 	}
 	applyPipelineDecision(&result, len(r.failed) > 0, r.input.Policy)
@@ -476,6 +532,9 @@ func (formattingExecutor) Execute(ctx context.Context, r *pipelineRuntime, stage
 	}
 	r.result = result
 	metadata := map[string]any{"fallback": fallback, "comments": len(result.Comments)}
+	if r.input.Policy.DetailedStageLogs && formatterCall.Prompt != "" {
+		metadata = callMetadata(metadata, formatterCall)
+	}
 	r.input.Progress(stage.Key, "concluido", fmt.Sprintf("%d comentários formatados", len(result.Comments)), metadata, started, nil)
 	return StageOutcome{ArtifactType: "formatted_review", Artifact: result, Metadata: metadata}, nil
 }
