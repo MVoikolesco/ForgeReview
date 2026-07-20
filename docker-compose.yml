@@ -89,3 +89,4 @@ volumes:
   redis_data:
   config_data:
   web_node_modules:
+  air_tmp:

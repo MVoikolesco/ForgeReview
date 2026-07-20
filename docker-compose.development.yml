@@ -1,0 +1,24 @@
+services:
+  api:
+    build:
+      context: .
+      target: development
+    volumes:
+      - ./:/app
+      - air_tmp:/app/tmp
+      - config_data:/data
+
+  worker:
+    build:
+      context: .
+      target: development
+    volumes:
+      - ./:/app
+      - air_tmp:/app/tmp
+      - config_data:/data
+
+  web:
+    build:
+      target: development
+    environment:
+      APP_ENVIRONMENT: development

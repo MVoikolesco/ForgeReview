@@ -3,6 +3,7 @@ bin
 .env
 .DS_Store
 node_modules
+.opencode
 web-admin/node_modules
 web-admin/dist
 .tmp-go
