@@ -3,10 +3,11 @@ package workflow
 import "fmt"
 
 type Port struct {
-	Key      string `json:"key"`
-	Label    string `json:"label"`
-	Contract string `json:"contract"`
-	Required bool   `json:"required"`
+	Key        string `json:"key"`
+	Label      string `json:"label"`
+	Contract   string `json:"contract"`
+	Required   bool   `json:"required"`
+	CollectAll bool   `json:"collect_all"`
 }
 
 type CardType struct {

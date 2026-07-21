@@ -1,5 +1,7 @@
 package workflow
 
+import "sort"
+
 type Catalog struct{ cards map[string]CardType }
 
 func NewCatalog(cards ...CardType) Catalog {
@@ -16,6 +18,7 @@ func (c Catalog) All() []CardType {
 	for _, card := range c.cards {
 		items = append(items, card)
 	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Key < items[j].Key })
 	return items
 }
 
@@ -40,11 +43,11 @@ func DefaultCatalog() Catalog {
 		card("merge", "Merge", "Controle", "Aguarda e combina resultados de ramos.", []Port{in("inputs", "Entradas", "any", true)}, []Port{out("output", "Resultado unido", "any")}),
 		card("workflow", "Workflow", "Controle", "Executa uma subpipeline publicada por sua interface declarada.", []Port{in("input", "Entrada", "any", false)}, []Port{out("output", "Saída", "any")}),
 		card("model", "Modelo IA", "IA", "Executa um modelo por um adaptador de provider.", []Port{in("prompt", "Prompt", "prompt", true)}, []Port{out("response", "Resposta", "model_response")}),
-		card("validate", "Validar", "Validação", "Valida schema, semântica e referências da resposta.", []Port{in("response", "Resposta", "model_response", true)}, []Port{out("valid", "Resposta válida", "validated_response"), out("invalid", "Resposta inválida", "error")}),
+		card("validate", "Validar", "Validação", "Valida uma lista JSON de achados e, opcionalmente, seus caminhos nos arquivos buscados.", []Port{in("response", "Resposta", "model_response", true), in("files", "Arquivos buscados", "files", false)}, []Port{out("valid", "Resposta válida", "validated_response"), out("invalid", "Resposta inválida", "error")}),
 		card("response_filter", "Filtrar resposta", "Validação", "Remove resultados inválidos, duplicados ou abaixo da política.", []Port{in("response", "Resposta validada", "validated_response", true)}, []Port{out("comments", "Comentários", "comments")}),
-		card("consolidate", "Consolidar", "Resultado", "Consolida comentários e produz uma revisão.", []Port{in("comments", "Comentários", "comments", true)}, []Port{out("review", "Review consolidada", "review")}),
+		card("consolidate", "Consolidar", "Resultado", "Consolida comentários e produz uma revisão.", []Port{{Key: "comments", Label: "Comentários", Contract: "comments", Required: true, CollectAll: true}}, []Port{out("review", "Review consolidada", "review")}),
 		card("format", "Formatar", "Resultado", "Formata uma revisão para o destino configurado.", []Port{in("review", "Review", "review", true)}, []Port{out("formatted", "Resultado formatado", "formatted_review")}),
-		card("publish", "Publicar", "Saída", "Publica um resultado por uma integração cadastrada.", []Port{in("result", "Resultado", "formatted_review", true)}, []Port{out("receipt", "Comprovante", "publication")}),
+		card("publish", "Publicar no Gitea", "Saída", "Publica uma revisão formatada por uma integração Gitea ativa, com idempotência durável.", []Port{in("formatted_review", "Review formatada", "formatted_review", true)}, []Port{out("receipt", "Comprovante", "publication")}),
 		card("log", "Log", "Infraestrutura", "Registra dados sanitizados para observabilidade.", []Port{in("input", "Entrada", "any", false)}, []Port{out("output", "Saída", "any")}),
 		card("cache", "Cache", "Infraestrutura", "Lê ou grava dados efêmeros por uma chave configurada.", []Port{in("value", "Valor", "any", false)}, []Port{out("value", "Valor", "any")}),
 		card("error_control", "Controle de erro", "Infraestrutura", "Aplica política avançada de retry, fallback ou encerramento.", []Port{in("error", "Erro", "error", true)}, []Port{out("recovered", "Recuperado", "any"), out("failed", "Falha", "error")}),

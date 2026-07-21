@@ -30,13 +30,54 @@ type RunReport struct {
 	Runs   []NodeRun `json:"runs"`
 }
 
+// Execution is the worker-only execution payload. Its input is not included in
+// the public execution-status response.
+type Execution struct {
+	ID        int64
+	VersionID int64
+	Input     map[string]any
+}
+
 // Adapters are the explicit boundary for controlled external card execution.
 // A nil field leaves its card type unavailable.
 type Adapters struct {
 	Integrations integration.Lookup
 	Gitea        integration.GiteaPullRequestReader
+	GiteaWriter  integration.GiteaReviewWriter
 	OpenAI       integration.ChatClient
 	Ollama       integration.ChatClient
+	Publications PublicationLedger
+	Execution    ExecutionContext
+	Dispatcher   ExecutionDispatcher
+}
+
+// ExecutionContext identifies the durable execution currently being run.
+// Publication cards require it so their idempotency key is stable across
+// duplicate dispatches of the same execution.
+type ExecutionContext struct {
+	ID        int64
+	VersionID int64
+}
+
+// PublicationLedger persists the state transition before an external effect.
+type PublicationLedger interface {
+	BeginPublication(context.Context, PublicationAttempt) (PublicationAttempt, bool, error)
+	CompletePublication(context.Context, string, integration.PublicationReceipt) error
+	RetryPublication(context.Context, string, error) error
+}
+
+type PublicationAttempt struct {
+	IdempotencyKey string
+	ExecutionID    int64
+	VersionID      int64
+	NodeKey        string
+	Status         string
+	Receipt        integration.PublicationReceipt
+}
+
+// ExecutionDispatcher accepts durable execution IDs for asynchronous workers.
+type ExecutionDispatcher interface {
+	Enqueue(context.Context, int64) error
 }
 
 // Run preserves local-card execution without external adapters.
@@ -53,13 +94,16 @@ func RunWithAdapters(ctx context.Context, definition Definition, catalog Catalog
 	}
 	nodes := make(map[string]Node, len(definition.Nodes))
 	inboxes := map[string]map[string][]Token{}
+	incoming := map[string]map[string]int{}
 	edges := map[string][]Edge{}
 	for _, node := range definition.Nodes {
 		nodes[node.Key] = node
 		inboxes[node.Key] = map[string][]Token{}
+		incoming[node.Key] = map[string]int{}
 	}
 	for _, edge := range definition.Edges {
 		edges[edge.FromNode] = append(edges[edge.FromNode], edge)
+		incoming[edge.ToNode][edge.ToPort]++
 	}
 	ready := make([]string, 0)
 	for _, node := range definition.Nodes {
@@ -80,7 +124,7 @@ func RunWithAdapters(ctx context.Context, definition Definition, catalog Catalog
 			continue
 		}
 		node := nodes[nodeKey]
-		if !inputsReady(node, inboxes[nodeKey], catalog) {
+		if !inputsReady(node, inboxes[nodeKey], incoming[nodeKey], catalog) {
 			continue
 		}
 		run[nodeKey] = true
@@ -95,8 +139,12 @@ func RunWithAdapters(ctx context.Context, definition Definition, catalog Catalog
 			return report, err
 		}
 		card, _ := catalog.Get(node.Type)
-		for portKey, value := range outputs {
-			port, _ := port(card.Outputs, portKey)
+		for _, port := range card.Outputs {
+			value, present := outputs[port.Key]
+			if !present {
+				continue
+			}
+			portKey := port.Key
 			token := Token{NodeKey: nodeKey, PortKey: portKey, Contract: port.Contract, Value: value}
 			nodeRun.Outputs = append(nodeRun.Outputs, token)
 			for _, edge := range edges[nodeKey] {
@@ -104,7 +152,7 @@ func RunWithAdapters(ctx context.Context, definition Definition, catalog Catalog
 					continue
 				}
 				inboxes[edge.ToNode][edge.ToPort] = append(inboxes[edge.ToNode][edge.ToPort], token)
-				if !run[edge.ToNode] && inputsReady(nodes[edge.ToNode], inboxes[edge.ToNode], catalog) {
+				if !run[edge.ToNode] && inputsReady(nodes[edge.ToNode], inboxes[edge.ToNode], incoming[edge.ToNode], catalog) {
 					ready = append(ready, edge.ToNode)
 				}
 			}
@@ -117,10 +165,13 @@ func RunWithAdapters(ctx context.Context, definition Definition, catalog Catalog
 	return report, nil
 }
 
-func inputsReady(node Node, inbox map[string][]Token, catalog Catalog) bool {
+func inputsReady(node Node, inbox map[string][]Token, incoming map[string]int, catalog Catalog) bool {
 	card, _ := catalog.Get(node.Type)
 	for _, port := range card.Inputs {
 		if port.Required && len(inbox[port.Key]) == 0 {
+			return false
+		}
+		if port.CollectAll && len(inbox[port.Key]) < incoming[port.Key] {
 			return false
 		}
 	}
@@ -152,12 +203,22 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 			return map[string]any{"event": value}, nil
 		}
 		return map[string]any{"event": input}, nil
-	case "transform", "variable", "log", "cache":
+	case "transform", "log":
 		return map[string]any{"output": first()}, nil
+	case "variable", "cache":
+		return map[string]any{"value": first()}, nil
 	case "filter":
-		return map[string]any{"files": first()}, nil
+		files, err := filterFiles(inputs["files"], node.Config)
+		if err != nil {
+			return nil, fmt.Errorf("filter card %q: %w", node.Key, err)
+		}
+		return map[string]any{"files": files}, nil
 	case "group":
-		return map[string]any{"groups": []any{first()}}, nil
+		groups, err := groupFiles(inputs["files"], node.Config)
+		if err != nil {
+			return nil, fmt.Errorf("group card %q: %w", node.Key, err)
+		}
+		return map[string]any{"groups": groups}, nil
 	case "template":
 		template, _ := node.Config["template"].(string)
 		if template == "" {
@@ -175,6 +236,29 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		return map[string]any{"false": first()}, nil
 	case "merge":
 		return map[string]any{"output": inputs}, nil
+	case "validate":
+		value, portKey := validateResponse(inputs["response"], inputs["files"], node.Config)
+		return map[string]any{portKey: value}, nil
+	case "response_filter":
+		comments, err := filterFindings(inputs["response"], node.Config)
+		if err != nil {
+			return nil, fmt.Errorf("response_filter card %q: %w", node.Key, err)
+		}
+		return map[string]any{"comments": comments}, nil
+	case "consolidate":
+		review, err := consolidateFindings(inputs["comments"])
+		if err != nil {
+			return nil, fmt.Errorf("consolidate card %q: %w", node.Key, err)
+		}
+		return map[string]any{"review": review}, nil
+	case "format":
+		formatted, err := formatReview(inputs["review"])
+		if err != nil {
+			return nil, fmt.Errorf("format card %q: %w", node.Key, err)
+		}
+		return map[string]any{"formatted": formatted}, nil
+	case "publish":
+		return publishReview(ctx, node, inputs, adapters)
 	case "fetch":
 		item, err := configuredIntegration(ctx, node, adapters, "fetch")
 		if err != nil {
@@ -234,6 +318,65 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 	}
 }
 
+func publishReview(ctx context.Context, node Node, inputs map[string][]any, adapters Adapters) (map[string]any, error) {
+	item, err := configuredIntegration(ctx, node, adapters, "publish")
+	if err != nil {
+		return nil, err
+	}
+	if item.Type != integration.TypeGitea {
+		return nil, fmt.Errorf("publish card %q integration %q must be type %q", node.Key, item.Key, integration.TypeGitea)
+	}
+	if adapters.GiteaWriter == nil {
+		return nil, fmt.Errorf("publish card %q requires an injected Gitea writer adapter", node.Key)
+	}
+	if adapters.Publications == nil || adapters.Execution.ID < 1 || adapters.Execution.VersionID < 1 {
+		return nil, fmt.Errorf("publish card %q requires a durable execution context and publication ledger", node.Key)
+	}
+	formatted, ok := firstForPort(inputs, "formatted_review").(FormattedReview)
+	if !ok {
+		return nil, fmt.Errorf("publish card %q requires a formatted_review input", node.Key)
+	}
+	request, err := pullRequestRequestForCard(node, "publish")
+	if err != nil {
+		return nil, err
+	}
+	key := publicationKey(adapters.Execution, node.Key)
+	attempt, shouldPublish, err := adapters.Publications.BeginPublication(ctx, PublicationAttempt{IdempotencyKey: key, ExecutionID: adapters.Execution.ID, VersionID: adapters.Execution.VersionID, NodeKey: node.Key})
+	if err != nil {
+		return nil, fmt.Errorf("publish card %q could not persist idempotency state: %w", node.Key, err)
+	}
+	if !shouldPublish {
+		return map[string]any{"receipt": attempt.Receipt}, nil
+	}
+	secret, err := resolveSecret(item, adapters, "publish", node.Key)
+	if err != nil {
+		_ = adapters.Publications.RetryPublication(ctx, key, err)
+		return nil, err
+	}
+	receipt, err := adapters.GiteaWriter.PublishReview(ctx, item, secret, integration.GiteaReviewRequest{Owner: request.Owner, Repo: request.Repo, Number: request.Number, Body: formattedReviewBody(formatted), IdempotencyKey: key})
+	if err != nil {
+		_ = adapters.Publications.RetryPublication(ctx, key, err)
+		return nil, fmt.Errorf("publish card %q: %w", node.Key, err)
+	}
+	receipt.Status, receipt.IdempotencyKey = "completed", key
+	if err = adapters.Publications.CompletePublication(ctx, key, receipt); err != nil {
+		return nil, fmt.Errorf("publish card %q could not complete idempotency state: %w", node.Key, err)
+	}
+	return map[string]any{"receipt": receipt}, nil
+}
+
+func publicationKey(execution ExecutionContext, nodeKey string) string {
+	return fmt.Sprintf("forgereview:publication:%d:%d:%s", execution.ID, execution.VersionID, nodeKey)
+}
+
+func formattedReviewBody(review FormattedReview) string {
+	lines := []string{fmt.Sprintf("## ForgeReview: %d finding(s)", review.Summary.Total)}
+	for _, finding := range review.Findings {
+		lines = append(lines, fmt.Sprintf("- **%s** `%s:%d` — %s", strings.ToUpper(finding.Severity), finding.Path, finding.Line, finding.Comment))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func configuredIntegration(ctx context.Context, node Node, adapters Adapters, card string) (integration.Integration, error) {
 	key, _ := node.Config["integration"].(string)
 	if key == "" {
@@ -261,11 +404,15 @@ func resolveSecret(item integration.Integration, adapters Adapters, card, nodeKe
 }
 
 func pullRequestRequest(node Node) (integration.PullRequestRequest, error) {
+	return pullRequestRequestForCard(node, "fetch")
+}
+
+func pullRequestRequestForCard(node Node, card string) (integration.PullRequestRequest, error) {
 	owner, _ := node.Config["owner"].(string)
 	repo, _ := node.Config["repo"].(string)
 	number, ok := integer(node.Config["pull_request"])
 	if owner == "" || repo == "" || !ok || number < 1 {
-		return integration.PullRequestRequest{}, fmt.Errorf("fetch card %q requires config.owner, config.repo, and positive config.pull_request", node.Key)
+		return integration.PullRequestRequest{}, fmt.Errorf("%s card %q requires config.owner, config.repo, and positive config.pull_request", card, node.Key)
 	}
 	return integration.PullRequestRequest{Owner: owner, Repo: repo, Number: number}, nil
 }

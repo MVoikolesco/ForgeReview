@@ -40,6 +40,49 @@ func (c HTTPGiteaClient) ReadPullRequest(ctx context.Context, integration Integr
 	return PullRequest{Metadata: metadata, Files: files, Diff: diff}, nil
 }
 
+func (c HTTPGiteaClient) PublishReview(ctx context.Context, integration Integration, secret string, request GiteaReviewRequest) (PublicationReceipt, error) {
+	if integration.Type != TypeGitea {
+		return PublicationReceipt{}, fmt.Errorf("integration %q is not a Gitea integration", integration.Key)
+	}
+	if request.Owner == "" || request.Repo == "" || request.Number < 1 || request.Body == "" || request.IdempotencyKey == "" {
+		return PublicationReceipt{}, fmt.Errorf("Gitea review request is incomplete")
+	}
+	config, err := integration.ConfigValues()
+	if err != nil {
+		return PublicationReceipt{}, err
+	}
+	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s/issues/%d/comments", strings.TrimRight(config["base_url"], "/"), url.PathEscape(request.Owner), url.PathEscape(request.Repo), request.Number)
+	payload := map[string]string{"body": request.Body + "\n\n<!-- forgereview:idempotency=" + request.IdempotencyKey + " -->"}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return PublicationReceipt{}, err
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return PublicationReceipt{}, err
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Accept", "application/json")
+	httpRequest.Header.Set("Authorization", "token "+secret)
+	httpRequest.Header.Set("X-ForgeReview-Idempotency-Key", request.IdempotencyKey)
+	response, err := c.client().Do(httpRequest)
+	if err != nil {
+		return PublicationReceipt{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return PublicationReceipt{}, fmt.Errorf("unexpected status %d", response.StatusCode)
+	}
+	var published struct {
+		ID      int64  `json:"id"`
+		HTMLURL string `json:"html_url"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&published); err != nil {
+		return PublicationReceipt{}, err
+	}
+	return PublicationReceipt{Status: "completed", CommentID: published.ID, URL: published.HTMLURL, IdempotencyKey: request.IdempotencyKey}, nil
+}
+
 func (c HTTPGiteaClient) getJSON(ctx context.Context, endpoint, secret string, target any) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

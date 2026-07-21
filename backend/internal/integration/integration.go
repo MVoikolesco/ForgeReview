@@ -115,6 +115,29 @@ type GiteaPullRequestReader interface {
 	ReadPullRequest(context.Context, Integration, string, PullRequestRequest) (PullRequest, error)
 }
 
+// GiteaReviewWriter is the controlled boundary for creating a pull-request
+// review comment. Callers supply only a registered Gitea integration and the
+// resolved credential; adapters must not persist or return the credential.
+type GiteaReviewWriter interface {
+	PublishReview(context.Context, Integration, string, GiteaReviewRequest) (PublicationReceipt, error)
+}
+
+type GiteaReviewRequest struct {
+	Owner          string
+	Repo           string
+	Number         int
+	Body           string
+	IdempotencyKey string
+}
+
+// PublicationReceipt contains safe provider response identifiers only.
+type PublicationReceipt struct {
+	Status         string `json:"status"`
+	CommentID      int64  `json:"comment_id,omitempty"`
+	URL            string `json:"url,omitempty"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
 type ChatClient interface {
 	Chat(context.Context, Integration, string, string) (string, error)
 }

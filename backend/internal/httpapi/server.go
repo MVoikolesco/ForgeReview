@@ -19,6 +19,17 @@ func New(catalog workflow.Catalog, workflows *store.SQLite, adapterSets ...workf
 		adapters = adapterSets[0]
 	}
 	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "http://localhost:3010")
+		c.Header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type")
+		if c.Request.Method == http.MethodOptions {
+			c.Status(http.StatusNoContent)
+			c.Abort()
+			return
+		}
+		c.Next()
+	})
 	router.Use(gin.Logger(), gin.Recovery())
 	router.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	api := router.Group("/api")
@@ -111,9 +122,28 @@ func New(catalog workflow.Catalog, workflows *store.SQLite, adapterSets ...workf
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		report, runErr := workflow.RunWithAdapters(c.Request.Context(), definition, catalog, input, adapters)
-		executionID, saveErr := workflows.SaveExecution(c.Request.Context(), id, report)
-		if saveErr != nil {
+		executionID, err := workflows.CreateExecution(c.Request.Context(), id, input)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist execution"})
+			return
+		}
+		if adapters.Dispatcher != nil {
+			if err = adapters.Dispatcher.Enqueue(c.Request.Context(), executionID); err != nil {
+				_ = workflows.FailQueuedExecution(c.Request.Context(), executionID)
+				c.JSON(http.StatusServiceUnavailable, gin.H{"execution_id": executionID, "error": "could not dispatch execution"})
+				return
+			}
+			c.JSON(http.StatusAccepted, gin.H{"execution_id": executionID, "status": "queued"})
+			return
+		}
+		if _, claimed, claimErr := workflows.ClaimExecution(c.Request.Context(), executionID); claimErr != nil || !claimed {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not start execution"})
+			return
+		}
+		runAdapters := adapters
+		runAdapters.Execution = workflow.ExecutionContext{ID: executionID, VersionID: id}
+		report, runErr := workflow.RunWithAdapters(c.Request.Context(), definition, catalog, input, runAdapters)
+		if err = workflows.CompleteExecution(c.Request.Context(), executionID, report); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist execution"})
 			return
 		}

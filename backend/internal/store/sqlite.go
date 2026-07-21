@@ -24,6 +24,10 @@ func Open(path string) (*SQLite, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = store.ensureExecutionInputColumn(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return store, nil
 }
 
@@ -106,30 +110,191 @@ func (s *SQLite) Load(ctx context.Context, id int64) (workflow.Definition, error
 	return definition, nil
 }
 
+// CreateExecution persists an execution before it can be dispatched. Input is
+// retained for workers but never included in the execution status response.
+func (s *SQLite) CreateExecution(ctx context.Context, versionID int64, input map[string]any) (int64, error) {
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return 0, err
+	}
+	result, err := s.db.ExecContext(ctx, `INSERT INTO workflow_executions(workflow_version_id,status,metadata_json,execution_input_json) VALUES(?, 'queued', '{}', ?)`, versionID, string(payload))
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// ClaimExecution atomically transitions a queued execution to running. A
+// duplicate queue delivery receives false and must not execute it again.
+func (s *SQLite) ClaimExecution(ctx context.Context, id int64) (workflow.Execution, bool, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE workflow_executions SET status='running' WHERE id=? AND status='queued'`, id)
+	if err != nil {
+		return workflow.Execution{}, false, err
+	}
+	claimed, err := result.RowsAffected()
+	if err != nil || claimed == 0 {
+		return workflow.Execution{}, false, err
+	}
+	var execution workflow.Execution
+	var input string
+	err = s.db.QueryRowContext(ctx, `SELECT workflow_version_id,execution_input_json FROM workflow_executions WHERE id=?`, id).Scan(&execution.VersionID, &input)
+	if err != nil {
+		return workflow.Execution{}, false, err
+	}
+	execution.ID = id
+	if err = json.Unmarshal([]byte(input), &execution.Input); err != nil {
+		return workflow.Execution{}, false, fmt.Errorf("decode execution input: %w", err)
+	}
+	return execution, true, nil
+}
+
 func (s *SQLite) SaveExecution(ctx context.Context, versionID int64, report workflow.RunReport) (int64, error) {
+	id, err := s.CreateExecution(ctx, versionID, nil)
+	if err != nil {
+		return 0, err
+	}
+	if _, _, err = s.ClaimExecution(ctx, id); err != nil {
+		return 0, err
+	}
+	return id, s.CompleteExecution(ctx, id, report)
+}
+
+// CompleteExecution persists node reports and makes the final status visible.
+func (s *SQLite) CompleteExecution(ctx context.Context, id int64, report workflow.RunReport) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `INSERT INTO workflow_executions(workflow_version_id,status,finished_at,metadata_json) VALUES(?,?,CURRENT_TIMESTAMP,?)`, versionID, report.Status, "{}")
+	result, err := tx.ExecContext(ctx, `UPDATE workflow_executions SET status=?,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'`, report.Status, id)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	id, _ := result.LastInsertId()
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return fmt.Errorf("execution %d is not running", id)
+	}
 	for _, run := range report.Runs {
 		metadata, err := json.Marshal(map[string]any{"inputs": run.Inputs, "outputs": run.Outputs, "error": run.Error, "duration_ms": run.DurationMS})
 		if err != nil {
-			return 0, err
+			return err
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO workflow_node_runs(workflow_execution_id,node_key,status,finished_at,metadata_json) VALUES(?,?,?,CURRENT_TIMESTAMP,?)`, id, run.NodeKey, run.Status, string(metadata)); err != nil {
-			return 0, err
+			return err
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return 0, err
+		return err
 	}
-	return id, nil
+	return nil
+}
+
+func (s *SQLite) FailQueuedExecution(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE workflow_executions SET status='failed',finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'`, id)
+	return err
+}
+
+func (s *SQLite) BeginPublication(ctx context.Context, attempt workflow.PublicationAttempt) (workflow.PublicationAttempt, bool, error) {
+	if attempt.IdempotencyKey == "" || attempt.ExecutionID < 1 || attempt.VersionID < 1 || attempt.NodeKey == "" {
+		return workflow.PublicationAttempt{}, false, fmt.Errorf("publication attempt is incomplete")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return workflow.PublicationAttempt{}, false, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `INSERT INTO publication_attempts(idempotency_key,workflow_execution_id,workflow_version_id,node_key,status) VALUES(?,?,?,?, 'pending') ON CONFLICT(idempotency_key) DO NOTHING`, attempt.IdempotencyKey, attempt.ExecutionID, attempt.VersionID, attempt.NodeKey)
+	if err != nil {
+		return workflow.PublicationAttempt{}, false, err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return workflow.PublicationAttempt{}, false, err
+	}
+	if inserted == 1 {
+		attempt.Status = "pending"
+		if err = tx.Commit(); err != nil {
+			return workflow.PublicationAttempt{}, false, err
+		}
+		return attempt, true, nil
+	}
+	var receipt string
+	if err = tx.QueryRowContext(ctx, `SELECT status,receipt_json FROM publication_attempts WHERE idempotency_key=?`, attempt.IdempotencyKey).Scan(&attempt.Status, &receipt); err != nil {
+		return workflow.PublicationAttempt{}, false, err
+	}
+	if receipt != "" && receipt != "{}" {
+		if err = json.Unmarshal([]byte(receipt), &attempt.Receipt); err != nil {
+			return workflow.PublicationAttempt{}, false, err
+		}
+	}
+	if attempt.Status == "retryable" {
+		result, updateErr := tx.ExecContext(ctx, `UPDATE publication_attempts SET status='pending',attempt=attempt+1,error_message='' WHERE idempotency_key=? AND status='retryable'`, attempt.IdempotencyKey)
+		if updateErr != nil {
+			return workflow.PublicationAttempt{}, false, updateErr
+		}
+		updated, updateErr := result.RowsAffected()
+		if updateErr != nil {
+			return workflow.PublicationAttempt{}, false, updateErr
+		}
+		if updated == 1 {
+			attempt.Status = "pending"
+			if err = tx.Commit(); err != nil {
+				return workflow.PublicationAttempt{}, false, err
+			}
+			return attempt, true, nil
+		}
+		if err = tx.QueryRowContext(ctx, `SELECT status,receipt_json FROM publication_attempts WHERE idempotency_key=?`, attempt.IdempotencyKey).Scan(&attempt.Status, &receipt); err != nil {
+			return workflow.PublicationAttempt{}, false, err
+		}
+		if receipt != "" && receipt != "{}" {
+			if err = json.Unmarshal([]byte(receipt), &attempt.Receipt); err != nil {
+				return workflow.PublicationAttempt{}, false, err
+			}
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return workflow.PublicationAttempt{}, false, err
+	}
+	return attempt, false, nil
+}
+
+func (s *SQLite) CompletePublication(ctx context.Context, key string, receipt integration.PublicationReceipt) error {
+	payload, err := json.Marshal(receipt)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE publication_attempts SET status='completed',receipt_json=?,completed_at=CURRENT_TIMESTAMP,error_message='' WHERE idempotency_key=? AND status='pending'`, string(payload), key)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return fmt.Errorf("publication %q is not pending", key)
+	}
+	return nil
+}
+
+func (s *SQLite) RetryPublication(ctx context.Context, key string, cause error) error {
+	// Provider responses are deliberately not stored: some providers may echo
+	// credentials. The state is enough to permit a later controlled retry.
+	result, err := s.db.ExecContext(ctx, `UPDATE publication_attempts SET status='retryable',error_message='publication failed' WHERE idempotency_key=? AND status='pending'`, key)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return fmt.Errorf("publication %q is not pending", key)
+	}
+	return nil
 }
 
 func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.RunReport, error) {
@@ -194,7 +359,8 @@ CREATE TABLE IF NOT EXISTS workflow_executions (
  status TEXT NOT NULL,
  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  finished_at TEXT,
- metadata_json TEXT NOT NULL DEFAULT '{}'
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  execution_input_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS workflow_node_runs (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -207,4 +373,42 @@ CREATE TABLE IF NOT EXISTS workflow_node_runs (
  finished_at TEXT,
  metadata_json TEXT NOT NULL DEFAULT '{}'
 );
+CREATE TABLE IF NOT EXISTS publication_attempts (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ idempotency_key TEXT NOT NULL UNIQUE,
+ workflow_execution_id INTEGER NOT NULL REFERENCES workflow_executions(id),
+ workflow_version_id INTEGER NOT NULL REFERENCES workflow_versions(id),
+ node_key TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('pending','completed','retryable')),
+ attempt INTEGER NOT NULL DEFAULT 1,
+ receipt_json TEXT NOT NULL DEFAULT '{}',
+ error_message TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ completed_at TEXT
+);
 `
+
+func (s *SQLite) ensureExecutionInputColumn(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(workflow_executions)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, dataType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "execution_input_json" {
+			return nil
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE workflow_executions ADD COLUMN execution_input_json TEXT NOT NULL DEFAULT '{}'`)
+	return err
+}
