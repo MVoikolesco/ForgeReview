@@ -2,6 +2,12 @@ package workflow
 
 import "fmt"
 
+const (
+	VersionStatusDraft     = "draft"
+	VersionStatusPublished = "published"
+	VersionStatusArchived  = "archived"
+)
+
 type Port struct {
 	Key        string `json:"key"`
 	Label      string `json:"label"`
@@ -46,6 +52,24 @@ type Definition struct {
 	Description string `json:"description"`
 	Nodes       []Node `json:"nodes"`
 	Edges       []Edge `json:"edges"`
+}
+
+// VersionSummary is the safe metadata returned for a stored workflow version.
+// Loading a version still returns its definition only.
+type VersionSummary struct {
+	ID        int64  `json:"version_id"`
+	Version   int    `json:"version"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+}
+
+// DefinitionSummary groups the versions belonging to one workflow key. Name
+// and description are taken from the latest version.
+type DefinitionSummary struct {
+	Key         string           `json:"key"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	Versions    []VersionSummary `json:"versions"`
 }
 
 func Validate(definition Definition, catalog Catalog) error {

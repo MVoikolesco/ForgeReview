@@ -1,0 +1,100 @@
+@use "../../styles/tokens" as *;
+@use "../../styles/mixins" as *;
+
+.studio {
+    display: grid;
+    grid-template-columns: 250px minmax(0, 1fr) 290px;
+    grid-template-rows: 58px calc(100vh - 58px);
+    height: 100vh;
+    background: $surface-root;
+}
+
+.topbar {
+    display: flex;
+    grid-column: 1 / -1;
+    align-items: center;
+    gap: 28px;
+    padding: 0 18px;
+    border-bottom: 1px solid $border-subtle;
+    background: $surface-panel;
+}
+
+.topbar strong {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: #70a5ff;
+}
+
+.topbar strong small {
+    color: #707a88;
+    font-size: 10px;
+    letter-spacing: .11em;
+}
+
+.topbar>span {
+    color: #fff;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.topbar>div {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.topbar button,
+.topbar a {
+    @include control;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    color: #dbe2ed;
+    font-size: 12px;
+    text-decoration: none;
+    background: #171a20;
+}
+
+.topbar .primary {
+    border-color: $brand-border;
+    color: #fff;
+    background: $brand;
+}
+
+.topbar .publish {
+    border-color: #4e9f78;
+    color: #e2f6e9;
+    background: #173b2a;
+}
+
+@media (max-width: $breakpoint-tablet) {
+    .studio {
+        grid-template-columns: 210px 1fr;
+    }
+}
+
+@media (max-width: $breakpoint-mobile) {
+    .studio {
+        grid-template-columns: 1fr;
+    }
+
+    .topbar {
+        gap: 12px;
+        overflow-x: auto;
+    }
+
+    .topbar>span,
+    .topbar a {
+        display: none;
+    }
+
+    .topbar>div {
+        margin-left: 0;
+    }
+
+    .topbar strong small {
+        display: none;
+    }
+}

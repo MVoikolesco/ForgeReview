@@ -1,0 +1,48 @@
+@use "../../styles/tokens" as *;
+
+.card {
+    width: 230px;
+    border: 1px solid #343b47;
+    border-top: 2px solid var(--accent);
+    border-radius: $radius-panel;
+    background: $surface-card;
+    box-shadow: $shadow-panel;
+}
+
+.card.running {
+    box-shadow: 0 0 0 1px #e8bd67, $shadow-panel;
+}
+
+.card.completed {
+    border-color: #4e9f78;
+}
+
+.card.failed {
+    border-color: #df6575;
+}
+
+.card header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border-bottom: 1px solid #292e37;
+    color: #8995a6;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: .08em;
+}
+
+.card header i {
+    width: 8px;
+    height: 8px;
+    border-radius: 3px;
+    background: var(--accent);
+}
+
+.card header em {
+    margin-left: auto;
+    color: #7e8c9e;
+    font-size: 8px;
+    font-style: normal;
+}

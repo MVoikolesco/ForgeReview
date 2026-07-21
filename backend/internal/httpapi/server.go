@@ -3,6 +3,7 @@ package httpapi
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -85,6 +86,14 @@ func New(catalog workflow.Catalog, workflows *store.SQLite, adapterSets ...workf
 		}
 		c.JSON(http.StatusCreated, gin.H{"version_id": id, "status": "draft"})
 	})
+	api.GET("/workflows", func(c *gin.Context) {
+		items, err := workflows.ListDefinitions(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not list workflows"})
+			return
+		}
+		c.JSON(http.StatusOK, items)
+	})
 	api.GET("/workflow-versions/:id", func(c *gin.Context) {
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
@@ -101,6 +110,26 @@ func New(catalog workflow.Catalog, workflows *store.SQLite, adapterSets ...workf
 			return
 		}
 		c.JSON(http.StatusOK, definition)
+	})
+	api.POST("/workflow-versions/:id/publish", func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid version id"})
+			return
+		}
+		summary, err := workflows.Publish(c.Request.Context(), id, catalog)
+		switch {
+		case err == nil:
+			c.JSON(http.StatusOK, summary)
+		case errors.Is(err, store.ErrWorkflowVersionNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "workflow draft not found"})
+		case errors.Is(err, store.ErrWorkflowVersionNotDraft):
+			c.JSON(http.StatusConflict, gin.H{"error": "workflow version is not a draft"})
+		case errors.Is(err, store.ErrInvalidWorkflowVersion):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not publish workflow"})
+		}
 	})
 	api.POST("/workflow-versions/:id/executions", func(c *gin.Context) {
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)

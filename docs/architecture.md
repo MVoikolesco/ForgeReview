@@ -16,8 +16,11 @@ catalog includes the requested 20 cards grouped by input, data,
 transformation, control, AI, validation, result, output and infrastructure.
 
 The backend validates node keys, card types, declared ports and contract
-compatibility before creating a draft version. Published version immutability,
-workers and retry policies remain later increments.
+compatibility before creating a draft version. Each save creates a new draft
+version; no API mutates a saved definition. Publishing validates the stored
+definition again and atomically promotes that draft while archiving the prior
+published version for the same workflow key. Only one published version can
+exist per workflow key.
 
 ## Current API
 
@@ -29,7 +32,14 @@ workers and retry policies remain later increments.
 - `GET /api/integrations`: list safe integration summaries. The secret reference
   and any credential value are never returned.
 - `POST /api/workflows`: validate and persist a new draft version.
+- `GET /api/workflows`: list workflow keys with their latest name/description
+  and all version summaries (`version_id`, `version`, `created_at`, and
+  `status`). Status is one of `draft`, `published`, or `archived`.
 - `GET /api/workflow-versions/:id`: load an immutable saved definition.
+- `POST /api/workflow-versions/:id/publish`: atomically publish a draft and
+  archive the previous published version for that key. It returns the published
+  version summary. A missing version returns `404`, a non-draft returns `409`,
+  and an invalid persisted definition returns `422` without changing statuses.
 - `POST /api/workflow-versions/:id/executions`: create an execution for a
   stored definition. Without a dispatcher it runs synchronously and returns a
   completed report. With a dispatcher it enqueues the execution ID and returns
@@ -121,14 +131,45 @@ stored in the `workflow-data` volume. Redis is available only to the new
 application on the internal Compose network and dispatches execution IDs to the
 backend worker.
 
-## Studio validation flow
+The production frontend image runs `next start` from the compiled `.next`
+artifact. It intentionally does not run `next dev`, because the final image
+does not contain source files and uses `NODE_ENV=production`.
+
+## Studio lifecycle and validation flow
 
 The Studio loads the card catalog from `GET /api/cards`, lets an administrator
 add cards and draw port connections, and saves the current canvas as a new
-workflow version. `Salvar e executar` runs a local verification graph and paints
-each card as draft, running, completed or failed from the persisted execution
-report. With Redis dispatch enabled, the Studio polls the execution endpoint
-until the worker completes it.
+workflow version. `Salvar rascunho` creates a draft. `Publicar` first creates a
+new draft from the current canvas and only reports publication after
+`POST /api/workflow-versions/:id/publish` succeeds. `Salvar e executar` retains
+the local verification flow and paints each card as draft, running, completed or
+failed from the persisted execution report. With Redis dispatch enabled, the
+Studio polls the execution endpoint until the worker completes it.
+
+`/pipelines` lists the grouped workflow summaries from `GET /api/workflows`.
+It displays all draft, published, and archived versions and exposes publication
+only for draft versions; after a successful response it reloads the lifecycle
+list so the archived and published states are current. Header navigation links
+connect Studio, Pipelines, and Integrations.
+
+The `Integrações` control opens the Studio connection modal. It lists safe
+integration summaries and creates Gitea, OpenAI-compatible or Ollama records
+through the integration API. Model connections are visibly grouped as reusable
+models. The form accepts only the name of the environment variable holding a
+credential; it never requests, displays or persists its value.
+
+The connection flow uses a three-step Studio wizard: choose the Gitea or LLM
+family, configure the URL and secret reference, then select a model or review a
+Gitea connection. The only LLM choices exposed in the current UI are Ollama
+local, Ollama Cloud and OpenRouter. OpenRouter uses the controlled
+OpenAI-compatible adapter; both Ollama choices use the Ollama adapter.
+
+Selecting a card opens its inspector. The inspector edits its display name and
+the supported configuration fields: Gitea connection/PR coordinates for fetch
+and publish, reusable model selection and output limit for model, templates,
+file filters, group bounds, conditions and review validation/filter policies.
+`Template review` loads the first official workflow graph into the canvas; it
+requires configured Gitea and model connections before it can run externally.
 
 ## POC boundary
 

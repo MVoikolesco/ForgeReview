@@ -1,0 +1,32 @@
+.title {
+    margin: 12px 10px;
+    color: #f4f7fb;
+    font-size: 13px;
+}
+
+.port {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 27px;
+    padding: 0 10px;
+    color: #aeb9c8;
+    font-size: 11px;
+}
+
+.port small {
+    color: #697688;
+    font-size: 9px;
+}
+
+.output {
+    justify-content: flex-end;
+}
+
+.port :global(.react-flow__handle) {
+    width: 9px;
+    height: 9px;
+    border: 2px solid #171a20;
+    background: var(--accent);
+}

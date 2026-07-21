@@ -34,3 +34,33 @@ execution IDs while SQLite retains inputs and status; workers atomically claim
 queued executions. The non-durable in-process queue requires explicit local/test
 opt-in, so production does not silently lose asynchronous work. See
 [[Architecture]] and [[Feature Map]].
+
+## 2026-07-21: Frontend workspace boundaries and SCSS modules
+
+The Next.js routes only compose their workspace components. Workflow behavior is
+split into typed API/workflow helpers and reusable library, canvas, card shell,
+inspector, modal, and connection components. SCSS is colocated with components
+and consumes shared theme/token/mixin files rather than a single Studio
+stylesheet. This preserves the existing dark workflow-canvas visual language
+while making routes and components independently maintainable. See
+[[Architecture]] and [[Feature Map]].
+
+## 2026-07-21: Append-only workflow version publication
+
+Workflow saves always create a new draft rather than updating a version. The
+publish operation revalidates the persisted graph inside its SQLite transaction,
+archives any prior published version for the workflow key, then promotes the
+target draft. This preserves a single published version while retaining prior
+definitions for execution and inspection. Safe list summaries expose lifecycle
+metadata from `GET /api/workflows` without embedding definitions. See
+[[Architecture]] and [[Feature Map]].
+
+## 2026-07-21: Frontend workflow lifecycle feedback
+
+The Studio always saves the current canvas before a user-requested publication,
+then reports a published version only after the publish API responds
+successfully. The separate Pipelines workspace reads grouped summaries rather
+than definitions and offers publish controls only on drafts. This keeps lifecycle
+state visible while feedback is shown, without implying a failed or unconfirmed
+publication succeeded.
+See [[Architecture]] and [[Feature Map]].

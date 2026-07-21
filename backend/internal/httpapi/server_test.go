@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -76,5 +77,62 @@ func TestExecutionStartQueuesWhenDispatcherConfigured(t *testing.T) {
 	router.ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/executions/"+strconv.FormatInt(dispatcher.ids[0], 10), nil))
 	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"status":"queued"`) {
 		t.Fatalf("execution status = %d: %s", status.Code, status.Body.String())
+	}
+}
+
+func TestWorkflowPublishLifecycleAndListContract(t *testing.T) {
+	database, err := store.Open("file:" + t.TempDir() + "/workflow-lifecycle.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	router := New(workflow.DefaultCatalog(), database)
+
+	firstID := createWorkflow(t, router, `{"key":"review","name":"Review v1","nodes":[{"key":"start","type":"trigger","name":"Start"}]}`)
+	publishWorkflow(t, router, firstID, http.StatusOK)
+	secondID := createWorkflow(t, router, `{"key":"review","name":"Review v2","nodes":[{"key":"start","type":"trigger","name":"Start"}]}`)
+	publishWorkflow(t, router, secondID, http.StatusOK)
+	publishWorkflow(t, router, 999, http.StatusNotFound)
+
+	list := httptest.NewRecorder()
+	router.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/api/workflows", nil))
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status = %d: %s", list.Code, list.Body.String())
+	}
+	var items []workflow.DefinitionSummary
+	if err := json.NewDecoder(list.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Key != "review" || items[0].Name != "Review v2" || len(items[0].Versions) != 2 {
+		t.Fatalf("list shape = %#v", items)
+	}
+	versions := items[0].Versions
+	if versions[0].Version != 1 || versions[0].Status != workflow.VersionStatusArchived || versions[1].Version != 2 || versions[1].Status != workflow.VersionStatusPublished || versions[1].ID != secondID || versions[1].CreatedAt == "" {
+		t.Fatalf("listed lifecycle = %#v", versions)
+	}
+}
+
+func createWorkflow(t *testing.T, router http.Handler, body string) int64 {
+	t.Helper()
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/workflows", bytes.NewBufferString(body)))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status = %d: %s", response.Code, response.Body.String())
+	}
+	var result struct {
+		VersionID int64 `json:"version_id"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	return result.VersionID
+}
+
+func publishWorkflow(t *testing.T, router http.Handler, id int64, wantStatus int) {
+	t.Helper()
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/workflow-versions/"+strconv.FormatInt(id, 10)+"/publish", nil))
+	if response.Code != wantStatus {
+		t.Fatalf("publish %d status = %d: %s", id, response.Code, response.Body.String())
 	}
 }

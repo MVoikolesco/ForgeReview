@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"forgereview/backend/internal/integration"
@@ -13,6 +14,12 @@ import (
 )
 
 type SQLite struct{ db *sql.DB }
+
+var (
+	ErrWorkflowVersionNotFound = errors.New("workflow version not found")
+	ErrWorkflowVersionNotDraft = errors.New("workflow version is not a draft")
+	ErrInvalidWorkflowVersion  = errors.New("workflow version is invalid")
+)
 
 func Open(path string) (*SQLite, error) {
 	db, err := sql.Open("sqlite", path)
@@ -90,7 +97,10 @@ func (s *SQLite) Save(ctx context.Context, definition workflow.Definition) (int6
 	if err != nil {
 		return 0, err
 	}
-	id, _ := result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
 	if err = tx.Commit(); err != nil {
 		return 0, err
 	}
@@ -108,6 +118,88 @@ func (s *SQLite) Load(ctx context.Context, id int64) (workflow.Definition, error
 		return workflow.Definition{}, fmt.Errorf("decode workflow: %w", err)
 	}
 	return definition, nil
+}
+
+// ListDefinitions returns workflow keys with their version lifecycle metadata.
+func (s *SQLite) ListDefinitions(ctx context.Context) ([]workflow.DefinitionSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT workflow_key,name,description,id,version,status,created_at FROM workflow_versions ORDER BY workflow_key,version`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []workflow.DefinitionSummary{}
+	indexes := map[string]int{}
+	for rows.Next() {
+		var key, name, description string
+		var version workflow.VersionSummary
+		if err = rows.Scan(&key, &name, &description, &version.ID, &version.Version, &version.Status, &version.CreatedAt); err != nil {
+			return nil, err
+		}
+		index, exists := indexes[key]
+		if !exists {
+			index = len(items)
+			indexes[key] = index
+			items = append(items, workflow.DefinitionSummary{Key: key, Versions: []workflow.VersionSummary{}})
+		}
+		// Rows are version ordered, so the final values describe the latest draft
+		// or published revision while the complete lifecycle remains in Versions.
+		items[index].Name = name
+		items[index].Description = description
+		items[index].Versions = append(items[index].Versions, version)
+	}
+	return items, rows.Err()
+}
+
+// Publish atomically validates and promotes a draft. Any currently published
+// version for the same workflow key is archived in the same transaction.
+func (s *SQLite) Publish(ctx context.Context, id int64, catalog workflow.Catalog) (workflow.VersionSummary, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return workflow.VersionSummary{}, err
+	}
+	defer tx.Rollback()
+
+	var payload, workflowKey, status string
+	var summary workflow.VersionSummary
+	err = tx.QueryRowContext(ctx, `SELECT workflow_key,version,status,definition_json,created_at FROM workflow_versions WHERE id=?`, id).Scan(&workflowKey, &summary.Version, &status, &payload, &summary.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return workflow.VersionSummary{}, fmt.Errorf("%w: %d", ErrWorkflowVersionNotFound, id)
+	}
+	if err != nil {
+		return workflow.VersionSummary{}, err
+	}
+	if status != workflow.VersionStatusDraft {
+		return workflow.VersionSummary{}, fmt.Errorf("%w: %d", ErrWorkflowVersionNotDraft, id)
+	}
+
+	var definition workflow.Definition
+	if err = json.Unmarshal([]byte(payload), &definition); err != nil {
+		return workflow.VersionSummary{}, fmt.Errorf("%w: decode definition: %v", ErrInvalidWorkflowVersion, err)
+	}
+	if err = workflow.Validate(definition, catalog); err != nil {
+		return workflow.VersionSummary{}, fmt.Errorf("%w: %v", ErrInvalidWorkflowVersion, err)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE workflow_versions SET status=? WHERE workflow_key=? AND status=?`, workflow.VersionStatusArchived, workflowKey, workflow.VersionStatusPublished); err != nil {
+		return workflow.VersionSummary{}, err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE workflow_versions SET status=? WHERE id=? AND status=?`, workflow.VersionStatusPublished, id, workflow.VersionStatusDraft)
+	if err != nil {
+		return workflow.VersionSummary{}, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return workflow.VersionSummary{}, err
+	}
+	if updated != 1 {
+		return workflow.VersionSummary{}, fmt.Errorf("%w: %d", ErrWorkflowVersionNotDraft, id)
+	}
+	if err = tx.Commit(); err != nil {
+		return workflow.VersionSummary{}, err
+	}
+	summary.ID = id
+	summary.Status = workflow.VersionStatusPublished
+	return summary, nil
 }
 
 // CreateExecution persists an execution before it can be dispatched. Input is

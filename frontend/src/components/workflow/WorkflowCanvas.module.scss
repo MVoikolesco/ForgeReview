@@ -1,0 +1,27 @@
+@use "../../styles/tokens" as *;
+
+.canvas {
+    position: relative;
+    min-width: 0;
+    background: #0b0d11;
+}
+
+.canvas :global(.react-flow__edge-path) {
+    stroke: #5d8ee5;
+    stroke-width: 2;
+}
+
+.message {
+    position: absolute;
+    z-index: 5;
+    bottom: 16px;
+    left: 16px;
+    max-width: 440px;
+    margin: 0;
+    padding: 9px 12px;
+    border: 1px solid #303a48;
+    border-radius: 7px;
+    color: #b9c7d9;
+    font-size: 11px;
+    background: #12161ddd;
+}

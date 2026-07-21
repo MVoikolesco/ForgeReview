@@ -28,3 +28,22 @@
 - Connected the Studio to the card catalog and workflow APIs. It now saves a
   local verification graph, starts an execution, polls queued work when needed,
   and shows persisted node states on the canvas.
+- Added the Studio integration modal for Gitea, OpenAI-compatible and Ollama
+  connections, including a reusable-model list and environment-secret reference
+  input that never exposes credentials.
+- Added card-specific configuration in the Studio inspector, type-safe canvas
+  connection blocking, and the first official review-pipeline canvas template.
+- Replaced the single-form integrations modal with a compact Studio stepper for
+  Gitea and the supported LLM providers: Ollama local/cloud and OpenRouter.
+- Corrected the production frontend container to run `next start` rather than
+  `next dev`; the final image contains the compiled artifact only.
+- Refactored the frontend Studio into routed, reusable components and typed
+  helpers. Added `/studio`, `/integrations`, root redirection, SCSS modules and
+  shared styles, plus typed-connection unit coverage.
+- Added backend workflow version lifecycle APIs: list safe version summaries and
+  atomically publish valid drafts while archiving the previous published version.
+  Added store and HTTP coverage for lifecycle transitions, invalid drafts,
+  missing drafts, and list metadata.
+- Added frontend lifecycle controls: separate Studio draft-save and publish
+  actions, a `/pipelines` grouped version list with lifecycle badges and draft
+  publication, and navigation between Studio, Pipelines, and Integrations.

@@ -1,0 +1,98 @@
+@use "../../styles/tokens" as *;
+@use "../../styles/mixins" as *;
+
+.inspector {
+    overflow: auto;
+    padding: 18px;
+    border-left: 1px solid $border-subtle;
+    background: $surface-panel;
+}
+
+.inspector header {
+    display: grid;
+    gap: 5px;
+    margin-bottom: 22px;
+}
+
+.inspector header span,
+.config>strong {
+    color: #8494a9;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .09em;
+}
+
+.inspector header b {
+    font-size: 16px;
+}
+
+.inspector>label,
+.config label {
+    display: grid;
+    gap: 6px;
+    margin: 14px 0;
+    color: $text-secondary;
+    font-size: 11px;
+}
+
+.inspector input,
+.inspector select,
+.inspector textarea {
+    @include field;
+}
+
+.inspector textarea {
+    min-height: 96px;
+    resize: vertical;
+}
+
+.inspector dl {
+    display: grid;
+    gap: 5px;
+    margin: 0;
+}
+
+.inspector dt {
+    margin-top: 10px;
+    color: #758296;
+    font-size: 10px;
+    text-transform: uppercase;
+}
+
+.inspector dd {
+    margin: 0;
+    color: #d9e1ed;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.config {
+    margin-top: 22px;
+    padding-top: 15px;
+    border-top: 1px solid #29313d;
+}
+
+.check {
+    display: flex !important;
+    align-items: center;
+    grid-template-columns: auto 1fr;
+}
+
+.check input {
+    width: 15px;
+    min-height: 15px;
+}
+
+.note,
+.config p {
+    margin-top: 24px;
+    color: $text-muted;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+@media (max-width: $breakpoint-tablet) {
+    .inspector {
+        display: none;
+    }
+}
