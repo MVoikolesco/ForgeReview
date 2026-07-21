@@ -1,0 +1,154 @@
+@use "../../styles/tokens";
+@use "../../styles/breakpoints" as bp;
+
+.console-shell {
+  min-height: 100vh;
+  padding-left: 258px;
+  transition: padding 0.22s ease;
+
+  &.sidebar-is-collapsed {
+    padding-left: 82px;
+  }
+}
+
+.console-main {
+  min-width: 0;
+}
+
+.topbar {
+  height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  border-bottom: 1px solid tokens.$line;
+  padding: 0 clamp(24px, 3.5vw, 56px);
+  background: rgba(255, 255, 255, .8);
+  backdrop-filter: blur(12px);
+  font-size: 13px;
+
+  &-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+}
+
+.breadcrumb {
+  color: #99a49d;
+}
+
+.icon-button,
+.mobile-menu-button {
+  width: 37px;
+  height: 37px;
+  display: grid;
+  place-items: center;
+  border: 1px solid tokens.$line;
+  border-radius: 9px;
+  background: white;
+  cursor: pointer;
+}
+
+.mobile-menu-button {
+  display: none;
+}
+
+.user-avatar {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #245bbd;
+  background: #dce9ff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.page-content {
+  padding: 44px clamp(24px, 4vw, 64px) 70px;
+}
+
+.page-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 30px;
+  margin-bottom: 34px;
+
+  h1 {
+    margin: 0 0 8px;
+    font-size: 38px;
+    letter-spacing: -2px;
+  }
+
+  p {
+    margin: 0;
+    color: tokens.$muted;
+  }
+}
+
+[data-theme="dark"] {
+  .topbar {
+    color: #dce4f1;
+    background: rgba(13, 21, 36, .86);
+  }
+
+  .icon-button,
+  .mobile-menu-button {
+    color: #cbd4e4;
+    border-color: tokens.$line;
+    background: #162237;
+  }
+
+  .user-avatar {
+    color: #a9c8ff;
+    background: #1d3763;
+  }
+}
+
+@include bp.tablet {
+
+  .console-shell,
+  .console-shell.sidebar-is-collapsed {
+    padding-left: 0;
+  }
+
+  .mobile-menu-button {
+    display: grid;
+  }
+
+  .topbar {
+    justify-content: flex-start;
+    gap: 16px;
+
+    &-actions {
+      margin-left: auto;
+    }
+  }
+}
+
+@include bp.mobile {
+  .page-heading {
+    align-items: flex-start;
+
+    h1 {
+      font-size: 31px;
+    }
+
+    p {
+      max-width: 250px;
+      font-size: 12px;
+    }
+
+    .primary-button {
+      width: 43px;
+      flex: none;
+      padding: 0;
+      font-size: 0;
+    }
+  }
+}

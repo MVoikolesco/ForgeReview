@@ -1,0 +1,12 @@
+@use "../../styles/tokens";
+@use "../../styles/mixins";
+
+.manual-review-list { display: grid; gap: 9px; }
+.manual-review-list button { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; width: 100%; border: 1px solid tokens.$line; border-radius: 12px; padding: 14px; color: tokens.$ink; background: tokens.$surface; text-align: left; cursor: pointer; transition: border-color tokens.$transition, background tokens.$transition, transform tokens.$transition; }
+.manual-review-list button:hover:not(:disabled),
+.manual-review-list button:focus-visible { border-color: tokens.$accent; background: tokens.$surface-hover; }
+.manual-review-list button:hover:not(:disabled) { transform: translateY(-1px); }
+.manual-review-list button small { color: tokens.$muted; font-size: 11px; }
+.manual-review-list button svg { grid-column: 2; grid-row: 1 / span 2; color: tokens.$accent; }
+.manual-review-list p, .manual-review-loading { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 130px; color: tokens.$muted; text-align: center; }
+.manual-review-modal { max-width: 900px; }

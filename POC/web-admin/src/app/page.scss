@@ -1,0 +1,11 @@
+.app-loading {
+  width: 30px;
+  height: 30px;
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  border: 3px solid var(--line);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
