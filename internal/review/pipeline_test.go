@@ -206,6 +206,88 @@ func TestPipelineSchedulesAllCompatibleSuccessFanOutDestinations(t *testing.T) {
 	}
 }
 
+func TestPipelineFirstMatchUsesPriorityOrderedRule(t *testing.T) {
+	p := &pipelineProvider{calls: map[string]int{}}
+	_, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+	definition = pipelineWithPlannerFanOut(definition)
+	definition.Stages[0].RouteMode = "first_match"
+	for index := range definition.Transitions {
+		if definition.Transitions[index].FromStageID == definition.Stages[0].ID {
+			definition.Transitions[index].Rule = &Rule{
+				Operator: RuleGT,
+				Scope:    &CollectionScope{Kind: CollectionCount, Path: "files"},
+				Value:    0,
+			}
+		}
+	}
+	_, err := NewPipelineEngine(nil).Execute(context.Background(), definition, PipelineExecutionInput{
+		Job:      queueInput{ID: "first-match"},
+		RawDiff:  "diff --git a/app.go b/app.go\n--- a/app.go\n+++ b/app.go\n@@ -10 +10 @@\n-old\n+new\n",
+		Policy:   Policy{MinimumConfidence: .75, MaxParallelGroups: 1},
+		Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.calls["planner"] != 1 {
+		t.Fatalf("first_match scheduled %d matching branches", p.calls["planner"])
+	}
+}
+
+func TestPipelineBranchWithNoRuleMatchClosesNormally(t *testing.T) {
+	p := &pipelineProvider{calls: map[string]int{}}
+	_, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+	definition.Stages[0].RouteMode = "first_match"
+	definition.Transitions[0].Rule = &Rule{Operator: RuleExists, Path: "missing", Value: true}
+	result, err := NewPipelineEngine(nil).Execute(context.Background(), definition, PipelineExecutionInput{
+		Job: queueInput{ID: "closed-branch"}, RawDiff: "diff --git a/app.go b/app.go\n",
+		Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
+	})
+	if err != nil {
+		t.Fatalf("unmatched branch must close normally: %v", err)
+	}
+	if len(result.Comments) != 0 || len(p.calls) != 0 {
+		t.Fatalf("closed branch produced work: result=%#v calls=%#v", result, p.calls)
+	}
+}
+
+func TestPipelineCyclesRequireEveryTraversalToBeBounded(t *testing.T) {
+	_, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+	loop := definition.Stages[1]
+	loop.ID = 999
+	loop.Key = "bounded-loop"
+	loop.Position = len(definition.Stages) + 1
+	loop.InputContract = loop.OutputContract
+	definition.Stages = append(definition.Stages, loop)
+	loopID := loop.ID
+	definition.Transitions = append(definition.Transitions, PipelineTransition{
+		ID: 999, FromStageID: loop.ID, ToStageID: &loopID, Type: "success", ConditionKey: "always", MaxTraversals: 2,
+	})
+	if err := validatePipelineDefinition(definition); err != nil {
+		t.Fatalf("explicitly bounded cycle was rejected: %v", err)
+	}
+	definition.Transitions[len(definition.Transitions)-1].MaxTraversals = 0
+	if err := validatePipelineDefinition(definition); err == nil {
+		t.Fatal("expected unbounded cyclic traversal to be rejected")
+	}
+}
+
+func TestPipelineRejectsCatalogedButUnimplementedJoinModes(t *testing.T) {
+	_, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+	for _, mode := range []string{"any", "wait_all"} {
+		candidate := definition
+		candidate.Stages = append([]PipelineStage(nil), definition.Stages...)
+		candidate.Stages[1].JoinMode = mode
+		if err := validatePipelineDefinition(candidate); err == nil {
+			t.Fatalf("expected join mode %s to be rejected", mode)
+		}
+	}
+}
+
 func TestPipelinePersistsFailedStageStatus(t *testing.T) {
 	repo, definition, cleanup := seededPipeline(t)
 	defer cleanup()

@@ -56,6 +56,7 @@ func (s *Service) Enqueue(
 	source string,
 ) (Review, error) {
 	source = normalizeTriggerSource(source)
+	job.Source = source
 	if err := s.repo.TriggerAllowed(ctx, job, source); err != nil {
 		return Review{}, err
 	}

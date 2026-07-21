@@ -16,6 +16,7 @@ type ReviewJob struct {
 	RequestedReviewer string `json:"requested_reviewer"`
 	Sender            string `json:"sender"`
 	Manual            bool   `json:"manual"`
+	Source            string `json:"source"`
 	Title             string
 	Description       string
 	Author            string

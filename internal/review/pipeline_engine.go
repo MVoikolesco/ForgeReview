@@ -29,13 +29,14 @@ type StageExecutor interface {
 
 // PipelineExecutionInput contains runtime dependencies that are not pipeline configuration.
 type PipelineExecutionInput struct {
-	Job        queueInput
-	RawDiff    string
-	BasePrompt string
-	Policy     Policy
-	Provider   stageProviderResolver
-	Progress   stageProgress
-	Publish    func(context.Context, Result) (StageOutcome, error)
+	Job           queueInput
+	TriggerSource string
+	RawDiff       string
+	BasePrompt    string
+	Policy        Policy
+	Provider      stageProviderResolver
+	Progress      stageProgress
+	Publish       func(context.Context, Result) (StageOutcome, error)
 }
 
 // PipelineEngine resolves configured stage types through a controlled registry.
@@ -104,6 +105,7 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 			"pipeline_definition": definition.Key,
 			"pipeline_version":    definition.Version,
 			"pipeline_version_id": definition.VersionID,
+			"trigger_source":      input.TriggerSource,
 			"stage_metrics":       []map[string]any{},
 		},
 		providers: map[string]providers.LLMProvider{},
@@ -121,14 +123,10 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 	runtime.executionID = executionID
 	executionStatus := "completed"
 	byID := map[int64]PipelineStage{}
-	incoming := map[int64]int{}
+	byKey := map[string]PipelineStage{}
 	for _, stage := range definition.Stages {
 		byID[stage.ID] = stage
-	}
-	for _, edge := range definition.Transitions {
-		if (edge.Type == "success" || edge.Type == "skip") && edge.ToStageID != nil {
-			incoming[*edge.ToStageID]++
-		}
+		byKey[stage.Key] = stage
 	}
 	type arrival struct {
 		stage      PipelineStage
@@ -136,16 +134,33 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 		errPayload map[string]any
 	}
 	work := []arrival{}
-	for _, stage := range definition.Stages {
-		if stage.ExecutorKey == "preparation" && incoming[stage.ID] == 0 {
-			work = append(work, arrival{stage: stage})
-		}
+	triggerSource := input.TriggerSource
+	if triggerSource == "" {
+		triggerSource = "webhook"
 	}
-	maxRuns := len(definition.Stages) * (len(definition.Transitions) + 1) * 4
-	if maxRuns < 16 {
-		maxRuns = 16
+	for _, trigger := range definition.Triggers {
+		if trigger.Source != triggerSource {
+			continue
+		}
+		if !trigger.Enabled || trigger.TargetStageKey == "" {
+			return Result{}, fmt.Errorf("pipeline entrypoint %s is disabled or disconnected", triggerSource)
+		}
+		stage, ok := byKey[trigger.TargetStageKey]
+		if !ok {
+			return Result{}, fmt.Errorf("pipeline entrypoint %s targets unknown stage %s", triggerSource, trigger.TargetStageKey)
+		}
+		work = append(work, arrival{stage: stage})
+		break
+	}
+	if len(work) == 0 {
+		return Result{}, fmt.Errorf("pipeline entrypoint %s not found", triggerSource)
+	}
+	maxRuns := definition.SchedulerMaxRuns
+	if maxRuns < 1 {
+		maxRuns = 256
 	}
 	runs, published, publicationScheduled := 0, false, false
+	transitionTraversals := make(map[int]int, len(definition.Transitions))
 	for len(work) > 0 {
 		if runs >= maxRuns {
 			err := errors.New("pipeline scheduler bound exceeded")
@@ -210,18 +225,47 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 			published = true
 		}
 		matched := false
-		for _, edge := range definition.Transitions {
+		for edgeIndex := range definition.Transitions {
+			edge := &definition.Transitions[edgeIndex]
 			if edge.FromStageID != stage.ID || edge.ToStageID == nil {
 				continue
 			}
 			isError := stageErr != nil
+			edgeMatches := false
 			if (edge.Type == "failure" || edge.Type == "fallback") && isError {
-				payload := normalizedStageError(stage, edge, stageErr)
-				work = append(work, arrival{stage: byID[*edge.ToStageID], via: &edge, errPayload: payload})
-				matched = true
-			} else if (edge.Type == "success" || edge.Type == "skip") && !isError && conditionMatches(edge.ConditionKey, outcome, runtime) {
-				work = append(work, arrival{stage: byID[*edge.ToStageID], via: &edge})
-				matched = true
+				edgeMatches = edge.ConditionKey == technicalErrorKind(stageErr)
+			} else if (edge.Type == "success" || edge.Type == "skip") && !isError {
+				if edge.Rule != nil {
+					schema := ""
+					if stage.OutputContract != nil {
+						schema = stage.OutputContract.SchemaJSON
+					}
+					var ruleErr error
+					edgeMatches, ruleErr = EvaluateRule(*edge.Rule, schema, outcome.Artifact)
+					if ruleErr != nil {
+						stageErr = fmt.Errorf("contract_invalid: %w", ruleErr)
+						continue
+					}
+				} else {
+					edgeMatches = conditionMatches(edge.ConditionKey, outcome, runtime)
+				}
+			}
+			if !edgeMatches {
+				continue
+			}
+			transitionTraversals[edgeIndex]++
+			if edge.MaxTraversals > 0 && transitionTraversals[edgeIndex] > edge.MaxTraversals {
+				continue
+			}
+			if isError {
+				payload := normalizedStageError(stage, *edge, stageErr)
+				work = append(work, arrival{stage: byID[*edge.ToStageID], via: edge, errPayload: payload})
+			} else {
+				work = append(work, arrival{stage: byID[*edge.ToStageID], via: edge})
+			}
+			matched = true
+			if stage.RouteMode == "first_match" {
+				break
 			}
 		}
 		if stageErr != nil && !matched {
@@ -240,12 +284,13 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 	if runtime.result.Metadata == nil {
 		runtime.result.Metadata = runtime.meta
 	}
-	if !published || len(runtime.result.Comments) == 0 && runtime.result.FinalReview.Summary == "" {
-		err := errors.New("pipeline ended without a valid published formatted result")
+	if !published {
 		if e.repo != nil {
-			_ = e.repo.FinishPipelineExecution(ctx, executionID, "failed", err)
+			if err := e.repo.FinishPipelineExecution(ctx, executionID, executionStatus, nil); err != nil {
+				return Result{}, err
+			}
 		}
-		return Result{}, err
+		return Result{}, nil
 	}
 	if err := validateResult(runtime.result); err != nil {
 		if e.repo != nil {
@@ -259,6 +304,16 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 		}
 	}
 	return runtime.result, nil
+}
+
+func technicalErrorKind(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return "timeout"
+	}
+	if strings.Contains(err.Error(), "contract_invalid") {
+		return "contract_invalid"
+	}
+	return "error"
 }
 
 func normalizedStageError(stage PipelineStage, edge PipelineTransition, err error) map[string]any {

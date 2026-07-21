@@ -112,6 +112,120 @@ func TestDisabledTriggerRejectsBeforeReviewPersistence(t *testing.T) {
 	}
 }
 
+func TestEntrypointTargetsAndPositionsSurviveClone(t *testing.T) {
+	repo, published, cleanup := seededPipeline(t)
+	defer cleanup()
+	ctx := context.Background()
+	triggers := []PipelineTrigger{
+		{Source: "webhook", Enabled: true, TargetStageKey: published.Stages[0].Key, Config: map[string]any{"x": -420, "y": -180}},
+		{Source: "api", Enabled: true, TargetStageKey: published.Stages[1].Key, Config: map[string]any{"x": -120, "y": 80}},
+		{Source: "manual", Enabled: true, TargetStageKey: published.Stages[2].Key, Config: map[string]any{"x": 240, "y": 320}},
+	}
+	created, err := repo.CreatePipelineDraft(ctx, PipelineCreateInput{
+		Key: "custom-entrypoints",
+		PipelineDraftInput: PipelineDraftInput{
+			Name: "Custom entrypoints", Stages: stageInputs(published), Triggers: triggers,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := created.Versions[0]
+	assertEntrypoints := func(items []PipelineTrigger) {
+		t.Helper()
+		for _, expected := range triggers {
+			var got *PipelineTrigger
+			for index := range items {
+				if items[index].Source == expected.Source {
+					got = &items[index]
+					break
+				}
+			}
+			if got == nil || got.TargetStageKey != expected.TargetStageKey || got.Config["x"] != float64(expected.Config["x"].(int)) || got.Config["y"] != float64(expected.Config["y"].(int)) {
+				t.Fatalf("entrypoint mismatch: got=%#v want=%#v", got, expected)
+			}
+		}
+	}
+	assertEntrypoints(draft.Triggers)
+	if _, err = repo.PublishPipelineDraft(ctx, created.ID, draft.ID); err != nil {
+		t.Fatal(err)
+	}
+	cloned, err := repo.ClonePublishedPipeline(ctx, created.ID, draft.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEntrypoints(cloned.Versions[0].Triggers)
+}
+
+func TestDynamicWorkflowFieldsSurviveAdminRoundTripAndClone(t *testing.T) {
+	repo, published, cleanup := seededPipeline(t)
+	defer cleanup()
+	ctx := context.Background()
+	stages := stageInputs(published)
+	stages[0].RouteMode = "first_match"
+	stages[1].JoinMode = "each_arrival"
+	transitions := linearTransitions(published)
+	transitions[0].Rule = &Rule{Operator: RuleExists, Path: "files", Value: true}
+	transitions[0].MaxTraversals = 3
+	created, err := repo.CreatePipelineDraft(ctx, PipelineCreateInput{
+		Key: "dynamic-roundtrip",
+		PipelineDraftInput: PipelineDraftInput{
+			Name: "Dynamic roundtrip", SchedulerMaxRuns: 41, Stages: stages, Transitions: &transitions,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := created.Versions[0]
+	if draft.SchedulerMaxRuns != 41 || draft.Stages[0].RouteMode != "first_match" || draft.Stages[1].JoinMode != "each_arrival" {
+		t.Fatalf("workflow modes did not roundtrip: %#v", draft)
+	}
+	if draft.Transitions[0].Rule == nil || draft.Transitions[0].Rule.Operator != RuleExists || draft.Transitions[0].MaxTraversals != 3 {
+		t.Fatalf("transition rule did not roundtrip: %#v", draft.Transitions[0])
+	}
+	if _, err = repo.PublishPipelineDraft(ctx, created.ID, draft.ID); err != nil {
+		t.Fatal(err)
+	}
+	cloned, err := repo.ClonePublishedPipeline(ctx, created.ID, draft.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone := cloned.Versions[0]
+	if clone.SchedulerMaxRuns != 41 || clone.Stages[0].RouteMode != "first_match" || clone.Transitions[0].Rule == nil || clone.Transitions[0].MaxTraversals != 3 {
+		t.Fatalf("dynamic fields did not survive clone: %#v", clone)
+	}
+}
+
+func TestWorkflowCatalogIsSystemControlledAndMarksUnsupportedModes(t *testing.T) {
+	repo, _, cleanup := seededPipeline(t)
+	defer cleanup()
+	ctx := context.Background()
+	if _, err := repo.db.ExecContext(ctx, `INSERT INTO stage_contracts(key,version,is_system) VALUES('user-contract',1,0);
+		INSERT INTO workflow_entrypoint_catalog(key,display_name,adapter_key) VALUES('custom','Custom','unregistered');`); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := repo.WorkflowCatalog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Contracts) != 9 || len(catalog.Processors) != 4 || len(catalog.Entrypoints) != 3 {
+		t.Fatalf("unexpected catalog: %#v", catalog)
+	}
+	for _, contract := range catalog.Contracts {
+		if contract.Key == "user-contract" {
+			t.Fatal("non-system contract was exposed")
+		}
+	}
+	for _, processor := range catalog.Processors {
+		if (processor.Key == "rule_filter" || processor.Key == "transform_merge") && processor.Executable {
+			t.Fatalf("unsupported processor was exposed as executable: %#v", processor)
+		}
+	}
+	if catalog.JoinModes[0].Key != "each_arrival" || !catalog.JoinModes[0].Executable || catalog.JoinModes[1].Executable || catalog.JoinModes[2].Executable {
+		t.Fatalf("unexpected join mode capabilities: %#v", catalog.JoinModes)
+	}
+}
+
 func TestPipelineSelectionUsesProfileThenGlobalFallback(t *testing.T) {
 	repo, global, cleanup := seededPipeline(t)
 	defer cleanup()
@@ -189,7 +303,7 @@ func TestDraftProfileChangeOnlyTakesEffectWhenPublished(t *testing.T) {
 func stageInputs(definition PipelineDefinition) []PipelineStageInput {
 	inputs := make([]PipelineStageInput, len(definition.Stages))
 	for i, stage := range definition.Stages {
-		inputs[i] = PipelineStageInput{StageTypeKey: stage.StageTypeKey, Key: stage.Key, Name: stage.Name, Prompt: stage.PromptTemplate, ModelID: stage.ModelID, MaxTokens: stage.MaxOutputTokens, RetryLimit: stage.RetryLimit, Timeout: stage.TimeoutSeconds, UseLLM: stage.UseLLM, Required: stage.Required, Config: stage.Config}
+		inputs[i] = PipelineStageInput{StageTypeKey: stage.StageTypeKey, Key: stage.Key, Name: stage.Name, Prompt: stage.PromptTemplate, ModelID: stage.ModelID, MaxTokens: stage.MaxOutputTokens, RetryLimit: stage.RetryLimit, Timeout: stage.TimeoutSeconds, UseLLM: stage.UseLLM, Required: stage.Required, RouteMode: stage.RouteMode, JoinMode: stage.JoinMode, Config: stage.Config}
 	}
 	return inputs
 }

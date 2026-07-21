@@ -70,7 +70,6 @@
   top: 66px;
   bottom: 16px;
   width: 280px;
-  height: 85vh;
   overflow: auto;
   padding: 14px;
   border: 1px solid #334153;
@@ -193,6 +192,32 @@
   text-transform: uppercase;
 }
 
+.studio-pipeline-fields label {
+  display: grid;
+  gap: 5px;
+  color: #93a4b8;
+  font-size: 12px;
+}
+
+.studio-pipeline-fields input,
+.studio-pipeline-fields textarea,
+.studio-pipeline-fields select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 8px;
+  border: 1px solid #344354;
+  border-radius: 5px;
+  color: #d8e4f1;
+  font: inherit;
+  background: #0e141c;
+}
+
+.studio-pipeline-fields textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+
 .studio-sidebar button {
   display: flex;
   align-items: center;
@@ -286,6 +311,111 @@
   border-color: #9a4650;
 }
 
+.studio-entrypoint {
+  position: relative;
+  width: 250px;
+  overflow: hidden;
+  border: 1px solid #745f35;
+  border-radius: 9px;
+  background: #1d1b18;
+  box-shadow: 0 10px 25px #0006;
+}
+
+.studio-entrypoint.disabled {
+  border-color: #3a414a;
+  filter: saturate(.35);
+  opacity: .72;
+}
+
+.studio-entrypoint header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid #403824;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.studio-entrypoint header span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.studio-entrypoint header i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e6a34e;
+  box-shadow: 0 0 10px #e6a34e88;
+}
+
+.studio-entrypoint header small {
+  color: #d7ab68;
+  font-size: 10px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.studio-entrypoint-body {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 12px;
+}
+
+.studio-entrypoint-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #665333;
+  border-radius: 7px;
+  color: #efb65d;
+  background: #2a2419;
+}
+
+.studio-entrypoint label {
+  display: grid;
+  gap: 4px;
+  color: #a99d8a;
+  font-size: 10px;
+}
+
+.studio-entrypoint select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 7px;
+  border: 1px solid #51472f;
+  border-radius: 5px;
+  color: #eee3d1;
+  font: inherit;
+  font-size: 11px;
+  background: #12110f;
+}
+
+.studio-entrypoint-state {
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-top: 1px solid #403824;
+  color: #cdb993;
+  font-size: 10px;
+  text-align: left;
+  background: #17140f;
+}
+
+.studio-entrypoint-state:disabled {
+  cursor: default;
+}
+
+.studio-canvas .studio-entrypoint-edge .react-flow__edge-path {
+  stroke-width: 2.5;
+}
+
 .studio-node header {
   display: flex;
   justify-content: space-between;
@@ -355,7 +485,26 @@
   justify-content: flex-end;
 }
 
-.studio-ports.reversed { flex-direction: row-reverse; }
+.studio-ports.reversed {
+  flex-direction: row-reverse;
+}
+
+.studio-node-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 8px 10px 0;
+}
+
+.studio-node-meta span {
+  padding: 3px 6px;
+  border: 1px solid #344354;
+  border-radius: 999px;
+  color: #9fb2c8;
+  font-size: 10px;
+  line-height: 1;
+  background: #111821;
+}
 
 .studio-ports i {
   width: 8px;
@@ -383,6 +532,10 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 7px;
+}
+
+.studio-fields>.studio-deterministic-fields {
+  grid-template-columns: 1.45fr .75fr;
 }
 
 .studio-node input,
@@ -475,6 +628,67 @@
   font-size: 11px;
 }
 
+.rule-builder {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid #2f3e4f;
+  border-radius: 6px;
+  background: #101720;
+}
+
+.rule-builder-heading,
+.rule-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rule-builder-heading {
+  justify-content: space-between;
+  color: #b7c6d6;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.studio-edge .rule-builder button {
+  width: auto;
+  min-height: 25px;
+  padding: 4px 6px;
+  border: 1px solid #3a4b5e;
+  border-radius: 4px;
+  color: #a9bbce;
+  background: #172230;
+  font-size: 10px;
+}
+
+.rule-node {
+  display: grid;
+  gap: 6px;
+}
+
+.rule-node.rule-group {
+  padding: 7px;
+  border-left: 2px solid #4d91ff;
+  background: #141e29;
+}
+
+.rule-node .rule-row>select,
+.rule-node .rule-row>input {
+  min-width: 0;
+  flex: 1;
+}
+
+.rule-node .rule-row>button {
+  flex: none;
+}
+
+.rule-builder small {
+  color: #7f93aa;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
 .studio-error-note {
   display: flex;
   gap: 6px;
@@ -515,7 +729,12 @@
   }
 
   .studio-inspector {
-    display: none;
+    top: auto;
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    width: auto;
+    max-height: 55%;
   }
 }
 
@@ -636,7 +855,14 @@
 }
 
 .studio-canvas .react-flow__edge-text,
-.studio-canvas .react-flow__edge-textbg { display: none; }
+.studio-canvas .react-flow__edge-textbg {
+  display: none;
+}
+
+.pipeline-studio.editing .studio-canvas .react-flow__edge-text,
+.pipeline-studio.editing .studio-canvas .react-flow__edge-textbg {
+  display: block;
+}
 
 .studio-canvas .react-flow__edge.animated .react-flow__edge-path {
   stroke-dasharray: 7 5;

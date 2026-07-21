@@ -167,6 +167,14 @@ func ensurePipelineSeed(ctx context.Context, tx *sql.Tx, key, name string, profi
 			return err
 		}
 	}
+	for index, source := range []string{"webhook", "api", "manual"} {
+		y := (index - 1) * 145
+		if _, err = tx.ExecContext(ctx, `INSERT INTO pipeline_version_triggers(
+			pipeline_version_id,trigger_source,is_enabled,target_stage_key,config_json)
+			VALUES(?,?,1,'preparacao',?)`, versionID, source, fmt.Sprintf(`{"x":-360,"y":%d}`, y)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

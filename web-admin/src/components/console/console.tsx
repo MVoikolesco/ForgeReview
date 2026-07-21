@@ -9,7 +9,7 @@ import { SettingsArea } from "@/components/settings/settings-area";
 import { ThemeToggle, type Theme } from "@/components/theme-toggle";
 import { createAdminClient } from "@/lib/admin-client";
 import type { Connection, ConnectionData } from "@/lib/contracts";
-import { Edit3, Menu, Play, RefreshCw, RotateCcw, Save } from "lucide-react";
+import { Edit3, Menu, Play, RefreshCw, RotateCcw, Save, Send } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ConsoleView } from "./sidebar";
 import { Sidebar } from "./sidebar";
@@ -64,6 +64,7 @@ export function Console({
   const [pipelineEditing, setPipelineEditing] = useState(false);
   const [pipelineEditRequest, setPipelineEditRequest] = useState(0);
   const [pipelineSaveRequest, setPipelineSaveRequest] = useState(0);
+  const [pipelinePublishRequest, setPipelinePublishRequest] = useState(0);
   const [pipelineDiscardRequest, setPipelineDiscardRequest] = useState(0);
 
   const refresh = useCallback(async () => {
@@ -126,7 +127,7 @@ export function Console({
             <span className="breadcrumb">Workspace /</span> {view === "executions" ? "Pipeline" : viewLabels[view]}{view === "executions" && pipelineName ? ` / ${pipelineName}` : ""}
           </div>
           <div className="topbar-actions">
-            {view === "executions" && (pipelineEditing ? <><button className="secondary-button" onClick={() => setPipelineDiscardRequest((value) => value + 1)}><RotateCcw size={16} /> Descartar</button><button className="primary-button" onClick={() => setPipelineSaveRequest((value) => value + 1)}><Save size={16} /> Salvar</button></> : <button className="primary-button" onClick={() => setPipelineEditRequest((value) => value + 1)}><Edit3 size={16} /> Editar pipeline</button>)}
+            {view === "executions" && (pipelineEditing ? <><button className="secondary-button" onClick={() => setPipelineDiscardRequest((value) => value + 1)}><RotateCcw size={16} /> Fechar edição</button><button className="secondary-button" onClick={() => setPipelineSaveRequest((value) => value + 1)}><Save size={16} /> Salvar draft</button><button className="primary-button" onClick={() => setPipelinePublishRequest((value) => value + 1)}><Send size={16} /> Publicar</button></> : <button className="primary-button" onClick={() => setPipelineEditRequest((value) => value + 1)}><Edit3 size={16} /> Editar pipeline</button>)}
             <ThemeToggle theme={theme} onToggle={onThemeToggle} />
             {view === "connections" && (
               <button
@@ -186,7 +187,7 @@ export function Console({
               <GiteaArea request={request} onAuthError={onLogout} />
             </>
           ) : view === "executions" ? (
-            <ExecutionsFlow request={request} onAuthError={onLogout} onPipelineName={setPipelineName} editRequest={pipelineEditRequest} saveRequest={pipelineSaveRequest} discardRequest={pipelineDiscardRequest} onEditingChange={setPipelineEditing} />
+            <ExecutionsFlow request={request} onAuthError={onLogout} onPipelineName={setPipelineName} editRequest={pipelineEditRequest} saveRequest={pipelineSaveRequest} publishRequest={pipelinePublishRequest} discardRequest={pipelineDiscardRequest} onEditingChange={setPipelineEditing} />
           ) : (
             <>
               <div className="page-heading">

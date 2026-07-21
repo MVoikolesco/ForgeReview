@@ -21,7 +21,7 @@ func TestMigrateAndSeed(t *testing.T) {
 	if err := db.Seed(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"ai_providers", "review_profiles", "reviews", "review_steps", "pending_reviews", "stage_contracts", "stage_types", "pipeline_definitions", "pipeline_versions", "pipeline_stages", "pipeline_transitions", "pipeline_executions", "stage_executions", "stage_artifacts", "review_publications"} {
+	for _, table := range []string{"ai_providers", "review_profiles", "reviews", "review_steps", "pending_reviews", "stage_contracts", "stage_types", "pipeline_definitions", "pipeline_versions", "pipeline_stages", "pipeline_transitions", "pipeline_executions", "stage_executions", "stage_artifacts", "review_publications", "workflow_processor_catalog", "workflow_entrypoint_catalog"} {
 		var name string
 		if err := db.SQL.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name); err != nil {
 			t.Fatalf("missing %s: %v", table, err)

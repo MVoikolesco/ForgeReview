@@ -19,6 +19,14 @@ func (h *AdminHandler) pipelines(c *gin.Context) {
 	}
 	responses.Legacy(c, http.StatusOK, items)
 }
+func (h *AdminHandler) workflowCatalog(c *gin.Context) {
+	item, err := h.reviewRepo.WorkflowCatalog(c)
+	if err != nil {
+		pipelineError(c, err)
+		return
+	}
+	responses.Legacy(c, http.StatusOK, item)
+}
 func (h *AdminHandler) pipeline(c *gin.Context) {
 	id, ok := pipelineID(c)
 	if !ok {

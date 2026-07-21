@@ -39,6 +39,8 @@ type PipelineStage struct {
 	TimeoutSeconds  int            `json:"timeout_seconds"`
 	UseLLM          bool           `json:"use_llm"`
 	Required        bool           `json:"required"`
+	RouteMode       string         `json:"route_mode"`
+	JoinMode        string         `json:"join_mode"`
 	Config          map[string]any `json:"config,omitempty"`
 	InputContract   *StageContract `json:"input_contract,omitempty"`
 	OutputContract  *StageContract `json:"output_contract,omitempty"`
@@ -46,31 +48,36 @@ type PipelineStage struct {
 
 // PipelineTransition links two configured stages for a known outcome.
 type PipelineTransition struct {
-	ID           int64  `json:"id"`
-	FromStageID  int64  `json:"from_stage_id"`
-	ToStageID    *int64 `json:"to_stage_id,omitempty"`
-	Type         string `json:"type"`
-	ConditionKey string `json:"condition_key"`
-	Priority     int    `json:"priority"`
+	ID            int64  `json:"id"`
+	FromStageID   int64  `json:"from_stage_id"`
+	ToStageID     *int64 `json:"to_stage_id,omitempty"`
+	Type          string `json:"type"`
+	ConditionKey  string `json:"condition_key"`
+	Priority      int    `json:"priority"`
+	Rule          *Rule  `json:"rule,omitempty"`
+	MaxTraversals int    `json:"max_traversals"`
 }
 
 // PipelineTrigger controls which trusted entry points may start a version.
 type PipelineTrigger struct {
-	Source  string `json:"source"`
-	Enabled bool   `json:"enabled"`
+	Source         string         `json:"source"`
+	Enabled        bool           `json:"enabled"`
+	TargetStageKey string         `json:"target_stage_key"`
+	Config         map[string]any `json:"config,omitempty"`
 }
 
 // PipelineDefinition is the immutable published version used by one execution.
 type PipelineDefinition struct {
-	ID          int64                `json:"id"`
-	Key         string               `json:"key"`
-	Name        string               `json:"name"`
-	ProfileID   *int64               `json:"profile_id,omitempty"`
-	VersionID   int64                `json:"version_id"`
-	Version     int                  `json:"version"`
-	Stages      []PipelineStage      `json:"stages"`
-	Transitions []PipelineTransition `json:"transitions"`
-	Triggers    []PipelineTrigger    `json:"triggers"`
+	ID               int64                `json:"id"`
+	Key              string               `json:"key"`
+	Name             string               `json:"name"`
+	ProfileID        *int64               `json:"profile_id,omitempty"`
+	VersionID        int64                `json:"version_id"`
+	Version          int                  `json:"version"`
+	SchedulerMaxRuns int                  `json:"scheduler_max_runs"`
+	Stages           []PipelineStage      `json:"stages"`
+	Transitions      []PipelineTransition `json:"transitions"`
+	Triggers         []PipelineTrigger    `json:"triggers"`
 }
 
 // Pipeline loads and binds the immutable pipeline version selected for a review.
@@ -164,8 +171,9 @@ func (r *Repository) TriggerAllowed(ctx context.Context, job queue.ReviewJob, so
 		return err
 	}
 	var enabled int
-	err = r.db.QueryRowContext(ctx, `SELECT is_enabled FROM pipeline_version_triggers WHERE pipeline_version_id=? AND trigger_source=?`, version.Int64, source).Scan(&enabled)
-	if errors.Is(err, sql.ErrNoRows) || enabled == 0 {
+	var target string
+	err = r.db.QueryRowContext(ctx, `SELECT is_enabled,target_stage_key FROM pipeline_version_triggers WHERE pipeline_version_id=? AND trigger_source=?`, version.Int64, source).Scan(&enabled, &target)
+	if errors.Is(err, sql.ErrNoRows) || enabled == 0 || target == "" {
 		return fmt.Errorf("pipeline does not allow %s trigger", source)
 	}
 	return err
@@ -174,10 +182,10 @@ func (r *Repository) TriggerAllowed(ctx context.Context, job queue.ReviewJob, so
 func (r *Repository) loadPipelineVersion(ctx context.Context, versionID int64) (PipelineDefinition, error) {
 	var item PipelineDefinition
 	var profileID sql.NullInt64
-	err := r.db.QueryRowContext(ctx, `SELECT pd.id,pd.key,pd.name,pd.profile_id,pv.id,pv.version
+	err := r.db.QueryRowContext(ctx, `SELECT pd.id,pd.key,pd.name,pd.profile_id,pv.id,pv.version,pv.scheduler_max_runs
 		FROM pipeline_versions pv JOIN pipeline_definitions pd ON pd.id=pv.pipeline_definition_id
 		WHERE pv.id=?`, versionID).Scan(
-		&item.ID, &item.Key, &item.Name, &profileID, &item.VersionID, &item.Version)
+		&item.ID, &item.Key, &item.Name, &profileID, &item.VersionID, &item.Version, &item.SchedulerMaxRuns)
 	if err != nil {
 		return item, err
 	}
@@ -187,7 +195,7 @@ func (r *Repository) loadPipelineVersion(ctx context.Context, versionID int64) (
 
 	rows, err := r.db.QueryContext(ctx, `SELECT ps.id,ps.stage_type_id,st.key,st.executor_key,
 		ps.stage_key,ps.display_name,ps.position,ps.prompt_template,ps.model_id,
-		ps.max_output_tokens,ps.retry_limit,ps.timeout_seconds,ps.use_llm,ps.is_required,ps.config_json,
+		ps.max_output_tokens,ps.retry_limit,ps.timeout_seconds,ps.use_llm,ps.is_required,ps.route_mode,ps.join_mode,ps.config_json,
 		ic.id,ic.key,ic.version,ic.response_instruction,ic.schema_json,ic.semantic_validator_key,
 		oc.id,oc.key,oc.version,oc.response_instruction,oc.schema_json,oc.semantic_validator_key
 		FROM pipeline_stages ps
@@ -212,7 +220,7 @@ func (r *Repository) loadPipelineVersion(ctx context.Context, versionID int64) (
 		var outputVersion sql.NullInt64
 		if err = rows.Scan(&stage.ID, &stage.StageTypeID, &stage.StageTypeKey, &stage.ExecutorKey,
 			&stage.Key, &stage.Name, &stage.Position, &stage.PromptTemplate, &modelID,
-			&stage.MaxOutputTokens, &stage.RetryLimit, &stage.TimeoutSeconds, &useLLM, &required, &config,
+			&stage.MaxOutputTokens, &stage.RetryLimit, &stage.TimeoutSeconds, &useLLM, &required, &stage.RouteMode, &stage.JoinMode, &config,
 			&inputID, &inputKey, &inputVersion, &inputInstruction, &inputSchema, &inputValidator,
 			&outputID, &outputKey, &outputVersion, &outputInstruction, &outputSchema, &outputValidator); err != nil {
 			return item, err
@@ -235,7 +243,7 @@ func (r *Repository) loadPipelineVersion(ctx context.Context, versionID int64) (
 		return item, err
 	}
 
-	transitionRows, err := r.db.QueryContext(ctx, `SELECT id,from_stage_id,to_stage_id,transition_type,condition_key,priority
+	transitionRows, err := r.db.QueryContext(ctx, `SELECT id,from_stage_id,to_stage_id,transition_type,condition_key,priority,rule_json,max_traversals
 		FROM pipeline_transitions WHERE pipeline_version_id=? ORDER BY priority,id`, versionID)
 	if err != nil {
 		return item, err
@@ -244,8 +252,15 @@ func (r *Repository) loadPipelineVersion(ctx context.Context, versionID int64) (
 	for transitionRows.Next() {
 		var transition PipelineTransition
 		var to sql.NullInt64
-		if err = transitionRows.Scan(&transition.ID, &transition.FromStageID, &to, &transition.Type, &transition.ConditionKey, &transition.Priority); err != nil {
+		var ruleJSON sql.NullString
+		if err = transitionRows.Scan(&transition.ID, &transition.FromStageID, &to, &transition.Type, &transition.ConditionKey, &transition.Priority, &ruleJSON, &transition.MaxTraversals); err != nil {
 			return item, err
+		}
+		if ruleJSON.Valid && ruleJSON.String != "" {
+			transition.Rule = &Rule{}
+			if err = json.Unmarshal([]byte(ruleJSON.String), transition.Rule); err != nil {
+				return item, fmt.Errorf("invalid transition rule: %w", err)
+			}
 		}
 		if to.Valid {
 			transition.ToStageID = &to.Int64
@@ -255,7 +270,7 @@ func (r *Repository) loadPipelineVersion(ctx context.Context, versionID int64) (
 	if err = transitionRows.Err(); err != nil {
 		return item, err
 	}
-	triggerRows, err := r.db.QueryContext(ctx, `SELECT trigger_source,is_enabled FROM pipeline_version_triggers WHERE pipeline_version_id=? ORDER BY trigger_source`, versionID)
+	triggerRows, err := r.db.QueryContext(ctx, `SELECT trigger_source,is_enabled,target_stage_key,config_json FROM pipeline_version_triggers WHERE pipeline_version_id=? ORDER BY trigger_source`, versionID)
 	if err != nil {
 		return item, err
 	}
@@ -263,10 +278,12 @@ func (r *Repository) loadPipelineVersion(ctx context.Context, versionID int64) (
 	for triggerRows.Next() {
 		var trigger PipelineTrigger
 		var enabled int
-		if err = triggerRows.Scan(&trigger.Source, &enabled); err != nil {
+		var config string
+		if err = triggerRows.Scan(&trigger.Source, &enabled, &trigger.TargetStageKey, &config); err != nil {
 			return item, err
 		}
 		trigger.Enabled = enabled != 0
+		_ = json.Unmarshal([]byte(config), &trigger.Config)
 		item.Triggers = append(item.Triggers, trigger)
 	}
 	return item, triggerRows.Err()
@@ -294,6 +311,20 @@ func validatePipelineDefinition(definition PipelineDefinition) error {
 		}
 		lastPosition = stage.Position
 		counts[stage.ExecutorKey]++
+		routeMode := stage.RouteMode
+		if routeMode == "" {
+			routeMode = "all_matches"
+		}
+		if routeMode != "all_matches" && routeMode != "first_match" {
+			return fmt.Errorf("unsupported route mode %q", stage.RouteMode)
+		}
+		joinMode := stage.JoinMode
+		if joinMode == "" {
+			joinMode = "each_arrival"
+		}
+		if joinMode != "each_arrival" {
+			return fmt.Errorf("join mode %q is cataloged but not executable", joinMode)
+		}
 		positions[stage.ExecutorKey] = stage.Position
 		if stage.OutputContract == nil || stage.OutputContract.Key != expectedOutputs[stage.ExecutorKey] {
 			return fmt.Errorf("contrato de saída incompatível na etapa %q", stage.Key)
@@ -304,13 +335,36 @@ func validatePipelineDefinition(definition PipelineDefinition) error {
 			return fmt.Errorf("executor obrigatório %q deve aparecer exatamente uma vez", required)
 		}
 	}
+	stageKeys := map[string]bool{}
+	for _, stage := range definition.Stages {
+		stageKeys[stage.Key] = true
+	}
+	triggerSources := map[string]bool{}
+	for _, trigger := range definition.Triggers {
+		if trigger.Source != "webhook" && trigger.Source != "api" && trigger.Source != "manual" {
+			return fmt.Errorf("entrypoint desconhecido %q", trigger.Source)
+		}
+		if triggerSources[trigger.Source] {
+			return fmt.Errorf("entrypoint duplicado %q", trigger.Source)
+		}
+		triggerSources[trigger.Source] = true
+		if trigger.Enabled && !stageKeys[trigger.TargetStageKey] {
+			return fmt.Errorf("entrypoint %q sem destino válido", trigger.Source)
+		}
+	}
+	for _, source := range []string{"webhook", "api", "manual"} {
+		if !triggerSources[source] {
+			return fmt.Errorf("entrypoint obrigatório %q ausente", source)
+		}
+	}
 	byID := map[int64]PipelineStage{}
 	incoming := map[int64]int{}
 	outgoing := map[int64]bool{}
 	for _, stage := range definition.Stages {
 		byID[stage.ID] = stage
 	}
-	allowedConditions := map[string]bool{"always": true, "has_findings": true, "no_findings": true, "partial_result": true, "contract_invalid": true, "confidence_below_threshold": true}
+	allowedConditions := map[string]bool{"always": true, "has_findings": true, "no_findings": true, "partial_result": true, "confidence_below_threshold": true}
+	technicalFallbacks := map[string]bool{"error": true, "timeout": true, "contract_invalid": true}
 	adj := map[int64][]int64{}
 	for _, edge := range definition.Transitions {
 		from, ok := byID[edge.FromStageID]
@@ -333,8 +387,22 @@ func validatePipelineDefinition(definition PipelineDefinition) error {
 		if edge.Type != "success" && edge.Type != "failure" && edge.Type != "fallback" && edge.Type != "skip" {
 			return fmt.Errorf("tipo de transição inválido %q", edge.Type)
 		}
-		if (edge.Type == "success" || edge.Type == "skip") && !allowedConditions[edge.ConditionKey] {
+		if (edge.Type == "success" || edge.Type == "skip") && edge.Rule == nil && !allowedConditions[edge.ConditionKey] {
 			return fmt.Errorf("condição inválida %q", edge.ConditionKey)
+		}
+		if edge.Rule != nil && (edge.Type == "failure" || edge.Type == "fallback") {
+			return errors.New("technical fallback cannot use a payload rule")
+		}
+		if (edge.Type == "failure" || edge.Type == "fallback") && !technicalFallbacks[edge.ConditionKey] {
+			return fmt.Errorf("technical fallback inválido %q", edge.ConditionKey)
+		}
+		if edge.Rule != nil {
+			if from.OutputContract == nil {
+				return fmt.Errorf("rule source %q has no output contract", from.Key)
+			}
+			if err := ValidateRule(*edge.Rule, from.OutputContract.SchemaJSON); err != nil {
+				return fmt.Errorf("invalid rule from %q: %w", from.Key, err)
+			}
 		}
 		if (edge.Type == "failure" || edge.Type == "fallback") && to.ExecutorKey != "error_log" {
 			return errors.New("transições de erro devem apontar para error_log")
@@ -351,28 +419,16 @@ func validatePipelineDefinition(definition PipelineDefinition) error {
 			outgoing[from.ID] = true
 		}
 	}
-	var visit func(int64) error
-	color := map[int64]int{}
-	visit = func(id int64) error {
-		if color[id] == 1 {
-			return errors.New("DAG contém ciclo")
+	for _, edge := range definition.Transitions {
+		if edge.ToStageID == nil || edge.Type != "success" && edge.Type != "skip" {
+			continue
 		}
-		if color[id] == 2 {
-			return nil
+		if graphReaches(adj, *edge.ToStageID, edge.FromStageID, map[int64]bool{}) && edge.MaxTraversals < 1 {
+			return fmt.Errorf("cyclic transition %d requires max_traversals", edge.ID)
 		}
-		color[id] = 1
-		for _, next := range adj[id] {
-			if err := visit(next); err != nil {
-				return err
-			}
-		}
-		color[id] = 2
-		return nil
 	}
-	for id := range byID {
-		if err := visit(id); err != nil {
-			return err
-		}
+	if definition.SchedulerMaxRuns < 0 {
+		return errors.New("scheduler_max_runs must be positive")
 	}
 	// Every mandatory stage must be reachable from the single preparation root;
 	// otherwise a structurally acyclic draft could be published but never run.
@@ -410,6 +466,22 @@ func validatePipelineDefinition(definition PipelineDefinition) error {
 		}
 	}
 	return nil
+}
+
+func graphReaches(adj map[int64][]int64, from, target int64, seen map[int64]bool) bool {
+	if from == target {
+		return true
+	}
+	if seen[from] {
+		return false
+	}
+	seen[from] = true
+	for _, next := range adj[from] {
+		if graphReaches(adj, next, target, seen) {
+			return true
+		}
+	}
+	return false
 }
 
 // PipelineExecutionSnapshot records configuration that must not change during a run.

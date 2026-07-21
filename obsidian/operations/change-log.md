@@ -2,6 +2,35 @@
 
 ## 2026-07-20
 
+- Entrypoints passaram a integrar a definição persistida do workflow. A migration
+  `016_pipeline_entrypoints.sql` adiciona posição e destino a cada origem; jobs
+  preservam `webhook`, `api` ou `manual` até o worker, e o scheduler inicia na
+  etapa conectada à origem correspondente. No Studio, os três Entrypoints são
+  cards móveis, conectáveis a etapas diferentes, com arestas editáveis e
+  removíveis. Validação: `go test ./...`, `npm --prefix web-admin run lint` e
+  `npm --prefix web-admin run build`. Ver
+  [[architecture/pipeline-2.0|pipeline 2.0]].
+- Corrigidas as projeções do Studio: os Entrypoints agora acompanham a posição
+  da primeira etapa e também aparecem como controles na sidebar. O card de
+  pré-aprovação manual voltou a ser exibido entre Formatação e Publicação durante
+  visualização e edição, sem entrar no payload persistido. Validação: `npm
+  --prefix web-admin run lint` e `npm --prefix web-admin run build`.
+- Reparado o ciclo completo de edição do Pipeline Studio no Workspace. O botão
+  de edição agora cria ou reabre um draft versionado da definição atual, carrega
+  o catálogo real na sidebar e mantém o draft aberto após salvar. Foram
+  habilitados adição, drag com coordenadas do canvas, edição e remoção de etapas
+  opcionais, criação/edição/remoção de conexões, proteção contra ciclos e
+  duplicatas, campos extras de etapa/pipeline e publicação validada. O canvas é
+  bloqueado estruturalmente fora da edição. Validação: `npm --prefix web-admin
+  run lint` e `npm --prefix web-admin run build`. Ver
+  [[architecture/pipeline-2.0|pipeline 2.0]].
+- Os triggers deixaram de ser checkboxes laterais no Pipeline Studio e passaram
+  a ser três cards Entrypoint (`webhook`, `api` e `manual`) conectados à primeira
+  etapa. Cards e inspector agora ocultam todos os campos de IA em etapas
+  determinísticas e mostram somente parâmetros aplicáveis. Versões antigas com
+  `triggers` ausente ou nulo usam os três Entrypoints padrão. Validação: `npm
+  --prefix web-admin run lint` e `npm --prefix web-admin run build`. Ver
+  [[architecture/pipeline-2.0|pipeline 2.0]].
 - O Pipeline Studio foi incorporado diretamente à aba Pipeline e passou a
   ocupar toda a área útil do wrapper, sem margem própria ou overflow. O
   cabeçalho mantém ações de descartar, salvar e publicar.

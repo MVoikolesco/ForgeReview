@@ -42,7 +42,7 @@ O validador compartilhado rejeita ciclos, contratos incompatíveis, publicação
 não terminal e as invariantes das etapas obrigatórias. Cada versão também
 persiste os triggers `webhook`, `api` e `manual`, validados antes de criar a
 review. Ver `internal/review/pipeline_definition.go`,
-`internal/review/pipeline_engine.go` e migrations 014--015.
+`internal/review/pipeline_engine.go` e migrations 014--016.
 
 Em Observabilidade > Execuções, o Pipeline Studio exibe em modo leitura o
 pipeline efetivo do profile padrão, sem os demais cards operacionais. O canvas
@@ -51,6 +51,29 @@ Pipeline permanece um mapa compacto das versões publicadas, com ação para
 definir a seleção atual. As APIs continuam permitindo criar e editar drafts,
 configurar triggers, conectar etapas por contratos compatíveis, validar,
 publicar, clonar e restaurar versões.
+
+Os triggers `webhook`, `api` e `manual` são representados no Studio por três
+cards Entrypoint persistidos em `pipeline_version_triggers`. Cada Entrypoint
+armazena posição própria e `target_stage_key`, podendo iniciar o workflow em uma
+etapa diferente. A origem acompanha o job até o worker, e o scheduler começa no
+destino configurado para `webhook`, `api` ou `manual`. A edição permite mover os
+cards, trocar seus tipos, ativar/desativar cada origem e criar, alterar ou remover
+suas conexões. Essas conexões são origens do scheduler, não
+`pipeline_transitions`, pois não são outputs de uma etapa executada.
+Os formulários de stages exibem prompt, modelo, tokens e retry somente quando
+`use_llm` está ativo; etapas determinísticas mostram apenas os parâmetros que o
+executor utiliza, como timeout.
+
+No Workspace, `Editar pipeline` clona a versão publicada como um novo draft da
+mesma definição, ou reabre o draft existente. O editor carrega o catálogo real,
+mantém o draft aberto após salvar e publica pelo endpoint que valida o DAG. O
+canvas fica estruturalmente bloqueado em visualização; em edição permite
+adicionar e mover etapas, editar parâmetros, criar e remover conexões e alterar
+suas condições. Etapas obrigatórias não podem ser removidas pela interface.
+O card de pré-publicação continua sendo uma projeção e não é enviado no payload
+persistido. Quando o profile exige aprovação manual, a pré-aprovação é projetada
+entre Formatação e Publicação tanto na visualização quanto na edição, sem
+substituir a transição real mantida no draft.
 
 As colunas antigas de ativação e tokens em `review_policies` são usadas somente
 para migrar profiles existentes no seed inicial. Depois da migração, a fonte de

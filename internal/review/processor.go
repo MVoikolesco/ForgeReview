@@ -23,8 +23,12 @@ func (s *Service) Process(ctx context.Context, job queue.ReviewJob) error {
 		job.ReviewID = id
 	}
 
+	if job.Source == "" {
+		_ = s.repo.db.QueryRowContext(ctx, `SELECT source FROM reviews WHERE id=?`, id).Scan(&job.Source)
+	}
+	job.Source = normalizeTriggerSource(job.Source)
 	if status, statusErr := s.repo.Status(ctx, id); errors.Is(statusErr, sql.ErrNoRows) {
-		if err := s.repo.Create(ctx, id, job, "queue"); err != nil {
+		if err := s.repo.Create(ctx, id, job, job.Source); err != nil {
 			return err
 		}
 	} else if statusErr != nil {
@@ -68,10 +72,11 @@ func (s *Service) Process(ctx context.Context, job queue.ReviewJob) error {
 	}
 	engine := NewPipelineEngine(s.repo)
 	_, err = engine.Execute(ctx, definition, PipelineExecutionInput{
-		Job:        queueInput{ID: id, Owner: job.Owner, Repository: job.Repository, PullRequest: job.PullRequest},
-		RawDiff:    rawDiff,
-		BasePrompt: basePrompt,
-		Policy:     policy,
+		Job:           queueInput{ID: id, Owner: job.Owner, Repository: job.Repository, PullRequest: job.PullRequest},
+		TriggerSource: job.Source,
+		RawDiff:       rawDiff,
+		BasePrompt:    basePrompt,
+		Policy:        policy,
 		Provider: func(callCtx context.Context, modelID *int64) (providers.LLMProvider, error) {
 			return s.providerFactory(callCtx, definition.ProfileID, modelID)
 		},

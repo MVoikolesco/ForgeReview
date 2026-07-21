@@ -35,6 +35,7 @@ func RegisterRoutes(
 	router.POST("/reviews/manual", handler.manual)
 	router.GET("/review/settings", handler.reviewSettings)
 	router.GET("/review/pipelines", handler.pipelines)
+	router.GET("/review/workflow-catalog", handler.workflowCatalog)
 	router.POST("/review/pipelines", handler.createPipeline)
 	router.GET("/review/pipelines/select", handler.selectPipeline)
 	router.GET("/review/pipelines/:id", handler.pipeline)

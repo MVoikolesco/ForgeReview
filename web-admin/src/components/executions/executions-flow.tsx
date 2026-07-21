@@ -4,6 +4,11 @@ import { PreReviewModal } from "@/components/pre-review/pre-review-modal";
 import { StageLogsModal } from "@/components/stage-logs/stage-logs-modal";
 import { PipelineManager } from "@/components/settings/pipeline-manager";
 import type { AdminRequest } from "@/lib/admin-client";
+import type {
+  ReviewSettingsData,
+  ReviewSettingsProfile,
+  ReviewSettingsStageType,
+} from "@/lib/contracts";
 import {
   Background,
   Controls,
@@ -315,11 +320,12 @@ type Props = {
   onPipelineName: (name: string) => void;
   editRequest: number;
   saveRequest: number;
+  publishRequest: number;
   discardRequest: number;
   onEditingChange: (editing: boolean) => void;
 };
 
-export function ExecutionsFlow({ request, onAuthError, onPipelineName, editRequest, saveRequest, discardRequest, onEditingChange }: Props) {
+export function ExecutionsFlow({ request, onAuthError, onPipelineName, editRequest, saveRequest, publishRequest, discardRequest, onEditingChange }: Props) {
   const [metrics, setMetrics] = useState<Metrics>(emptyMetrics);
   const [progress, setProgress] = useState<ProgressResponse>({ active: false });
   const [reviews, setReviews] = useState<ReviewLog[]>([]);
@@ -328,6 +334,8 @@ export function ExecutionsFlow({ request, onAuthError, onPipelineName, editReque
   const [refreshing, setRefreshing] = useState(false);
   const [selectedReview, setSelectedReview] = useState("");
   const [defaultProfileID, setDefaultProfileID] = useState<number | undefined>();
+  const [stageCatalog, setStageCatalog] = useState<ReviewSettingsStageType[]>([]);
+  const [pipelineProfiles, setPipelineProfiles] = useState<ReviewSettingsProfile[]>([]);
   const [selectedStageLogs, setSelectedStageLogs] = useState<{
     title: string;
     stage: string;
@@ -406,6 +414,18 @@ export function ExecutionsFlow({ request, onAuthError, onPipelineName, editReque
     }, 5000);
     return () => window.clearInterval(timer);
   }, [load, selectedReview]);
+
+  useEffect(() => {
+    void request<ReviewSettingsData>("review/settings")
+      .then((settings) => {
+        setStageCatalog(settings.stage_catalog || []);
+        setPipelineProfiles(settings.profiles || []);
+      })
+      .catch((failure) => {
+        if (failure instanceof Error && failure.message === "AUTH") onAuthError();
+        else setError(failure instanceof Error ? failure.message : String(failure));
+      });
+  }, [onAuthError, request]);
 
   async function selectHistorical(name: string) {
     const requestId = ++historicalRequest.current;
@@ -579,7 +599,7 @@ export function ExecutionsFlow({ request, onAuthError, onPipelineName, editReque
     metrics.queue.workers?.filter((worker) => worker.state === "processing")
       .length || 0;
 
-  return <section className="executions-view pipeline-studio-only"><PipelineManager request={request} profiles={[]} catalog={[]} onAuthError={onAuthError} onSaved={() => void load(true)} readOnly profileID={defaultProfileID} onPipelineName={onPipelineName} editRequest={editRequest} saveRequest={saveRequest} discardRequest={discardRequest} onEditingChange={onEditingChange} runtimeEvents={latestByStage} runtimeLogs={eventsByStage} activeStage={current?.stage || ""} manualApproval={publicationPolicy?.manual || false} onOpenLogs={(stage, title, logs) => setSelectedStageLogs({ stage, title, logs: logs as ProgressEvent[] })} onOpenPreReview={() => { if (current?.name) setPreReviewName(current.name); }} />{preReviewName && <PreReviewModal request={request} name={preReviewName} onAuthError={onAuthError} onClose={() => setPreReviewName("")} onComplete={() => void load(true)} />}{selectedStageLogs && <StageLogsModal request={request} reviewName={current?.name || ""} stage={selectedStageLogs.stage} title={selectedStageLogs.title} subtitle="Eventos da etapa" summaryLogs={selectedStageLogs.logs} onAuthError={onAuthError} onClose={() => setSelectedStageLogs(null)} />}</section>;
+  return <section className="executions-view pipeline-studio-only"><PipelineManager request={request} profiles={pipelineProfiles} catalog={stageCatalog} onAuthError={onAuthError} onSaved={() => void load(true)} readOnly profileID={defaultProfileID} onPipelineName={onPipelineName} editRequest={editRequest} saveRequest={saveRequest} publishRequest={publishRequest} discardRequest={discardRequest} onEditingChange={onEditingChange} runtimeEvents={latestByStage} runtimeLogs={eventsByStage} activeStage={current?.stage || ""} manualApproval={publicationPolicy?.manual || false} onOpenLogs={(stage, title, logs) => setSelectedStageLogs({ stage, title, logs: logs as ProgressEvent[] })} onOpenPreReview={() => { if (current?.name) setPreReviewName(current.name); }} />{preReviewName && <PreReviewModal request={request} name={preReviewName} onAuthError={onAuthError} onClose={() => setPreReviewName("")} onComplete={() => void load(true)} />}{selectedStageLogs && <StageLogsModal request={request} reviewName={current?.name || ""} stage={selectedStageLogs.stage} title={selectedStageLogs.title} subtitle="Eventos da etapa" summaryLogs={selectedStageLogs.logs} onAuthError={onAuthError} onClose={() => setSelectedStageLogs(null)} />}</section>;
 
   return (
     <section className="executions-view">

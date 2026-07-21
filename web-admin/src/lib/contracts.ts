@@ -222,6 +222,7 @@ export type ReviewSettingsStageType = {
   key: string;
   name: string;
   executor_key: string;
+  processor_kind?: string;
   is_system: boolean;
   is_enabled: boolean;
   input_contract?: ReviewSettingsContract;
