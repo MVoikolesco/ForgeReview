@@ -2,6 +2,11 @@
 
 ## 2026-07-21
 
+- Definida a arquitetura do Pipeline Node Studio: nós controlados conectados
+  por portas tipadas, contratos escolhidos do catálogo, configuração de modelo
+  por card e as três entradas de evento preservadas. A entrega requer migração
+  de schema, scheduler orientado a portas e Studio especializado; ver
+  [[architecture/pipeline-node-studio|Pipeline Node Studio]].
 - Simplificada a edição do Pipeline Studio: cards não repetem campos de
   configuração, podem ser renomeados ao clicar no título e podem ser removidos
   mesmo quando fazem parte da estrutura mínima. O indicador do rodapé lista as

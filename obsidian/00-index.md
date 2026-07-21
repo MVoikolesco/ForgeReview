@@ -5,6 +5,7 @@
 - [[architecture/data-model|Modelo de dados e mapeamentos]]
 - [[architecture/contracts|Contratos HTTP]]
 - [[architecture/pipeline-2.0|Melhoria Pipeline 2.0]]
+- [[architecture/pipeline-node-studio|Pipeline Node Studio]]
 - [[architecture/migration-audit|Auditoria da migração e lacunas]]
 - [[operations/runbook|Runbook Docker/operação]]
 - [[operations/change-log|Change log]]
