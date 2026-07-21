@@ -35,6 +35,10 @@ func Open(path string) (*SQLite, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = store.migrateIntegrationSecrets(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return store, nil
 }
 
@@ -44,12 +48,12 @@ func (s *SQLite) CreateIntegration(ctx context.Context, item integration.Integra
 	if err := item.Validate(); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO integrations(integration_key,name,type,config_json,secret_reference,status) VALUES(?,?,?,?,?,?)`, item.Key, item.Name, item.Type, string(item.Config), item.SecretReference, item.Status)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO integrations(integration_key,name,type,config_json,secret_ciphertext,status) VALUES(?,?,?,?,?,?)`, item.Key, item.Name, item.Type, string(item.Config), item.SecretCiphertext, item.Status)
 	return err
 }
 
 func (s *SQLite) Integrations(ctx context.Context) ([]integration.Integration, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT integration_key,name,type,config_json,secret_reference,status FROM integrations ORDER BY integration_key`)
+	rows, err := s.db.QueryContext(ctx, `SELECT integration_key,name,type,config_json,secret_ciphertext,status FROM integrations ORDER BY integration_key`)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +62,7 @@ func (s *SQLite) Integrations(ctx context.Context) ([]integration.Integration, e
 	for rows.Next() {
 		var item integration.Integration
 		var config string
-		if err = rows.Scan(&item.Key, &item.Name, &item.Type, &config, &item.SecretReference, &item.Status); err != nil {
+		if err = rows.Scan(&item.Key, &item.Name, &item.Type, &config, &item.SecretCiphertext, &item.Status); err != nil {
 			return nil, err
 		}
 		item.Config = []byte(config)
@@ -70,7 +74,7 @@ func (s *SQLite) Integrations(ctx context.Context) ([]integration.Integration, e
 func (s *SQLite) Integration(ctx context.Context, key string) (integration.Integration, error) {
 	var item integration.Integration
 	var config string
-	err := s.db.QueryRowContext(ctx, `SELECT integration_key,name,type,config_json,secret_reference,status FROM integrations WHERE integration_key=?`, key).Scan(&item.Key, &item.Name, &item.Type, &config, &item.SecretReference, &item.Status)
+	err := s.db.QueryRowContext(ctx, `SELECT integration_key,name,type,config_json,secret_ciphertext,status FROM integrations WHERE integration_key=?`, key).Scan(&item.Key, &item.Name, &item.Type, &config, &item.SecretCiphertext, &item.Status)
 	if err != nil {
 		return integration.Integration{}, err
 	}
@@ -270,11 +274,15 @@ func (s *SQLite) CompleteExecution(ctx context.Context, id int64, report workflo
 		return fmt.Errorf("execution %d is not running", id)
 	}
 	for _, run := range report.Runs {
-		metadata, err := json.Marshal(map[string]any{"inputs": run.Inputs, "outputs": run.Outputs, "error": run.Error, "duration_ms": run.DurationMS})
+		metadata, err := json.Marshal(map[string]any{"inputs": run.Inputs, "outputs": run.Outputs, "error": run.Error, "duration_ms": run.DurationMS, "metadata": run.Metadata})
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO workflow_node_runs(workflow_execution_id,node_key,status,finished_at,metadata_json) VALUES(?,?,?,CURRENT_TIMESTAMP,?)`, id, run.NodeKey, run.Status, string(metadata)); err != nil {
+		scopeKey := run.ScopeKey
+		if scopeKey == "" {
+			scopeKey = "root"
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO workflow_node_runs(workflow_execution_id,node_key,scope_key,status,finished_at,metadata_json) VALUES(?,?,?,?,CURRENT_TIMESTAMP,?)`, id, run.NodeKey, scopeKey, run.Status, string(metadata)); err != nil {
 			return err
 		}
 	}
@@ -394,7 +402,7 @@ func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.RunReport, e
 	if err := s.db.QueryRowContext(ctx, `SELECT status FROM workflow_executions WHERE id=?`, id).Scan(&status); err != nil {
 		return workflow.RunReport{}, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT node_key,status,metadata_json FROM workflow_node_runs WHERE workflow_execution_id=? ORDER BY id`, id)
+	rows, err := s.db.QueryContext(ctx, `SELECT node_key,scope_key,status,metadata_json FROM workflow_node_runs WHERE workflow_execution_id=? ORDER BY id`, id)
 	if err != nil {
 		return workflow.RunReport{}, err
 	}
@@ -403,7 +411,7 @@ func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.RunReport, e
 	for rows.Next() {
 		var run workflow.NodeRun
 		var metadata string
-		if err = rows.Scan(&run.NodeKey, &run.Status, &metadata); err != nil {
+		if err = rows.Scan(&run.NodeKey, &run.ScopeKey, &run.Status, &metadata); err != nil {
 			return workflow.RunReport{}, err
 		}
 		var details struct {
@@ -411,11 +419,12 @@ func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.RunReport, e
 			Outputs    []workflow.Token `json:"outputs"`
 			Error      string           `json:"error"`
 			DurationMS int64            `json:"duration_ms"`
+			Metadata   map[string]any   `json:"metadata"`
 		}
 		if err = json.Unmarshal([]byte(metadata), &details); err != nil {
 			return workflow.RunReport{}, err
 		}
-		run.Inputs, run.Outputs, run.Error, run.DurationMS = details.Inputs, details.Outputs, details.Error, details.DurationMS
+		run.Inputs, run.Outputs, run.Error, run.DurationMS, run.Metadata = details.Inputs, details.Outputs, details.Error, details.DurationMS, details.Metadata
 		report.Runs = append(report.Runs, run)
 	}
 	return report, rows.Err()
@@ -441,7 +450,7 @@ CREATE TABLE IF NOT EXISTS integrations (
  name TEXT NOT NULL,
  type TEXT NOT NULL CHECK(type IN ('gitea','openai','ollama')),
  config_json TEXT NOT NULL,
- secret_reference TEXT NOT NULL,
+ secret_ciphertext TEXT NOT NULL,
  status TEXT NOT NULL CHECK(status IN ('active','disabled')),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -479,6 +488,72 @@ CREATE TABLE IF NOT EXISTS publication_attempts (
  completed_at TEXT
 );
 `
+
+// migrateIntegrationSecrets removes the former environment-variable reference
+// column. Existing records remain as unconfigured connections because a
+// reference never contained credential material and cannot be converted to an
+// encrypted value. Administrators must provide a new one-time secret before
+// those connections can execute.
+func (s *SQLite) migrateIntegrationSecrets(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(integrations)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasLegacyReference, hasCiphertext := false, false
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull int
+		var defaultValue any
+		var primaryKey int
+		if err = rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "secret_reference" {
+			hasLegacyReference = true
+		}
+		if name == "secret_ciphertext" {
+			hasCiphertext = true
+		}
+	}
+	if err = rows.Err(); err != nil || (!hasLegacyReference && hasCiphertext) {
+		return err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `CREATE TABLE integrations_secure (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ integration_key TEXT NOT NULL UNIQUE,
+ name TEXT NOT NULL,
+ type TEXT NOT NULL CHECK(type IN ('gitea','openai','ollama')),
+ config_json TEXT NOT NULL,
+ secret_ciphertext TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('active','disabled')),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`); err != nil {
+		return err
+	}
+	ciphertext := "''"
+	if hasCiphertext {
+		ciphertext = "secret_ciphertext"
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO integrations_secure(id,integration_key,name,type,config_json,secret_ciphertext,status,created_at)
+ SELECT id,integration_key,name,type,config_json,`+ciphertext+`,status,created_at FROM integrations`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DROP TABLE integrations`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `ALTER TABLE integrations_secure RENAME TO integrations`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
 func (s *SQLite) ensureExecutionInputColumn(ctx context.Context) error {
 	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(workflow_executions)`)

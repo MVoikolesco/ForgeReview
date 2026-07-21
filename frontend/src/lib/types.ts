@@ -82,5 +82,5 @@ export type Integration = {
 };
 
 export type NewIntegration = Omit<Integration, "secret_configured"> & {
-  secret_reference: string;
+  secret: string;
 };

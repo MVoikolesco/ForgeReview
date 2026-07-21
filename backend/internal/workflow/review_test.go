@@ -33,7 +33,6 @@ func TestRunFiltersFetchedFilesAndGroupsDeterministically(t *testing.T) {
 	}))
 	defer server.Close()
 	config, _ := json.Marshal(map[string]string{"base_url": server.URL})
-	t.Setenv("GITEA_FILTER_TOKEN", "secret")
 	definition := Definition{Key: "filter-group", Name: "Filter group", Nodes: []Node{
 		{Key: "start", Type: "trigger", Name: "Start"},
 		{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea", "owner": "acme", "repo": "api", "pull_request": 12}},
@@ -44,7 +43,7 @@ func TestRunFiltersFetchedFilesAndGroupsDeterministically(t *testing.T) {
 		{Key: "files", FromNode: "fetch", FromPort: "files", ToNode: "filter", ToPort: "files"},
 		{Key: "filtered", FromNode: "filter", FromPort: "files", ToNode: "group", ToPort: "files"},
 	}}
-	adapters := Adapters{Integrations: memoryIntegrations{"gitea": {Key: "gitea", Type: integration.TypeGitea, Config: config, SecretReference: "GITEA_FILTER_TOKEN", Status: integration.StatusActive}}, Gitea: integration.HTTPGiteaClient{Client: server.Client()}}
+	adapters := Adapters{Integrations: memoryIntegrations{"gitea": encryptedIntegration(t, integration.Integration{Key: "gitea", Name: "Gitea", Type: integration.TypeGitea, Config: config, Status: integration.StatusActive}, "secret")}, Secrets: testSecrets(t), Gitea: integration.HTTPGiteaClient{Client: server.Client()}}
 	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, adapters)
 	if err != nil {
 		t.Fatalf("run workflow: %v", err)
@@ -70,8 +69,7 @@ func TestRunRoutesInvalidModelResponseToValidateInvalid(t *testing.T) {
 		{Key: "prompt", FromNode: "template", FromPort: "prompt", ToNode: "model", ToPort: "prompt"},
 		{Key: "response", FromNode: "model", FromPort: "response", ToNode: "validate", ToPort: "response"},
 	}}
-	t.Setenv("MODEL_INVALID_TOKEN", "secret")
-	adapters := Adapters{Integrations: memoryIntegrations{"model": modelIntegration(t, "MODEL_INVALID_TOKEN")}, OpenAI: responseModel("not JSON")}
+	adapters := Adapters{Integrations: memoryIntegrations{"model": modelIntegration(t, "secret")}, Secrets: testSecrets(t), OpenAI: responseModel("not JSON")}
 	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, adapters)
 	if err != nil {
 		t.Fatalf("invalid response must be routed, not fail the workflow: %v", err)
@@ -124,12 +122,11 @@ func TestRunFiltersDeduplicatesConsolidatesAndFormatsFindings(t *testing.T) {
 		{Key: "high-comments", FromNode: "filter_high", FromPort: "comments", ToNode: "consolidate", ToPort: "comments"},
 		{Key: "review", FromNode: "consolidate", FromPort: "review", ToNode: "format", ToPort: "review"},
 	}}
-	t.Setenv("MODEL_FINDINGS_TOKEN", "secret")
 	responses := map[string]string{
 		"low":  `[{"path":"a.go","line":2,"comment":"low","severity":"low"},{"path":"a.go","line":4,"comment":"duplicate","severity":"high"},{"path":"a.go","line":4,"comment":"duplicate","severity":"high"}]`,
 		"high": `[{"path":"b.go","line":1,"comment":"critical","severity":"critical"},{"path":"a.go","line":4,"comment":"duplicate","severity":"high"}]`,
 	}
-	adapters := Adapters{Integrations: memoryIntegrations{"model": modelIntegration(t, "MODEL_FINDINGS_TOKEN")}, OpenAI: responseModels(responses)}
+	adapters := Adapters{Integrations: memoryIntegrations{"model": modelIntegration(t, "secret")}, Secrets: testSecrets(t), OpenAI: responseModels(responses)}
 	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, adapters)
 	if err != nil {
 		t.Fatalf("run workflow: %v", err)
@@ -140,6 +137,96 @@ func TestRunFiltersDeduplicatesConsolidatesAndFormatsFindings(t *testing.T) {
 	}
 	if len(formatted.Findings) != 2 || formatted.Findings[0].Path != "a.go" || formatted.Findings[1].Path != "b.go" {
 		t.Fatalf("formatted findings = %#v", formatted.Findings)
+	}
+}
+
+func TestRunAggregatesScopedReviewFindingsAndPublishesOnceAtRoot(t *testing.T) {
+	files := []map[string]any{
+		{"filename": "a.go", "patch": "package a"},
+		{"filename": "b.go", "patch": "package b"},
+	}
+	definition := Definition{Key: "scoped-review", Name: "Scoped review", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": files}},
+		{Key: "prepare", Type: "transform", Name: "Prepare"},
+		{Key: "group", Type: "group", Name: "Group", Config: map[string]any{"max_files": 1, "max_characters": 100}},
+		{Key: "loop", Type: "loop", Name: "Loop", Config: map[string]any{"max_iterations": 2, "concurrency": 1}},
+		{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"template": "review"}},
+		{Key: "model", Type: "model", Name: "Model", Config: map[string]any{"integration": "model"}},
+		{Key: "validate", Type: "validate", Name: "Validate", Config: map[string]any{"validate_paths": true}},
+		{Key: "response-filter", Type: "response_filter", Name: "Filter", Config: map[string]any{"minimum_severity": "medium"}},
+		{Key: "consolidate", Type: "consolidate", Name: "Consolidate"},
+		{Key: "format", Type: "format", Name: "Format"},
+		{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"integration": "gitea", "owner": "acme", "repo": "review", "pull_request": 7}},
+	}, Edges: []Edge{
+		{Key: "event", FromNode: "start", FromPort: "event", ToNode: "prepare", ToPort: "input"},
+		{Key: "files", FromNode: "prepare", FromPort: "output", ToNode: "group", ToPort: "files"},
+		{Key: "groups", FromNode: "group", FromPort: "groups", ToNode: "loop", ToPort: "items"},
+		{Key: "context", FromNode: "loop", FromPort: "item", ToNode: "template", ToPort: "context"},
+		{Key: "prompt", FromNode: "template", FromPort: "prompt", ToNode: "model", ToPort: "prompt"},
+		{Key: "response", FromNode: "model", FromPort: "response", ToNode: "validate", ToPort: "response"},
+		{Key: "files-in-group", FromNode: "loop", FromPort: "item", ToNode: "validate", ToPort: "files"},
+		{Key: "valid", FromNode: "validate", FromPort: "valid", ToNode: "response-filter", ToPort: "response"},
+		{Key: "results", FromNode: "loop", FromPort: "results", ToNode: "consolidate", ToPort: "comments"},
+		{Key: "review", FromNode: "consolidate", FromPort: "review", ToNode: "format", ToPort: "review"},
+		{Key: "formatted", FromNode: "format", FromPort: "formatted", ToNode: "publish", ToPort: "formatted_review"},
+	}}
+	giteaConfig, err := json.Marshal(map[string]string{"base_url": "https://gitea.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := &sequentialModel{responses: []string{
+		`[{"path":"a.go","line":2,"comment":"first","severity":"high"}]`,
+		`[{"path":"b.go","line":3,"comment":"second","severity":"medium"}]`,
+	}}
+	publisher := &recordingPublisher{}
+	ledger := &recordingPublicationLedger{}
+	adapters := Adapters{
+		Integrations: memoryIntegrations{
+			"model": modelIntegration(t, "model-secret"),
+			"gitea": encryptedIntegration(t, integration.Integration{Key: "gitea", Name: "Gitea", Type: integration.TypeGitea, Config: giteaConfig, Status: integration.StatusActive}, "gitea-secret"),
+		},
+		Secrets:      testSecrets(t),
+		OpenAI:       model,
+		GiteaWriter:  publisher,
+		Publications: ledger,
+		Execution:    ExecutionContext{ID: 31, VersionID: 17},
+	}
+	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, adapters)
+	if err != nil || report.Status != "completed" {
+		t.Fatalf("run = %#v, %v", report, err)
+	}
+	if model.calls != 2 {
+		t.Fatalf("model calls = %d, want 2", model.calls)
+	}
+	for _, nodeKey := range []string{"template", "model", "validate", "response-filter"} {
+		if scopes := nodeScopes(report, nodeKey); len(scopes) != 2 || scopes[0] != "loop:000001" || scopes[1] != "loop:000002" {
+			t.Fatalf("%s scopes = %#v", nodeKey, scopes)
+		}
+	}
+	for _, nodeKey := range []string{"consolidate", "format", "publish"} {
+		if scopes := nodeScopes(report, nodeKey); len(scopes) != 1 || scopes[0] != rootScope {
+			t.Fatalf("%s must run once at root, got %#v", nodeKey, scopes)
+		}
+	}
+	loopResults := outputFor(t, report, "loop", "results").([]any)
+	if len(loopResults) != 2 {
+		t.Fatalf("loop results = %#v", loopResults)
+	}
+	consolidateRun := nodeRunFor(t, report, "consolidate", rootScope)
+	aggregated, ok := consolidateRun.Inputs["comments"][0].([]any)
+	if !ok || len(aggregated) != 2 {
+		t.Fatalf("consolidate inputs = %#v", consolidateRun.Inputs)
+	}
+	review := outputFor(t, report, "consolidate", "review").(Review)
+	if len(review.Findings) != 2 || review.Findings[0].Path != "a.go" || review.Findings[1].Path != "b.go" {
+		t.Fatalf("aggregated review = %#v", review)
+	}
+	formatted := outputFor(t, report, "format", "formatted").(FormattedReview)
+	if formatted.Summary != (ReviewSummary{Total: 2, Medium: 1, High: 1}) {
+		t.Fatalf("formatted review = %#v", formatted)
+	}
+	if len(publisher.requests) != 1 || len(ledger.attempts) != 1 {
+		t.Fatalf("publications = %#v, attempts = %#v", publisher.requests, ledger.attempts)
 	}
 }
 
@@ -159,13 +246,66 @@ func (models responseModels) Chat(_ context.Context, _ integration.Integration, 
 	return response, nil
 }
 
-func modelIntegration(t *testing.T, secretReference string) integration.Integration {
+type sequentialModel struct {
+	responses []string
+	calls     int
+}
+
+func (model *sequentialModel) Chat(context.Context, integration.Integration, string, string) (string, error) {
+	if model.calls >= len(model.responses) {
+		return "", errors.New("unexpected model call")
+	}
+	response := model.responses[model.calls]
+	model.calls++
+	return response, nil
+}
+
+type recordingPublisher struct {
+	requests []integration.GiteaReviewRequest
+}
+
+func (publisher *recordingPublisher) PublishReview(_ context.Context, _ integration.Integration, _ string, request integration.GiteaReviewRequest) (integration.PublicationReceipt, error) {
+	publisher.requests = append(publisher.requests, request)
+	return integration.PublicationReceipt{CommentID: int64(len(publisher.requests))}, nil
+}
+
+type recordingPublicationLedger struct {
+	attempts map[string]PublicationAttempt
+}
+
+func (ledger *recordingPublicationLedger) BeginPublication(_ context.Context, attempt PublicationAttempt) (PublicationAttempt, bool, error) {
+	if ledger.attempts == nil {
+		ledger.attempts = map[string]PublicationAttempt{}
+	}
+	if existing, ok := ledger.attempts[attempt.IdempotencyKey]; ok {
+		return existing, false, nil
+	}
+	attempt.Status = "pending"
+	ledger.attempts[attempt.IdempotencyKey] = attempt
+	return attempt, true, nil
+}
+
+func (ledger *recordingPublicationLedger) CompletePublication(_ context.Context, key string, receipt integration.PublicationReceipt) error {
+	attempt := ledger.attempts[key]
+	attempt.Status, attempt.Receipt = "completed", receipt
+	ledger.attempts[key] = attempt
+	return nil
+}
+
+func (ledger *recordingPublicationLedger) RetryPublication(_ context.Context, key string, _ error) error {
+	attempt := ledger.attempts[key]
+	attempt.Status = "retryable"
+	ledger.attempts[key] = attempt
+	return nil
+}
+
+func modelIntegration(t *testing.T, secret string) integration.Integration {
 	t.Helper()
 	config, err := json.Marshal(map[string]string{"base_url": "https://model.example", "model": "reviewer"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return integration.Integration{Key: "model", Type: integration.TypeOpenAI, Config: config, SecretReference: secretReference, Status: integration.StatusActive}
+	return encryptedIntegration(t, integration.Integration{Key: "model", Name: "Model", Type: integration.TypeOpenAI, Config: config, Status: integration.StatusActive}, secret)
 }
 
 func outputFor(t *testing.T, report RunReport, nodeKey, portKey string) any {

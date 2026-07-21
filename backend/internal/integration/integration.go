@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strings"
 )
 
@@ -19,16 +18,15 @@ const (
 	StatusDisabled = "disabled"
 )
 
-var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-// Integration contains only a reference to the credential, never its value.
+// Integration contains encrypted credential material. It is deliberately not
+// serializable, so only Summary may cross the HTTP boundary.
 type Integration struct {
-	Key             string          `json:"key"`
-	Name            string          `json:"name"`
-	Type            string          `json:"type"`
-	Config          json.RawMessage `json:"config"`
-	SecretReference string          `json:"secret_reference"`
-	Status          string          `json:"status"`
+	Key              string          `json:"key"`
+	Name             string          `json:"name"`
+	Type             string          `json:"type"`
+	Config           json.RawMessage `json:"config"`
+	SecretCiphertext string          `json:"-"`
+	Status           string          `json:"status"`
 }
 
 // Summary is safe to expose through the HTTP API.
@@ -42,7 +40,7 @@ type Summary struct {
 }
 
 func (i Integration) Summary() Summary {
-	return Summary{Key: i.Key, Name: i.Name, Type: i.Type, Config: i.Config, SecretConfigured: i.SecretReference != "", Status: i.Status}
+	return Summary{Key: i.Key, Name: i.Name, Type: i.Type, Config: i.Config, SecretConfigured: i.SecretCiphertext != "", Status: i.Status}
 }
 
 // Validate limits configuration to transport settings so credentials cannot be
@@ -57,8 +55,8 @@ func (i Integration) Validate() error {
 	if i.Status != StatusActive && i.Status != StatusDisabled {
 		return fmt.Errorf("integration status must be %q or %q", StatusActive, StatusDisabled)
 	}
-	if !environmentName.MatchString(i.SecretReference) {
-		return fmt.Errorf("integration secret_reference must name an environment variable")
+	if strings.TrimSpace(i.SecretCiphertext) == "" {
+		return fmt.Errorf("integration secret is required")
 	}
 	var config map[string]string
 	if err := json.Unmarshal(i.Config, &config); err != nil {
@@ -97,6 +95,13 @@ func (i Integration) ConfigValues() (map[string]string, error) {
 
 type Lookup interface {
 	Integration(context.Context, string) (Integration, error)
+}
+
+// SecretManager encrypts one-time API input and decrypts it only immediately
+// before a controlled provider call. Implementations must not log secrets.
+type SecretManager interface {
+	Encrypt(integrationKey, value string) (string, error)
+	Resolve(Integration) (string, error)
 }
 
 type PullRequestRequest struct {

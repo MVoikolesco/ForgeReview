@@ -4,6 +4,7 @@ import { normalizeCard } from "./api";
 import {
   canConnect,
   canPublishVersion,
+  reviewTemplate,
   workflowVersionStatusLabel,
 } from "./workflow";
 
@@ -63,4 +64,58 @@ test("workflow version lifecycle exposes publishable drafts only", () => {
   assert.equal(canPublishVersion("draft"), true);
   assert.equal(canPublishVersion("published"), false);
   assert.equal(canPublishVersion("archived"), false);
+});
+
+test("review template scopes group review through loop before one root publication", () => {
+  const keys = [
+    "trigger",
+    "fetch",
+    "filter",
+    "group",
+    "loop",
+    "template",
+    "model",
+    "validate",
+    "response_filter",
+    "consolidate",
+    "format",
+    "publish",
+  ];
+  const template = reviewTemplate(
+    keys.map((key) => ({
+      key,
+      name: key,
+      category: "Test",
+      description: "",
+      inputs: [],
+      outputs: [],
+    })),
+  );
+  assert.ok(template);
+  assert.deepEqual(
+    template.edges.map((edge) => [
+      edge.source,
+      edge.sourceHandle,
+      edge.target,
+      edge.targetHandle,
+    ]),
+    [
+      ["trigger", "out-event", "fetch", "in-event"],
+      ["fetch", "out-files", "filter", "in-files"],
+      ["filter", "out-files", "group", "in-files"],
+      ["group", "out-groups", "loop", "in-items"],
+      ["loop", "out-item", "template", "in-context"],
+      ["template", "out-prompt", "model", "in-prompt"],
+      ["model", "out-response", "validate", "in-response"],
+      ["loop", "out-item", "validate", "in-files"],
+      ["validate", "out-valid", "response-filter", "in-response"],
+      ["loop", "out-results", "consolidate", "in-comments"],
+      ["consolidate", "out-review", "format", "in-review"],
+      ["format", "out-formatted", "publish", "in-formatted_review"],
+    ],
+  );
+  assert.deepEqual(
+    template.nodes.find((node) => node.id === "loop")?.data.config,
+    { max_iterations: 20, concurrency: 1, on_error: "fail" },
+  );
 });

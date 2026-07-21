@@ -37,7 +37,7 @@ docs/      Arquitetura, auditoria e este roadmap
 - Catálogo backend-controlado de cards por categoria.
 - Validação backend de tipo de card, portas existentes e contratos compatíveis.
 - Runner por disponibilidade de entradas obrigatórias, com tokens e relatório
-  por nó.
+  por nó/escopo.
 - Estados de execução persistidos: fila, execução, conclusão e falha.
 - Ciclo de vida de versão: rascunho, publicação atômica e arquivamento da
   versão publicada anterior.
@@ -50,14 +50,25 @@ docs/      Arquitetura, auditoria e este roadmap
 - `model`: executa chat por adaptador OpenAI-compatible ou Ollama.
 - `publish`: publica comentário controlado no Gitea com idempotência por
   execução, versão e card.
+- `loop`: executa listas e grupos em escopos filhos sequenciais, aplica limite
+  de iterações e agrega saídas terminais após os ramos filhos concluírem. No
+  template oficial, `response_filter` é terminal por grupo e `loop.results`
+  retorna ao escopo raiz para consolidar todos os achados antes de formatar e
+  publicar uma única vez.
 - Respostas de modelo são validadas como lista JSON de achados; respostas
   inválidas seguem pela saída `validate.invalid`.
 
 ### Integrações e segurança
 
 - Integrações persistidas para Gitea, Ollama e OpenAI-compatible/OpenRouter.
-- Credenciais não entram na definição de pipeline, SQLite nem respostas HTTP.
-- Cada conexão armazena apenas a referência a uma variável de ambiente.
+- Tokens/API keys não entram na definição de pipeline nem em respostas HTTP.
+- Cada Token/API key é cifrado com AES-256-GCM antes de persistir em SQLite;
+  apenas `secret_configured` é exposto pela API.
+- A chave mestra obrigatória vem exclusivamente de
+  `FORGEREVIEW_ENCRYPTION_KEY`, em base64 canônico de 32 bytes. O backend a usa
+  somente para cifrar na criação e decifrar imediatamente antes da execução.
+- Bancos Studio existentes migram removendo `secret_reference`; conexões legadas
+  ficam sem segredo e exigem novo cadastro do Token/API key.
 - Integrações ativas são obrigatórias para cards externos.
 - Publicação tem ledger idempotente e evita efeito externo duplicado.
 
@@ -67,7 +78,9 @@ docs/      Arquitetura, auditoria e este roadmap
 - Biblioteca de cards carregada do catálogo do backend.
 - Inspector editável por tipo de card.
 - Bloqueio visual de conexão entre contratos incompatíveis.
-- Template visual da pipeline inicial de review.
+- Template visual da pipeline oficial de review, com `group -> loop -> template
+  -> model -> validate -> response_filter` por grupo e a fronteira explícita de
+  `loop.results` para a publicação única no escopo raiz.
 - Execução de fluxo local, polling de trabalhos enfileirados e estados por card.
 - Wizard de conexões em etapas para Gitea, Ollama local, Ollama Cloud e
   OpenRouter.
@@ -92,10 +105,6 @@ docs/      Arquitetura, auditoria e este roadmap
 
 ### 1. Completar a primeira pipeline de review
 
-- Tornar `loop` funcional com escopo por grupo, limite de iterações e
-  concorrência configurável.
-- Ligar `group -> loop -> template -> model -> validate` para revisar cada
-  grupo de arquivos, em vez de apenas projetar o card no canvas.
 - Adicionar retry corretivo no card de modelo quando `validate.invalid` for
   recebido, com limite, backoff e tentativa auditada.
 - Completar políticas de erro por card: parar, ignorar, parcial, fallback e rota
@@ -128,7 +137,7 @@ docs/      Arquitetura, auditoria e este roadmap
 
 - SSE ou WebSocket para atualizar execução no canvas sem polling.
 - Cancelamento, reprocessamento de card/grupo e retomada segura.
-- Escopos de loop e paralelismo limitado por pipeline/card.
+- Paralelismo de loop acima de `concurrency: 1`, com limites por pipeline/card.
 - Agendamento, pausa, espera por evento e correlação de webhooks.
 - Dead-letter queue, retries de transporte e métricas de worker/fila.
 - Política de retenção, mascaramento e expiração para payloads sensíveis.
@@ -137,7 +146,8 @@ docs/      Arquitetura, auditoria e este roadmap
 
 - Autenticação e autorização por domínio administrativo.
 - Gestão de segredos com armazenamento cifrado ou secret manager, substituindo
-  a referência exclusiva a variáveis de ambiente quando houver operação remota.
+   o armazenamento local AES-GCM quando houver operação remota, incluindo
+   rotação de chave e re-cifragem.
 - Assinatura/verificação de webhooks Gitea e idempotência de eventos de entrada.
 - Auditoria de alterações de pipeline, integração e publicação.
 
@@ -152,8 +162,10 @@ docs/      Arquitetura, auditoria e este roadmap
 
 ## Limitações conhecidas
 
-- O editor permite projetar a pipeline oficial, mas loop e revisão por grupo
-  ainda não são executados pelo runner.
+- Loops são sequenciais neste incremento (`concurrency` deve ser `1`) e não
+  suportam aninhamento. O template oficial continua exigindo integrações Gitea
+  e de modelo ativas, além das coordenadas do PR, para executar os cards
+  externos.
 - O browser não executa testes de conexão; o wizard apenas cadastra a conexão.
 - A imagem Docker de produção foi corrigida, mas a build local por Docker não
   pôde ser executada neste ambiente por erro de I/O no binário Docker.
@@ -179,4 +191,5 @@ Execute os comandos Go em `backend/` e os comandos npm em `frontend/`.
 - Pipeline publicada é imutável.
 - SQLite é a fonte de verdade; Redis nunca é a fonte definitiva de estado.
 - Cards externos dependem de adaptadores controlados e integrações cadastradas.
-- Segredos não podem ser salvos no JSON do workflow nem expostos pela API.
+- Segredos não podem ser salvos no JSON do workflow nem expostos pela API; a
+  persistência de integrações usa apenas ciphertext autenticado.

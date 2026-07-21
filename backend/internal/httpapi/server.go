@@ -37,12 +37,12 @@ func New(catalog workflow.Catalog, workflows *store.SQLite, adapterSets ...workf
 	api.GET("/cards", func(c *gin.Context) { c.JSON(http.StatusOK, catalog.All()) })
 	api.POST("/integrations", func(c *gin.Context) {
 		var request struct {
-			Key             string          `json:"key"`
-			Name            string          `json:"name"`
-			Type            string          `json:"type"`
-			Config          json.RawMessage `json:"config"`
-			SecretReference string          `json:"secret_reference"`
-			Status          string          `json:"status"`
+			Key    string          `json:"key"`
+			Name   string          `json:"name"`
+			Type   string          `json:"type"`
+			Config json.RawMessage `json:"config"`
+			Secret string          `json:"secret"`
+			Status string          `json:"status"`
 		}
 		decoder := json.NewDecoder(c.Request.Body)
 		decoder.DisallowUnknownFields()
@@ -50,7 +50,16 @@ func New(catalog workflow.Catalog, workflows *store.SQLite, adapterSets ...workf
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		item := integration.Integration{Key: request.Key, Name: request.Name, Type: request.Type, Config: request.Config, SecretReference: request.SecretReference, Status: request.Status}
+		if adapters.Secrets == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "integration secret manager is not configured"})
+			return
+		}
+		ciphertext, err := adapters.Secrets.Encrypt(request.Key, request.Secret)
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "integration secret is required"})
+			return
+		}
+		item := integration.Integration{Key: request.Key, Name: request.Name, Type: request.Type, Config: request.Config, SecretCiphertext: ciphertext, Status: request.Status}
 		if err := workflows.CreateIntegration(c.Request.Context(), item); err != nil {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 			return

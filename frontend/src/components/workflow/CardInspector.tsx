@@ -198,6 +198,36 @@ export function CardInspector({
             </label>
           </>
         )}
+        {selected.type === "loop" && (
+          <>
+            {numberField("max_iterations", "Máximo de iterações", 20)}
+            <label>
+              Concorrência
+              <input value="1" disabled />
+              <small>
+                A execução por grupo é sequencial nesta fase para preservar a
+                ordem e a rastreabilidade dos resultados.
+              </small>
+            </label>
+            <label>
+              Ao falhar uma iteração
+              <select
+                value={configText(selected.config.on_error) || "fail"}
+                onChange={(event) =>
+                  updateConfig("on_error", event.target.value)
+                }
+              >
+                <option value="fail">Interromper workflow</option>
+                <option value="partial">Continuar com resultados parciais</option>
+              </select>
+            </label>
+            <p>
+              Use <code>item</code> para os cards do grupo e conecte apenas
+              <code>results</code> ao consolidar. Assim consolidar, formatar e
+              publicar executam uma vez no escopo raiz.
+            </p>
+          </>
+        )}
         {selected.type === "condition" && (
           <label>
             Valor esperado
@@ -243,6 +273,7 @@ export function CardInspector({
           "publish",
           "filter",
           "group",
+          "loop",
           "condition",
           "validate",
           "response_filter",

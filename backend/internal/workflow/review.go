@@ -252,8 +252,13 @@ func formatReview(values []any) (FormattedReview, error) {
 func workflowFiles(values []any) ([]map[string]any, error) {
 	files := make([]map[string]any, 0)
 	for _, value := range values {
-		items, ok := value.([]map[string]any)
-		if !ok {
+		var items []map[string]any
+		switch typed := value.(type) {
+		case []map[string]any:
+			items = typed
+		case FileGroup:
+			items = typed.Files
+		default:
 			return nil, fmt.Errorf("card requires fetched files input")
 		}
 		for _, file := range items {
@@ -371,12 +376,27 @@ func sortFiles(files []map[string]any) {
 
 func findingLists(values []any) ([]Finding, error) {
 	findings := make([]Finding, 0)
-	for _, value := range values {
-		items, ok := value.([]Finding)
-		if !ok {
-			return nil, fmt.Errorf("card requires validated finding lists")
+	var appendValue func(any) error
+	appendValue = func(value any) error {
+		switch items := value.(type) {
+		case []Finding:
+			findings = append(findings, items...)
+			return nil
+		case []any:
+			for _, item := range items {
+				if err := appendValue(item); err != nil {
+					return err
+				}
+			}
+			return nil
+		default:
+			return fmt.Errorf("card requires validated finding lists")
 		}
-		findings = append(findings, items...)
+	}
+	for _, value := range values {
+		if err := appendValue(value); err != nil {
+			return nil, err
+		}
 	}
 	return findings, nil
 }

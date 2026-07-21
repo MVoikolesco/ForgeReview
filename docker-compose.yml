@@ -7,6 +7,7 @@ services:
       FORGEREVIEW_HTTP_ADDR: :8088
       FORGEREVIEW_DATABASE_URL: file:/data/forgereview.db
       FORGEREVIEW_REDIS_URL: redis://redis:6379/0
+      FORGEREVIEW_ENCRYPTION_KEY: ${FORGEREVIEW_ENCRYPTION_KEY:?set FORGEREVIEW_ENCRYPTION_KEY in .env}
     ports:
       - "8088:8088"
     volumes:

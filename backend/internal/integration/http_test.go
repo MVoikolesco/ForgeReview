@@ -18,7 +18,7 @@ func testIntegration(t *testing.T, kind, baseURL string) Integration {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Integration{Key: kind, Name: kind, Type: kind, Config: payload, SecretReference: "TEST_TOKEN", Status: StatusActive}
+	return Integration{Key: kind, Name: kind, Type: kind, Config: payload, SecretCiphertext: "test-ciphertext", Status: StatusActive}
 }
 
 func TestHTTPGiteaClientReadPullRequestContract(t *testing.T) {

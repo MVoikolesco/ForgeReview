@@ -29,3 +29,10 @@ func TestValidateRejectsInvalidCardsAndContracts(t *testing.T) {
 		t.Fatal("expected incompatible ports to be rejected")
 	}
 }
+
+func TestValidateRequiresASequentialLoopConfiguration(t *testing.T) {
+	definition := Definition{Key: "loop", Name: "Loop", Nodes: []Node{{Key: "loop", Type: "loop", Name: "Loop", Config: map[string]any{"max_iterations": 1, "concurrency": 2}}}}
+	if err := Validate(definition, DefaultCatalog()); err == nil || err.Error() != `loop card "loop" supports only config.concurrency 1` {
+		t.Fatalf("loop validation error = %v", err)
+	}
+}

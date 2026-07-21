@@ -40,7 +40,7 @@ export function ConnectionWizard({
   const [name, setName] = useState("");
   const [baseURL, setBaseURL] = useState("");
   const [model, setModel] = useState("");
-  const [secretReference, setSecretReference] = useState("");
+  const [secret, setSecret] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const steps = [
@@ -61,9 +61,9 @@ export function ConnectionWizard({
     setError("");
   };
   const next = () => {
-    if (step === 1 && (!key || !name || !baseURL || !secretReference)) {
+    if (step === 1 && (!key || !name || !baseURL || !secret)) {
       setError(
-        "Preencha identificação, URL e referência do segredo para continuar.",
+        "Preencha identificação, URL e Token/API key para continuar.",
       );
       return;
     }
@@ -85,10 +85,11 @@ export function ConnectionWizard({
         name,
         type,
         status: "active",
-        secret_reference: secretReference,
+        secret,
         config: { base_url: baseURL, ...(family === "llm" ? { model } : {}) },
       });
       onCreated(integration);
+      setSecret("");
       onClose();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Erro inesperado.");
@@ -131,7 +132,9 @@ export function ConnectionWizard({
             </li>
           ))}
         </ol>
-        <small>Credenciais permanecem fora da pipeline e do navegador.</small>
+          <small>
+            O Token/API key é enviado uma vez e não é armazenado no navegador.
+          </small>
       </aside>
       <ModalShell
         title={
@@ -281,20 +284,17 @@ export function ConnectionWizard({
                 />
               </label>
               <label>
-                Variável do segredo
+                Token ou API key
                 <input
-                  value={secretReference}
-                  onChange={(event) => setSecretReference(event.target.value)}
-                  placeholder={
-                    family === "gitea"
-                      ? "FORGEREVIEW_GITEA_TOKEN"
-                      : "FORGEREVIEW_LLM_TOKEN"
-                  }
-                  pattern="[A-Za-z_][A-Za-z0-9_]*"
+                  type="password"
+                  value={secret}
+                  onChange={(event) => setSecret(event.target.value)}
+                  placeholder="Cole o Token/API key"
+                  autoComplete="new-password"
                 />
                 <small>
-                  Informe o nome da variável no ambiente do backend, não o
-                  segredo.
+                  Enviado apenas nesta criação; não é salvo no navegador nem
+                  exibido novamente.
                 </small>
               </label>
             </div>
@@ -329,8 +329,10 @@ export function ConnectionWizard({
               <Summary
                 icon={<ShieldCheck size={22} />}
                 title="Segredo protegido"
-                value={secretReference || "Variável não definida"}
-                note="Somente a referência será persistida."
+                value={
+                  secret ? "Token/API key informado" : "Token/API key não informado"
+                }
+                note="Será cifrado no backend; o navegador não o armazena."
               />
             </div>
           )}

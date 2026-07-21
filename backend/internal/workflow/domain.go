@@ -87,6 +87,11 @@ func Validate(definition Definition, catalog Catalog) error {
 		if _, ok := catalog.Get(node.Type); !ok {
 			return fmt.Errorf("node %q uses unknown card type %q", node.Key, node.Type)
 		}
+		if node.Type == "loop" {
+			if _, err := loopSettingsFor(node); err != nil {
+				return err
+			}
+		}
 		nodes[node.Key] = node
 	}
 	for _, edge := range definition.Edges {

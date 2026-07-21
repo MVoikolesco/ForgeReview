@@ -28,9 +28,9 @@ exist per workflow key.
 - `GET /api/cards`: registered card catalog and typed ports.
 - `POST /api/integrations`: create an active or disabled Gitea, OpenAI-compatible
   or Ollama integration. Config is limited to `base_url` and, for models,
-  `model`; `secret_reference` must be an environment-variable name.
-- `GET /api/integrations`: list safe integration summaries. The secret reference
-  and any credential value are never returned.
+  `model`; `secret` is a one-time Token/API key input and is never returned.
+- `GET /api/integrations`: list safe integration summaries with
+  `secret_configured`. Ciphertext and credential values are never returned.
 - `POST /api/workflows`: validate and persist a new draft version.
 - `GET /api/workflows`: list workflow keys with their latest name/description
   and all version summaries (`version_id`, `version`, `created_at`, and
@@ -51,18 +51,59 @@ exist per workflow key.
 
 The workflow runner starts cards without required inputs, forwards typed tokens
 through declared edges, and starts a downstream card only after all required
-ports receive a token. Each completed or failed card is persisted in the
+ports receive a token. Tokens and node reports carry `scope_key`; ordinary
+execution uses `root`. Each completed or failed card is persisted in the
 execution report. The safe local executors currently cover trigger, transform,
-variable, log, cache, filter, group, template, condition, merge, validate,
+variable, log, cache, filter, group, loop, template, condition, merge, validate,
 response_filter, consolidate and format. A collecting input port waits for all
 of its declared incoming edges; the `consolidate.comments` port uses this so
 all available finding lists are merged before formatting. A `fetch`
 card requires `config.integration`, `owner`, `repo` and `pull_request`; it uses
 the injected Gitea adapter to read PR metadata, file changes and diff. A `model`
 card requires `config.integration` and uses the injected OpenAI-compatible or
-Ollama chat adapter. Both require an active stored integration and resolve the
-credential only from the environment variable named by its stored
-`secret_reference`.
+   Ollama chat adapter. Both require an active stored integration and decrypt
+   its configured credential only immediately before the controlled provider
+   request.
+
+### Integration secret storage
+
+The backend requires `FORGEREVIEW_ENCRYPTION_KEY` at startup. It must be the
+canonical base64 encoding of exactly 32 bytes; the key is loaded only from that
+environment variable. Integration Token/API keys are AES-256-GCM encrypted with
+a random nonce and their integration key as authenticated additional data before
+SQLite persistence. The ciphertext is not JSON-serializable and never appears in
+API responses. The workflow runtime uses the encrypted-secret manager only at
+provider execution; it does not log plaintext.
+
+Existing Studio databases with `integrations.secret_reference` are migrated by
+rebuilding that table without the reference column. Those records remain listed
+but unconfigured because a reference cannot be converted into a credential;
+their administrator must submit a new Token/API key.
+
+### Scoped loop execution
+
+`loop.items` accepts a list or a `group.groups` output. It requires a positive
+integer `max_iterations`; inputs above that bound fail before any child scope is
+started. `concurrency` defaults to `1` and only `1` is currently valid. The
+validated `max_iterations`, `concurrency`, `on_error`, and completed/failed
+iteration counts are retained in loop node-run metadata. Child scopes run
+strictly sequentially and receive deterministic keys of the form
+`<loop-node-key>:000001`, in input order.
+
+Each `loop.item` edge receives one token in its child scope, and every
+downstream token remains in that scope; the graph remains a single visual graph.
+After all child scopes have finished, `loop.results` emits one root-scoped list
+containing outputs from each terminal scoped card in child-scope and branch
+order. Its target is an explicit scope boundary: nodes reached through
+`loop.results` resume in `root`, rather than being marked as scoped descendants.
+The official review graph therefore makes `response_filter` terminal per group,
+then sends `loop.results` to `consolidate.comments`; nested finding lists are
+flattened deterministically before consolidation. `consolidate`, `format`, and
+`publish` each run once in `root`. `on_error` defaults to `fail`, which stops
+the loop and fails the execution on the first child error. With
+`on_error: "partial"`, the failed child node-run remains failed, later scopes
+continue, and `results` contains only terminal outputs that completed before
+failures. Nested loops are not supported in this increment.
 
 ## Controlled PR-review cards
 
@@ -89,9 +130,9 @@ they do not create comments or call an external destination.
   fetched list.
 - `response_filter` accepts validated lists, applies optional
   `minimum_severity` (default `low`), and removes exact duplicate findings.
-  `consolidate` combines all incoming comment lists and applies the same
-  deterministic deduplication. Finding order is path, line, descending severity,
-  then comment.
+  `consolidate` combines incoming finding lists, including the nested aggregate
+  emitted by `loop.results`, and applies the same deterministic deduplication.
+  Finding order is path, line, descending severity, then comment.
 - `format` emits `formatted_review`: a destination-neutral payload with the
   sorted findings and fixed summary counters (`total`, `low`, `medium`, `high`,
   `critical`).
@@ -103,7 +144,8 @@ they do not create comments or call an external destination.
 ## Publication idempotency
 
 Before the Gitea request, SQLite creates a unique publication attempt keyed by
-the workflow execution ID, workflow version ID, and publish node key. Attempts
+the workflow execution ID, workflow version ID, publish node key, and (for a
+scoped run) its scope key. Root-scope keys retain the prior format. Attempts
 move from `pending` to `completed` with a safe provider receipt, or to
 `retryable` after a known failure. A duplicate completed execution returns the
 stored receipt instead of posting again; a duplicate pending attempt does not
@@ -135,6 +177,11 @@ The production frontend image runs `next start` from the compiled `.next`
 artifact. It intentionally does not run `next dev`, because the final image
 does not contain source files and uses `NODE_ENV=production`.
 
+Copy `.env.example` to `.env` for local Compose configuration and generate the
+required master key with `openssl rand -base64 32`. Compose passes only
+`FORGEREVIEW_ENCRYPTION_KEY` to the backend; no provider-specific integration
+credentials are environment configuration.
+
 ## Studio lifecycle and validation flow
 
 The Studio loads the card catalog from `GET /api/cards`, lets an administrator
@@ -155,11 +202,11 @@ connect Studio, Pipelines, and Integrations.
 The `Integrações` control opens the Studio connection modal. It lists safe
 integration summaries and creates Gitea, OpenAI-compatible or Ollama records
 through the integration API. Model connections are visibly grouped as reusable
-models. The form accepts only the name of the environment variable holding a
-credential; it never requests, displays or persists its value.
+models. The form accepts a one-time password-masked Token/API key, says that the
+browser does not store it, and never displays it again.
 
 The connection flow uses a three-step Studio wizard: choose the Gitea or LLM
-family, configure the URL and secret reference, then select a model or review a
+family, configure the URL and Token/API key, then select a model or review a
 Gitea connection. The only LLM choices exposed in the current UI are Ollama
 local, Ollama Cloud and OpenRouter. OpenRouter uses the controlled
 OpenAI-compatible adapter; both Ollama choices use the Ollama adapter.
@@ -169,7 +216,11 @@ the supported configuration fields: Gitea connection/PR coordinates for fetch
 and publish, reusable model selection and output limit for model, templates,
 file filters, group bounds, conditions and review validation/filter policies.
 `Template review` loads the first official workflow graph into the canvas; it
-requires configured Gitea and model connections before it can run externally.
+connects `group -> loop -> template -> model -> validate -> response_filter`
+per group. The inspector explains that `loop.item` stays in the group scope and
+only `loop.results` crosses to root `consolidate -> format -> publish`, which
+prevents one publication per group. Configured Gitea and model connections are
+still required before it can run externally.
 
 ## POC boundary
 

@@ -33,7 +33,7 @@ export function IntegrationList({ items }: { items: Integration[] }) {
                 <em>
                   {item.type === "gitea"
                     ? item.secret_configured
-                      ? "Segredo referenciado"
+                      ? "Segredo configurado"
                       : "Sem segredo"
                     : item.status === "active"
                       ? "Ativo"

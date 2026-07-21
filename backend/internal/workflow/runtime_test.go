@@ -13,6 +13,27 @@ import (
 
 type memoryIntegrations map[string]integration.Integration
 
+const workflowTestEncryptionKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+
+func testSecrets(t *testing.T) *integration.EncryptedSecrets {
+	t.Helper()
+	secrets, err := integration.NewEncryptedSecrets(workflowTestEncryptionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return secrets
+}
+
+func encryptedIntegration(t *testing.T, item integration.Integration, value string) integration.Integration {
+	t.Helper()
+	ciphertext, err := testSecrets(t).Encrypt(item.Key, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.SecretCiphertext = ciphertext
+	return item
+}
+
 func (items memoryIntegrations) Integration(_ context.Context, key string) (integration.Integration, error) {
 	item, ok := items[key]
 	if !ok {
@@ -68,9 +89,119 @@ func TestRunRoutesConditionToSelectedPort(t *testing.T) {
 	}
 }
 
+func TestRunLoopExecutesGroupsInDistinctScopesAndAggregatesTerminalBranches(t *testing.T) {
+	files := []map[string]any{
+		{"filename": "a.go", "patch": "a"},
+		{"filename": "b.go", "patch": "b"},
+	}
+	definition := Definition{Key: "scoped-loop", Name: "Scoped loop", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": files}},
+		{Key: "prepare", Type: "transform", Name: "Prepare"},
+		{Key: "group", Type: "group", Name: "Group", Config: map[string]any{"max_files": 1, "max_characters": 10}},
+		{Key: "loop", Type: "loop", Name: "Loop", Config: map[string]any{"max_iterations": 2, "concurrency": 1}},
+		{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"template": "review group"}},
+		{Key: "transform", Type: "transform", Name: "Transform"},
+	}, Edges: []Edge{
+		{Key: "event", FromNode: "start", FromPort: "event", ToNode: "prepare", ToPort: "input"},
+		{Key: "files", FromNode: "prepare", FromPort: "output", ToNode: "group", ToPort: "files"},
+		{Key: "groups", FromNode: "group", FromPort: "groups", ToNode: "loop", ToPort: "items"},
+		{Key: "context", FromNode: "loop", FromPort: "item", ToNode: "template", ToPort: "context"},
+		{Key: "input", FromNode: "loop", FromPort: "item", ToNode: "transform", ToPort: "input"},
+	}}
+	report, err := Run(context.Background(), definition, DefaultCatalog(), nil)
+	if err != nil {
+		t.Fatalf("run scoped loop: %v", err)
+	}
+	if report.Status != "completed" {
+		t.Fatalf("report status = %q", report.Status)
+	}
+	templateScopes := nodeScopes(report, "template")
+	transformScopes := nodeScopes(report, "transform")
+	if len(templateScopes) != 2 || len(transformScopes) != 2 || templateScopes[0] != "loop:000001" || templateScopes[1] != "loop:000002" || transformScopes[0] != "loop:000001" || transformScopes[1] != "loop:000002" {
+		t.Fatalf("scoped runs = %#v", report.Runs)
+	}
+	loopRun := nodeRunFor(t, report, "loop", "root")
+	if loopRun.Metadata["concurrency"] != 1 || loopRun.Metadata["completed_iterations"] != 2 {
+		t.Fatalf("loop metadata = %#v", loopRun.Metadata)
+	}
+	results := outputFor(t, report, "loop", "results").([]any)
+	if len(results) != 4 || results[0] != "review group" || results[2] != "review group" {
+		t.Fatalf("loop results = %#v", results)
+	}
+	if first, ok := results[1].(FileGroup); !ok || first.Files[0]["filename"] != "a.go" {
+		t.Fatalf("first scoped group = %#v", results[1])
+	}
+	if second, ok := results[3].(FileGroup); !ok || second.Files[0]["filename"] != "b.go" {
+		t.Fatalf("second scoped group = %#v", results[3])
+	}
+}
+
+func TestRunLoopRejectsItemsAboveConfiguredMaximum(t *testing.T) {
+	definition := Definition{Key: "loop-limit", Name: "Loop limit", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": []any{"one", "two"}}},
+		{Key: "loop", Type: "loop", Name: "Loop", Config: map[string]any{"max_iterations": 1}},
+	}, Edges: []Edge{{Key: "items", FromNode: "start", FromPort: "event", ToNode: "loop", ToPort: "items"}}}
+	report, err := Run(context.Background(), definition, DefaultCatalog(), nil)
+	if err == nil || err.Error() != `loop card "loop" received 2 items, exceeding config.max_iterations 1` {
+		t.Fatalf("loop limit error = %v", err)
+	}
+	if report.Status != "failed" || len(report.Runs) != 2 || report.Runs[1].ScopeKey != "root" {
+		t.Fatalf("loop limit report = %#v", report)
+	}
+}
+
+func TestRunLoopPartialFailureContinuesRemainingScopesAndReturnsAggregate(t *testing.T) {
+	definition := Definition{Key: "loop-partial", Name: "Loop partial", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": []any{"one", "two"}}},
+		{Key: "loop", Type: "loop", Name: "Loop", Config: map[string]any{"max_iterations": 2, "on_error": "partial"}},
+		{Key: "template", Type: "template", Name: "Template"},
+	}, Edges: []Edge{
+		{Key: "items", FromNode: "start", FromPort: "event", ToNode: "loop", ToPort: "items"},
+		{Key: "context", FromNode: "loop", FromPort: "item", ToNode: "template", ToPort: "context"},
+	}}
+	report, err := Run(context.Background(), definition, DefaultCatalog(), nil)
+	if err != nil || report.Status != "completed" {
+		t.Fatalf("partial loop = %#v, %v", report, err)
+	}
+	if scopes := nodeScopes(report, "template"); len(scopes) != 2 || scopes[0] != "loop:000001" || scopes[1] != "loop:000002" {
+		t.Fatalf("partial failure did not run both scopes: %#v", report.Runs)
+	}
+	loopRun := nodeRunFor(t, report, "loop", "root")
+	if loopRun.Metadata["failed_iterations"] != 2 || loopRun.Metadata["completed_iterations"] != 0 {
+		t.Fatalf("partial loop metadata = %#v", loopRun.Metadata)
+	}
+	if results := outputFor(t, report, "loop", "results").([]any); len(results) != 0 {
+		t.Fatalf("partial loop results = %#v", results)
+	}
+}
+
+func nodeScopes(report RunReport, nodeKey string) []string {
+	scopes := []string{}
+	for _, run := range report.Runs {
+		if run.NodeKey == nodeKey {
+			scopes = append(scopes, run.ScopeKey)
+		}
+	}
+	return scopes
+}
+
+func nodeRunFor(t *testing.T, report RunReport, nodeKey, scopeKey string) NodeRun {
+	t.Helper()
+	for _, run := range report.Runs {
+		if run.NodeKey == nodeKey && run.ScopeKey == scopeKey {
+			return run
+		}
+	}
+	t.Fatalf("run %s in scope %s not found in %#v", nodeKey, scopeKey, report)
+	return NodeRun{}
+}
+
 func TestRunWithAdaptersExecutesFetchAndModelCards(t *testing.T) {
 	t.Run("fetch", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.Header.Get("Authorization") != "token secret" {
+				t.Fatalf("fetch adapter did not receive decrypted secret")
+			}
 			switch request.URL.Path {
 			case "/api/v1/repos/acme/api/pulls/12":
 				_, _ = writer.Write([]byte(`{"number":12}`))
@@ -84,12 +215,11 @@ func TestRunWithAdaptersExecutesFetchAndModelCards(t *testing.T) {
 		}))
 		defer server.Close()
 		config, _ := json.Marshal(map[string]string{"base_url": server.URL})
-		t.Setenv("GITEA_TEST_TOKEN", "secret")
 		definition := Definition{Key: "fetch", Name: "Fetch", Nodes: []Node{
 			{Key: "start", Type: "trigger", Name: "Start"},
 			{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea", "owner": "acme", "repo": "api", "pull_request": 12}},
 		}, Edges: []Edge{{Key: "event", FromNode: "start", FromPort: "event", ToNode: "fetch", ToPort: "event"}}}
-		adapters := Adapters{Integrations: memoryIntegrations{"gitea": {Key: "gitea", Type: integration.TypeGitea, Config: config, SecretReference: "GITEA_TEST_TOKEN", Status: integration.StatusActive}}, Gitea: integration.HTTPGiteaClient{Client: server.Client()}}
+		adapters := Adapters{Integrations: memoryIntegrations{"gitea": encryptedIntegration(t, integration.Integration{Key: "gitea", Name: "Gitea", Type: integration.TypeGitea, Config: config, Status: integration.StatusActive}, "secret")}, Secrets: testSecrets(t), Gitea: integration.HTTPGiteaClient{Client: server.Client()}}
 		report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, adapters)
 		if err != nil {
 			t.Fatalf("run fetch: %v", err)
@@ -115,7 +245,6 @@ func TestRunWithAdaptersExecutesFetchAndModelCards(t *testing.T) {
 		}))
 		defer server.Close()
 		config, _ := json.Marshal(map[string]string{"base_url": server.URL, "model": "reviewer"})
-		t.Setenv("OPENAI_TEST_TOKEN", "secret")
 		definition := Definition{Key: "model", Name: "Model", Nodes: []Node{
 			{Key: "start", Type: "trigger", Name: "Start"},
 			{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"template": "review this"}},
@@ -124,7 +253,7 @@ func TestRunWithAdaptersExecutesFetchAndModelCards(t *testing.T) {
 			{Key: "context", FromNode: "start", FromPort: "event", ToNode: "template", ToPort: "context"},
 			{Key: "prompt", FromNode: "template", FromPort: "prompt", ToNode: "model", ToPort: "prompt"},
 		}}
-		adapters := Adapters{Integrations: memoryIntegrations{"openai": {Key: "openai", Type: integration.TypeOpenAI, Config: config, SecretReference: "OPENAI_TEST_TOKEN", Status: integration.StatusActive}}, OpenAI: integration.HTTPOpenAIClient{Client: server.Client()}}
+		adapters := Adapters{Integrations: memoryIntegrations{"openai": encryptedIntegration(t, integration.Integration{Key: "openai", Name: "OpenAI", Type: integration.TypeOpenAI, Config: config, Status: integration.StatusActive}, "secret")}, Secrets: testSecrets(t), OpenAI: integration.HTTPOpenAIClient{Client: server.Client()}}
 		report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, adapters)
 		if err != nil {
 			t.Fatalf("run model: %v", err)

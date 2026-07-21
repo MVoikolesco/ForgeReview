@@ -194,6 +194,7 @@ export function reviewTemplate(
     "fetch",
     "filter",
     "group",
+    "loop",
     "template",
     "model",
     "validate",
@@ -236,23 +237,28 @@ export function reviewTemplate(
         max_characters: 12000,
         group_by_extension: true,
       }),
-      node("template", "template", "Prompt de review", 900, 390, {
-        template:
-          "Analise o pull request e responda somente uma lista JSON de achados.",
+      node("loop", "loop", "Revisar cada grupo", 1190, 125, {
+        max_iterations: 20,
+        concurrency: 1,
+        on_error: "fail",
       }),
-      node("model", "model", "Modelo de review", 1195, 390, {
+      node("template", "template", "Prompt de review", 1480, 125, {
+        template:
+          "Analise este grupo de arquivos e responda somente uma lista JSON de achados.",
+      }),
+      node("model", "model", "Modelo de review", 1775, 125, {
         integration: "",
         max_tokens: 2000,
       }),
-      node("validate", "validate", "Validar resposta", 1490, 390, {
+      node("validate", "validate", "Validar resposta", 2070, 125, {
         validate_paths: true,
       }),
-      node("response-filter", "response_filter", "Filtrar achados", 1785, 390, {
+      node("response-filter", "response_filter", "Filtrar achados", 2365, 125, {
         minimum_severity: "medium",
       }),
-      node("consolidate", "consolidate", "Consolidar review", 2070, 390),
-      node("format", "format", "Formatar review", 2355, 390),
-      node("publish", "publish", "Publicar no Gitea", 2640, 390, {
+      node("consolidate", "consolidate", "Consolidar review", 2070, 480),
+      node("format", "format", "Formatar review", 2365, 480),
+      node("publish", "publish", "Publicar no Gitea", 2660, 480, {
         owner: "",
         repo: "",
         pull_request: 0,
@@ -263,14 +269,15 @@ export function reviewTemplate(
       ["trigger", "out-event", "fetch", "in-event"],
       ["fetch", "out-files", "filter", "in-files"],
       ["filter", "out-files", "group", "in-files"],
-      ["fetch", "out-pull_request", "template", "in-context"],
+      ["group", "out-groups", "loop", "in-items"],
+      ["loop", "out-item", "template", "in-context"],
       ["template", "out-prompt", "model", "in-prompt"],
       ["model", "out-response", "validate", "in-response"],
-      ["fetch", "out-files", "validate", "in-files"],
+      ["loop", "out-item", "validate", "in-files"],
       ["validate", "out-valid", "response-filter", "in-response"],
-      ["response-filter", "out-comments", "consolidate", "in-comments"],
+      ["loop", "out-results", "consolidate", "in-comments"],
       ["consolidate", "out-review", "format", "in-review"],
-      ["format", "out-formatted", "publish", "in-result"],
+      ["format", "out-formatted", "publish", "in-formatted_review"],
     ].map(([source, sourceHandle, target, targetHandle]) => ({
       id: `${source}-${target}`,
       source,

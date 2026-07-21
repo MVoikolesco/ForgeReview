@@ -41,8 +41,8 @@ export function IntegrationsWorkspace() {
             <span>CONEXÕES</span>
             <h1>Integrações e modelos</h1>
             <p>
-              Cadastre conexões reutilizáveis sem expor valores de credenciais
-              no navegador.
+              Cadastre conexões reutilizáveis com Token/API key enviado uma vez,
+              sem armazenamento no navegador.
             </p>
           </div>
           <button onClick={() => setShowWizard(true)}>

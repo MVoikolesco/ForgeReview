@@ -13,6 +13,10 @@ import (
 )
 
 func main() {
+	secrets, err := integration.NewEncryptedSecretsFromEnvironment()
+	if err != nil {
+		log.Fatal(err)
+	}
 	path := os.Getenv("FORGEREVIEW_DATABASE_URL")
 	if path == "" {
 		path = "file:forgereview.db"
@@ -28,6 +32,7 @@ func main() {
 	defer workflows.Close()
 	adapters := workflow.Adapters{
 		Integrations: workflows,
+		Secrets:      secrets,
 		Gitea:        integration.HTTPGiteaClient{},
 		GiteaWriter:  integration.HTTPGiteaClient{},
 		OpenAI:       integration.HTTPOpenAIClient{},
