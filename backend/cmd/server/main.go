@@ -11,9 +11,19 @@ import (
 
 func main() {
 	path := os.Getenv("FORGEREVIEW_DATABASE_URL")
-	if path == "" { path = "file:forgereview.db" }
+	if path == "" {
+		path = "file:forgereview.db"
+	}
+	address := os.Getenv("FORGEREVIEW_HTTP_ADDR")
+	if address == "" {
+		address = ":8088"
+	}
 	workflows, err := store.Open(path)
-	if err != nil { log.Fatal(err) }
+	if err != nil {
+		log.Fatal(err)
+	}
 	defer workflows.Close()
-	if err = httpapi.New(workflow.DefaultCatalog(), workflows).Run(":8080"); err != nil { log.Fatal(err) }
+	if err = httpapi.New(workflow.DefaultCatalog(), workflows).Run(address); err != nil {
+		log.Fatal(err)
+	}
 }

@@ -86,7 +86,9 @@ func Validate(definition Definition, catalog Catalog) error {
 
 func port(ports []Port, key string) (Port, bool) {
 	for _, item := range ports {
-		if item.Key == key { return item, true }
+		if item.Key == key {
+			return item, true
+		}
 	}
 	return Port{}, false
 }

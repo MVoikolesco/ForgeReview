@@ -1,7 +1,7 @@
 {
   "name": "forgereview-studio",
   "private": true,
-  "scripts": { "dev": "next dev", "build": "next build", "lint": "tsc --noEmit" },
+  "scripts": { "dev": "next dev", "build": "next build", "start": "next start", "lint": "tsc --noEmit" },
   "dependencies": {
     "@xyflow/react": "^12.11.2",
     "lucide-react": "^0.468.0",
