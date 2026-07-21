@@ -37,6 +37,8 @@
   Gitea and the supported LLM providers: Ollama local/cloud and OpenRouter.
 - Corrected the production frontend container to run `next start` rather than
   `next dev`; the final image contains the compiled artifact only.
+- Consolidated current delivery, limitations and remaining work in
+  `docs/roadmap.md`.
 - Refactored the frontend Studio into routed, reusable components and typed
   helpers. Added `/studio`, `/integrations`, root redirection, SCSS modules and
   shared styles, plus typed-connection unit coverage.
