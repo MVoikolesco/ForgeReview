@@ -2,20 +2,61 @@ package httpapi
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"strconv"
 
+	"forgereview/backend/internal/integration"
 	"forgereview/backend/internal/store"
 	"forgereview/backend/internal/workflow"
+
 	"github.com/gin-gonic/gin"
 )
 
-func New(catalog workflow.Catalog, workflows *store.SQLite) *gin.Engine {
+func New(catalog workflow.Catalog, workflows *store.SQLite, adapterSets ...workflow.Adapters) *gin.Engine {
+	adapters := workflow.Adapters{}
+	if len(adapterSets) > 0 {
+		adapters = adapterSets[0]
+	}
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
 	router.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	api := router.Group("/api")
 	api.GET("/cards", func(c *gin.Context) { c.JSON(http.StatusOK, catalog.All()) })
+	api.POST("/integrations", func(c *gin.Context) {
+		var request struct {
+			Key             string          `json:"key"`
+			Name            string          `json:"name"`
+			Type            string          `json:"type"`
+			Config          json.RawMessage `json:"config"`
+			SecretReference string          `json:"secret_reference"`
+			Status          string          `json:"status"`
+		}
+		decoder := json.NewDecoder(c.Request.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		item := integration.Integration{Key: request.Key, Name: request.Name, Type: request.Type, Config: request.Config, SecretReference: request.SecretReference, Status: request.Status}
+		if err := workflows.CreateIntegration(c.Request.Context(), item); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusCreated, item.Summary())
+	})
+	api.GET("/integrations", func(c *gin.Context) {
+		items, err := workflows.Integrations(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not list integrations"})
+			return
+		}
+		summaries := make([]integration.Summary, 0, len(items))
+		for _, item := range items {
+			summaries = append(summaries, item.Summary())
+		}
+		c.JSON(http.StatusOK, summaries)
+	})
 	api.POST("/workflows", func(c *gin.Context) {
 		var definition workflow.Definition
 		if err := c.ShouldBindJSON(&definition); err != nil {
@@ -49,6 +90,55 @@ func New(catalog workflow.Catalog, workflows *store.SQLite) *gin.Engine {
 			return
 		}
 		c.JSON(http.StatusOK, definition)
+	})
+	api.POST("/workflow-versions/:id/executions", func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid version id"})
+			return
+		}
+		definition, err := workflows.Load(c.Request.Context(), id)
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "workflow version not found"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load workflow"})
+			return
+		}
+		var input map[string]any
+		if err = c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		report, runErr := workflow.RunWithAdapters(c.Request.Context(), definition, catalog, input, adapters)
+		executionID, saveErr := workflows.SaveExecution(c.Request.Context(), id, report)
+		if saveErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist execution"})
+			return
+		}
+		if runErr != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"execution_id": executionID, "report": report, "error": runErr.Error()})
+			return
+		}
+		c.JSON(http.StatusCreated, gin.H{"execution_id": executionID, "report": report})
+	})
+	api.GET("/executions/:id", func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid execution id"})
+			return
+		}
+		report, err := workflows.Execution(c.Request.Context(), id)
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "execution not found"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load execution"})
+			return
+		}
+		c.JSON(http.StatusOK, report)
 	})
 	return router
 }

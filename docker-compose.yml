@@ -1,0 +1,48 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      FORGEREVIEW_HTTP_ADDR: :8088
+      FORGEREVIEW_DATABASE_URL: file:/data/forgereview.db
+      FORGEREVIEW_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8088:8088"
+    volumes:
+      - workflow-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8088/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8088
+    ports:
+      - "3010:3010"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  redis:
+    image: redis:7.4-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  workflow-data:
+  redis-data:

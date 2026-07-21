@@ -1,0 +1,7 @@
+.git
+.next
+node_modules
+POC
+backend/forgereview.db
+frontend/.next
+frontend/node_modules

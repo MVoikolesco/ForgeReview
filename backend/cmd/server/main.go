@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"forgereview/backend/internal/httpapi"
+	"forgereview/backend/internal/integration"
 	"forgereview/backend/internal/store"
 	"forgereview/backend/internal/workflow"
 )
@@ -23,7 +24,13 @@ func main() {
 		log.Fatal(err)
 	}
 	defer workflows.Close()
-	if err = httpapi.New(workflow.DefaultCatalog(), workflows).Run(address); err != nil {
+	adapters := workflow.Adapters{
+		Integrations: workflows,
+		Gitea:        integration.HTTPGiteaClient{},
+		OpenAI:       integration.HTTPOpenAIClient{},
+		Ollama:       integration.HTTPOllamaClient{},
+	}
+	if err = httpapi.New(workflow.DefaultCatalog(), workflows, adapters).Run(address); err != nil {
 		log.Fatal(err)
 	}
 }
