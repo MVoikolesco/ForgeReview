@@ -88,7 +88,10 @@ mesma definição, ou reabre o draft existente. O editor carrega o catálogo rea
 mantém o draft aberto após salvar e publica pelo endpoint que valida o DAG. O
 canvas fica estruturalmente bloqueado em visualização; em edição permite
 adicionar e mover etapas, editar parâmetros, criar e remover conexões e alterar
-suas condições. Etapas obrigatórias não podem ser removidas pela interface.
+  suas condições. Todas as etapas persistidas podem ser removidas no Studio; o
+  rodapé informa dinamicamente as etapas mínimas ausentes e bloqueia salvar ou
+  publicar até que Preparação, Verificação, Formatação e Publicação estejam no
+  fluxo.
 O card de pré-publicação continua sendo uma projeção e não é enviado no payload
 persistido. Quando o profile exige aprovação manual, a pré-aprovação é projetada
 entre Formatação e Publicação tanto na visualização quanto na edição, sem
@@ -156,6 +159,11 @@ Regras:
   seus contratos sejam compatíveis.
 - O pipeline não pode ser salvo se estiver sem uma etapa obrigatória ou se a
   ordem violar essas regras.
+
+No modo de edição, o título de cada card é renomeado diretamente no canvas. Os
+demais parâmetros ficam no inspector, para que o card preserve apenas tipo,
+contratos e o resumo da sua obrigatoriedade. Critérios de filtros e rotas usam
+rótulos em linguagem de produto no construtor de regras.
 
 O Studio persiste as conexões válidas entre portas de contrato. A execução
 processa cada chegada de entrada individualmente e mantém a origem dos

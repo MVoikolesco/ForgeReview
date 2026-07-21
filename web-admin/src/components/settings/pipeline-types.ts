@@ -121,6 +121,25 @@ export type SchemaField = {
   collection: boolean;
 };
 
+const ruleOperatorLabels: Record<RuleOperator, string> = {
+  all: "Todas as condições",
+  any: "Qualquer condição",
+  not: "Não",
+  equals: "é igual a",
+  contains: "contém",
+  in: "é um de",
+  gt: "é maior que",
+  gte: "é maior ou igual a",
+  lt: "é menor que",
+  lte: "é menor ou igual a",
+  matches: "corresponde a",
+  exists: "existe",
+};
+
+export function ruleOperatorLabel(operator: RuleOperator) {
+  return ruleOperatorLabels[operator];
+}
+
 type JSONSchema = {
   type?: string | string[];
   properties?: Record<string, JSONSchema>;
@@ -170,7 +189,9 @@ export function schemaFields(schema?: Record<string, unknown>): SchemaField[] {
 }
 
 export function defaultRule(fields: SchemaField[]): RulePredicate {
-  const field = fields.find((item) => !item.collection || item.type === "array");
+  const field = fields.find(
+    (item) => !item.collection || item.type === "array",
+  );
   return {
     operator: "exists",
     path: field?.path ?? "result",
@@ -199,19 +220,19 @@ export function collectionItemSchema(
 
 function fullRuleSummary(rule: Rule): string {
   if (rule.operator === "all" || rule.operator === "any") {
-    const separator = rule.operator === "all" ? " AND " : " OR ";
-    const body = rule.rules.map(fullRuleSummary).join(separator) || "empty";
+    const separator = rule.operator === "all" ? " E " : " OU ";
+    const body = rule.rules.map(fullRuleSummary).join(separator) || "vazia";
     return `(${body})`;
   }
-  if (rule.operator === "not") return `NOT ${fullRuleSummary(rule.rules[0])}`;
+  if (rule.operator === "not") return `NÃO ${fullRuleSummary(rule.rules[0])}`;
   const scopedPath = rule.scope
     ? `${rule.scope.path}[${rule.scope.kind}]`
-    : rule.path ?? "$";
-  if (rule.operator === "exists") return `${scopedPath} exists`;
+    : (rule.path ?? "$");
+  if (rule.operator === "exists") return `${scopedPath} existe`;
   const value = Array.isArray(rule.value)
     ? rule.value.join(", ")
     : String(rule.value ?? "");
-  return `${scopedPath} ${rule.operator} ${value}`.trim();
+  return `${scopedPath} ${ruleOperatorLabel(rule.operator)} ${value}`.trim();
 }
 
 export function ruleSummary(rule?: Rule, fallback = "always"): string {

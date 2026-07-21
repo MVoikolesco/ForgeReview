@@ -1,5 +1,17 @@
 # Change log
 
+## 2026-07-21
+
+- Simplificada a edição do Pipeline Studio: cards não repetem campos de
+  configuração, podem ser renomeados ao clicar no título e podem ser removidos
+  mesmo quando fazem parte da estrutura mínima. O indicador do rodapé lista as
+  etapas obrigatórias ausentes e o salvamento local as rejeita antes da API.
+  Rótulos de rotas, filtros e regras foram traduzidos para termos de produto;
+  detalhes de modelo permanecem somente no inspector de etapas LLM. A interface
+  dos cards, tipos compartilhados e canvas React Flow foi separada em
+  componentes próprios. Validação: `npm --prefix web-admin run lint` e `npm
+  --prefix web-admin run build`. Ver [[architecture/pipeline-2.0|pipeline 2.0]].
+
 ## 2026-07-20
 
 - Completado o motor dinâmico orientado a artifacts. O scheduler agora isola

@@ -4,10 +4,10 @@ import {
   collectionItemFields,
   collectionItemSchema,
   defaultRule,
+  ruleOperatorLabel,
   schemaFields,
   type CollectionScope,
   type Rule,
-  type RulePredicate,
   type RulePredicateOperator,
   type RuleValue,
   type SchemaField,
@@ -25,6 +25,12 @@ const predicateOperators: RulePredicateOperator[] = [
   "exists",
 ];
 const collectionScopes: CollectionScope[] = ["any", "all", "count", "filter"];
+const collectionScopeLabels: Record<CollectionScope, string> = {
+  any: "Algum item atende",
+  all: "Todos os itens atendem",
+  count: "Quantidade de itens",
+  filter: "Filtrar itens",
+};
 
 function operatorsFor(field?: SchemaField) {
   if (field?.type === "number" || field?.type === "integer")
@@ -33,7 +39,11 @@ function operatorsFor(field?: SchemaField) {
   return predicateOperators;
 }
 
-function parseValue(value: string, field?: SchemaField, operator?: string): RuleValue {
+function parseValue(
+  value: string,
+  field?: SchemaField,
+  operator?: string,
+): RuleValue {
   const parseScalar = (item: string) => {
     const trimmed = item.trim();
     if (field?.type === "number" || field?.type === "integer") {
@@ -43,7 +53,9 @@ function parseValue(value: string, field?: SchemaField, operator?: string): Rule
     if (field?.type === "boolean") return trimmed === "true";
     return trimmed;
   };
-  return operator === "in" ? value.split(",").map(parseScalar) : parseScalar(value);
+  return operator === "in"
+    ? value.split(",").map(parseScalar)
+    : parseScalar(value);
 }
 
 function valueText(value?: RuleValue) {
@@ -89,11 +101,13 @@ function RuleEditor({
             value={rule.operator}
             onChange={(event) => changeKind(event.target.value)}
           >
-            <option value="all">all</option>
-            <option value="any">any</option>
-            <option value="not">not</option>
+            <option value="all">Todas as condições (E)</option>
+            <option value="any">Qualquer condição (OU)</option>
+            <option value="not">Não</option>
             {predicateOperators.map((operator) => (
-              <option key={operator}>{operator}</option>
+              <option key={operator} value={operator}>
+                {ruleOperatorLabel(operator)}
+              </option>
             ))}
           </select>
           {onRemove && (
@@ -123,7 +137,9 @@ function RuleEditor({
                 ? () =>
                     onChange({
                       ...rule,
-                      rules: rule.rules.filter((_, itemIndex) => itemIndex !== index),
+                      rules: rule.rules.filter(
+                        (_, itemIndex) => itemIndex !== index,
+                      ),
                     })
                 : undefined
             }
@@ -152,11 +168,13 @@ function RuleEditor({
             value="not"
             onChange={(event) => changeKind(event.target.value)}
           >
-            <option value="not">not</option>
-            <option value="all">all</option>
-            <option value="any">any</option>
+            <option value="not">Não</option>
+            <option value="all">Todas as condições (E)</option>
+            <option value="any">Qualquer condição (OU)</option>
             {predicateOperators.map((operator) => (
-              <option key={operator}>{operator}</option>
+              <option key={operator} value={operator}>
+                {ruleOperatorLabel(operator)}
+              </option>
             ))}
           </select>
           {onRemove && (
@@ -205,7 +223,9 @@ function RuleEditor({
           disabled={disabled}
           value={selectedPath}
           onChange={(event) => {
-            const nextField = fields.find((item) => item.path === event.target.value);
+            const nextField = fields.find(
+              (item) => item.path === event.target.value,
+            );
             if (nextField?.type === "array") {
               const nested = collectionItemFields(schema, nextField.path);
               onChange(
@@ -226,12 +246,14 @@ function RuleEditor({
             }
           }}
         >
-          {!fields.length && <option value={selectedPath}>{selectedPath}</option>}
+          {!fields.length && (
+            <option value={selectedPath}>{selectedPath}</option>
+          )}
           {fields
             .filter((item) => !item.collection || item.type === "array")
             .map((item) => (
               <option key={item.path} value={item.path}>
-                {item.path} · {item.type}
+                {item.path} ({item.type})
               </option>
             ))}
         </select>
@@ -260,7 +282,8 @@ function RuleEditor({
                     : kind === "filter"
                       ? "exists"
                       : "equals",
-                value: kind === "count" ? 0 : kind === "filter" ? undefined : true,
+                value:
+                  kind === "count" ? 0 : kind === "filter" ? undefined : true,
                 scope: {
                   ...rule.scope!,
                   kind,
@@ -274,7 +297,7 @@ function RuleEditor({
                 disabled={scope !== "count" && !itemFields.length}
                 key={scope}
               >
-                {scope}
+                {collectionScopeLabels[scope]}
               </option>
             ))}
           </select>
@@ -295,15 +318,17 @@ function RuleEditor({
               });
           }}
         >
-          <option value="all">all</option>
-          <option value="any">any</option>
-          <option value="not">not</option>
+          <option value="all">Todas as condições (E)</option>
+          <option value="any">Qualquer condição (OU)</option>
+          <option value="not">Não</option>
           {operators.map((operator) => (
-            <option key={operator}>{operator}</option>
+            <option key={operator} value={operator}>
+              {ruleOperatorLabel(operator)}
+            </option>
           ))}
         </select>
-        {rule.operator !== "exists" && (
-          projectedField?.type === "boolean" ? (
+        {rule.operator !== "exists" &&
+          (projectedField?.type === "boolean" ? (
             <select
               aria-label="Valor da regra"
               disabled={disabled}
@@ -320,21 +345,27 @@ function RuleEditor({
               aria-label="Valor da regra"
               disabled={disabled}
               inputMode={
-                projectedField?.type === "number" || projectedField?.type === "integer"
+                projectedField?.type === "number" ||
+                projectedField?.type === "integer"
                   ? "decimal"
                   : undefined
               }
-              placeholder={rule.operator === "in" ? "valor 1, valor 2" : "valor"}
+              placeholder={
+                rule.operator === "in" ? "valor 1, valor 2" : "valor"
+              }
               value={valueText(rule.value)}
               onChange={(event) =>
                 onChange({
                   ...rule,
-                  value: parseValue(event.target.value, projectedField, rule.operator),
+                  value: parseValue(
+                    event.target.value,
+                    projectedField,
+                    rule.operator,
+                  ),
                 })
               }
             />
-          )
-        )}
+          ))}
       </div>
       {rule.scope && (
         <div className="rule-scope">
@@ -374,24 +405,28 @@ export function RuleBuilder({
   rule,
   schema,
   disabled = false,
+  title = "Condição adicional",
+  emptyMessage = "Sem condição adicional. O comportamento definido acima será usado.",
   onChange,
 }: {
   rule?: Rule;
   schema?: Record<string, unknown>;
   disabled?: boolean;
+  title?: string;
+  emptyMessage?: string;
   onChange: (rule?: Rule) => void;
 }) {
   const fields = schemaFields(schema);
   return (
     <div className="rule-builder">
       <div className="rule-builder-heading">
-        <span>Regra dinâmica</span>
+        <span>{title}</span>
         <button
           disabled={disabled}
           onClick={() => onChange(rule ? undefined : defaultRule(fields))}
           type="button"
         >
-          {rule ? "Usar always" : "Adicionar regra"}
+          {rule ? "Remover condição" : "Adicionar condição"}
         </button>
       </div>
       {rule ? (
@@ -404,10 +439,12 @@ export function RuleBuilder({
           onChange={onChange}
         />
       ) : (
-        <small>Sem AST: a condição compatível será usada.</small>
+        <small>{emptyMessage}</small>
       )}
       {!fields.length && rule && (
-        <small>Schema indisponível; mantendo o caminho atual com edição segura.</small>
+        <small>
+          Schema indisponível; mantendo o caminho atual com edição segura.
+        </small>
       )}
     </div>
   );

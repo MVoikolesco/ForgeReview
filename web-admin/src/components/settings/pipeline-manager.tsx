@@ -6,17 +6,6 @@ import type {
   ReviewSettingsStageType,
 } from "@/lib/contracts";
 import {
-  defaultRule,
-  ruleSummary,
-  schemaFields,
-  type PipelineStage,
-  type PipelineTransition,
-  type Rule,
-  type WorkflowCatalog,
-  type WorkflowCatalogSchema,
-} from "./pipeline-types";
-import { RuleBuilder } from "./rule-builder";
-import {
   Background,
   Controls,
   Handle,
@@ -28,7 +17,6 @@ import {
   type Connection,
   type Edge,
   type Node,
-  type NodeProps,
   type ReactFlowInstance,
 } from "@xyflow/react";
 import {
@@ -49,63 +37,41 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-
-type Stage = PipelineStage;
-type Transition = PipelineTransition;
-type Trigger = {
-  source: "webhook" | "api" | "manual";
-  enabled: boolean;
-  target_stage_key: string;
-  config: Record<string, unknown>;
-};
-type Version = {
-  id: number;
-  version: number;
-  status: string;
-  profile_id?: number;
-  scheduler_max_runs: number;
-  stages: Stage[];
-  transitions: Transition[];
-  triggers?: Trigger[] | null;
-};
-type Pipeline = {
-  id: number;
-  name: string;
-  description: string;
-  profile_id?: number;
-  is_default: boolean;
-  versions: Version[];
-};
-type RuntimeEvent = {
-  status?: string;
-  percent?: number;
-  message?: string;
-  timestamp?: string;
-};
-type StudioNodeData = {
-  stage: Stage;
-  update: (patch: Partial<Stage>) => void;
-  remove: () => void;
-  select: () => void;
-  openLogs: () => void;
-  editable: boolean;
-  removable: boolean;
-  runtime?: RuntimeEvent;
-  active?: boolean;
-};
-type EntrypointNodeData = {
-  trigger: Trigger;
-  editable: boolean;
-  updateSource: (source: Trigger["source"]) => void;
-  toggle: () => void;
-};
-
-const triggerLabels = {
-  webhook: "Webhook Gitea",
-  api: "POST API",
-  manual: "Disparo manual",
-};
-const triggerSources = Object.keys(triggerLabels) as Trigger["source"][];
+import {
+  defaultRule,
+  ruleSummary,
+  schemaFields,
+  type Rule,
+  type WorkflowCatalog,
+  type WorkflowCatalogSchema,
+} from "./pipeline-types";
+import { RuleBuilder } from "./rule-builder";
+import { studioNodeTypes } from "./pipeline-studio-cards";
+import { PipelineStudioCanvas } from "./pipeline-studio-canvas";
+import type {
+  EntrypointNodeData,
+  Pipeline,
+  RuntimeEvent,
+  Stage,
+  StudioNodeData,
+  Trigger,
+  Transition,
+  Version,
+} from "./pipeline-studio-types";
+import {
+  conditionLabels,
+  contractColor,
+  handlePosition,
+  portSide,
+  processorGroupLabels,
+  processorGroups,
+  processorKind,
+  requiredStages,
+  stageTypeProcessorKind,
+  transitionTypeLabels,
+  triggerLabels,
+  triggerSources,
+} from "./pipeline-studio-utils";
 const defaultTriggers = (targetStageKey = "") =>
   triggerSources.map((source, index) => ({
     source,
@@ -129,13 +95,6 @@ const businessConditions = [
   "confidence_below_threshold",
 ];
 const technicalConditions = ["error", "timeout", "contract_invalid"];
-const processorGroups = ["llm", "rule_filter", "transform_merge", "system"] as const;
-const processorGroupLabels = {
-  llm: "LLM",
-  rule_filter: "Rule filter",
-  transform_merge: "Transform / merge",
-  system: "Sistema",
-};
 const emptyWorkflowCatalog: WorkflowCatalog = {
   contracts: [],
   processors: [],
@@ -160,35 +119,6 @@ const entrypointPositions = [
 const defaultSchedulerMaxRuns = 256;
 const maxSchedulerMaxRuns = 10000;
 
-function contractColor(key?: string) {
-  if (key?.includes("findings")) return "#46c892";
-  if (key?.includes("review")) return "#ab7cff";
-  if (key?.includes("diff")) return "#4d91ff";
-  if (key?.includes("error")) return "#e25f67";
-  return "#e6a34e";
-}
-function portSide(stage: Stage, kind: "input" | "output") {
-  const configured = stage.config?.[`${kind}_side`];
-  if (configured === "left" || configured === "right") return configured;
-  if (
-    kind === "output" &&
-    ["consolidator", "verification", "formatting"].includes(
-      stage.executor_key || "",
-    )
-  )
-    return "left";
-  if (
-    kind === "input" &&
-    ["verification", "formatting", "publication"].includes(
-      stage.executor_key || "",
-    )
-  )
-    return "right";
-  return kind === "input" ? "left" : "right";
-}
-function handlePosition(side: string) {
-  return side === "left" ? Position.Left : Position.Right;
-}
 function stagePercent(event?: RuntimeEvent) {
   return ["done", "concluido", "concluído", "completed"].includes(
     event?.status || "",
@@ -196,24 +126,24 @@ function stagePercent(event?: RuntimeEvent) {
     ? 100
     : (event?.percent ?? 0);
 }
-function processorKind(stage: Stage) {
-  if (stage.executor_key === "rule_filter" || stage.executor_key === "transform_merge")
-    return stage.executor_key;
-  const kind = stage.processor_kind || (stage.use_llm ? "llm" : "system");
-  return kind === "deterministic" ? "system" : kind;
-}
-
-function stageTypeProcessorKind(type: ReviewSettingsStageType) {
-  if (type.executor_key === "rule_filter" || type.executor_key === "transform_merge")
-    return type.executor_key;
-  if (type.processor_kind) return type.processor_kind === "deterministic" ? "system" : type.processor_kind;
-  return ["preparation", "publication", "error_log"].includes(type.executor_key)
-    ? "system"
-    : "llm";
-}
 
 function isTechnicalTransition(type: unknown) {
   return type === "failure" || type === "fallback";
+}
+
+function transitionLabel(type: string, rule?: Rule, condition = "always") {
+  return `${transitionTypeLabels[type] ?? type} · ${ruleSummary(
+    rule,
+    conditionLabels[condition] ?? condition,
+  )}`;
+}
+
+function stageProcessorLabel(stage: Stage) {
+  return (
+    processorGroupLabels[
+      processorKind(stage) as keyof typeof processorGroupLabels
+    ] ?? "Processador"
+  );
 }
 
 function catalogFieldType(schema: WorkflowCatalogSchema) {
@@ -223,10 +153,13 @@ function catalogFieldType(schema: WorkflowCatalogSchema) {
 }
 
 function configValue(config: Record<string, unknown>, path: string[]) {
-  return path.reduce<unknown>((value, key) =>
-    value && typeof value === "object"
-      ? (value as Record<string, unknown>)[key]
-      : undefined, config);
+  return path.reduce<unknown>(
+    (value, key) =>
+      value && typeof value === "object"
+        ? (value as Record<string, unknown>)[key]
+        : undefined,
+    config,
+  );
 }
 
 function patchConfigValue(
@@ -240,16 +173,19 @@ function patchConfigValue(
     if (index === path.length - 1) cursor[key] = value;
     else {
       const child = cursor[key];
-      cursor[key] = child && typeof child === "object" && !Array.isArray(child)
-        ? { ...(child as Record<string, unknown>) }
-        : {};
+      cursor[key] =
+        child && typeof child === "object" && !Array.isArray(child)
+          ? { ...(child as Record<string, unknown>) }
+          : {};
       cursor = cursor[key] as Record<string, unknown>;
     }
   });
   return updated;
 }
 
-function schemaDefaults(schema?: WorkflowCatalogSchema): Record<string, unknown> {
+function schemaDefaults(
+  schema?: WorkflowCatalogSchema,
+): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(schema?.properties ?? {}).flatMap(([key, field]) => {
       if (field.default !== undefined) return [[key, field.default]];
@@ -278,7 +214,9 @@ function meaningfulRule(rule: Rule): boolean {
   if (Array.isArray(rule.value))
     return (
       rule.value.length > 0 &&
-      rule.value.every((value) => typeof value !== "string" || value.trim() !== "")
+      rule.value.every(
+        (value) => typeof value !== "string" || value.trim() !== "",
+      )
     );
   return (
     rule.value !== undefined &&
@@ -350,7 +288,8 @@ function graphReaches(
   if (seen.has(current)) return false;
   seen.add(current);
   return (adjacency.get(current) ?? []).some((next) =>
-    graphReaches(adjacency, next, target, seen));
+    graphReaches(adjacency, next, target, seen),
+  );
 }
 
 function ConfigSchemaFields({
@@ -365,7 +304,9 @@ function ConfigSchemaFields({
   path?: string[];
 }) {
   return Object.entries(schema?.properties ?? {}).map(([key, field]) => {
-    if (["rule", "prompt_template", "model_id", "max_output_tokens"].includes(key))
+    if (
+      ["rule", "prompt_template", "model_id", "max_output_tokens"].includes(key)
+    )
       return null;
     const fieldPath = [...path, key];
     const value = configValue(config, fieldPath) ?? field.default;
@@ -390,7 +331,9 @@ function ConfigSchemaFields({
             type="checkbox"
             checked={Boolean(value)}
             onChange={(event) =>
-              onChange(patchConfigValue(config, fieldPath, event.target.checked))
+              onChange(
+                patchConfigValue(config, fieldPath, event.target.checked),
+              )
             }
           />
           {label}
@@ -403,14 +346,16 @@ function ConfigSchemaFields({
           <input
             value={Array.isArray(value) ? value.join(", ") : ""}
             onChange={(event) =>
-              onChange(patchConfigValue(
-                config,
-                fieldPath,
-                event.target.value
-                  .split(",")
-                  .map((item) => item.trim())
-                  .filter(Boolean),
-              ))
+              onChange(
+                patchConfigValue(
+                  config,
+                  fieldPath,
+                  event.target.value
+                    .split(",")
+                    .map((item) => item.trim())
+                    .filter(Boolean),
+                ),
+              )
             }
           />
           {field.description && <small>{field.description}</small>}
@@ -423,15 +368,21 @@ function ConfigSchemaFields({
           <select
             value={String(value ?? field.enum[0] ?? "")}
             onChange={(event) =>
-              onChange(patchConfigValue(
-                config,
-                fieldPath,
-                field.enum?.find((option) => String(option) === event.target.value),
-              ))
+              onChange(
+                patchConfigValue(
+                  config,
+                  fieldPath,
+                  field.enum?.find(
+                    (option) => String(option) === event.target.value,
+                  ),
+                ),
+              )
             }
           >
             {field.enum.map((option) => (
-              <option key={String(option)} value={String(option)}>{String(option)}</option>
+              <option key={String(option)} value={String(option)}>
+                {String(option)}
+              </option>
             ))}
           </select>
         ) : (
@@ -441,13 +392,15 @@ function ConfigSchemaFields({
             max={field.maximum}
             value={String(value ?? "")}
             onChange={(event) =>
-              onChange(patchConfigValue(
-                config,
-                fieldPath,
-                type === "integer" || type === "number"
-                  ? event.target.valueAsNumber
-                  : event.target.value,
-              ))
+              onChange(
+                patchConfigValue(
+                  config,
+                  fieldPath,
+                  type === "integer" || type === "number"
+                    ? event.target.valueAsNumber
+                    : event.target.value,
+                ),
+              )
             }
           />
         )}
@@ -461,259 +414,6 @@ function triggerIcon(source: Trigger["source"]) {
   if (source === "manual") return <Hand size={15} />;
   return <Webhook size={15} />;
 }
-
-function EntrypointNode({ data }: NodeProps<Node<EntrypointNodeData>>) {
-  return (
-    <article
-      className={`studio-entrypoint ${data.trigger.enabled ? "enabled" : "disabled"}`}
-    >
-      <header>
-        <span>
-          <i />
-          Entrypoint
-        </span>
-        <small>{data.trigger.enabled ? "Ativo" : "Inativo"}</small>
-      </header>
-      <div className="studio-entrypoint-body">
-        <span className="studio-entrypoint-icon">
-          {triggerIcon(data.trigger.source)}
-        </span>
-        <label>
-          Tipo de entrada
-          <select
-            className="nodrag"
-            disabled={!data.editable}
-            value={data.trigger.source}
-            onChange={(event) =>
-              data.updateSource(event.target.value as Trigger["source"])
-            }
-          >
-            {Object.entries(triggerLabels).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      <button
-        className="nodrag studio-entrypoint-state"
-        disabled={!data.editable}
-        onClick={data.toggle}
-      >
-        {data.trigger.enabled ? "Desativar entrada" : "Ativar entrada"}
-      </button>
-      <Handle
-        id="entry-output"
-        type="source"
-        position={Position.Right}
-        className="studio-port-handle"
-        style={{ background: "#e6a34e" }}
-      />
-    </article>
-  );
-}
-
-function StageFields({
-  stage,
-  onUpdate,
-}: {
-  stage: Stage;
-  onUpdate: (patch: Partial<Stage>) => void;
-}) {
-  return (
-    <div className="studio-fields">
-      <label>
-        Nome
-        <input
-          value={stage.name}
-          onChange={(event) => onUpdate({ name: event.target.value })}
-        />
-      </label>
-      {stage.use_llm ? (
-        <>
-          <label>
-            Prompt
-            <textarea
-              value={stage.prompt_template}
-              onChange={(event) =>
-                onUpdate({ prompt_template: event.target.value })
-              }
-            />
-          </label>
-          <div>
-            <label>
-              Modelo ID
-              <input
-                type="number"
-                value={stage.model_id ?? ""}
-                onChange={(event) =>
-                  onUpdate({
-                    model_id: event.target.value
-                      ? Number(event.target.value)
-                      : undefined,
-                  })
-                }
-              />
-            </label>
-            <label>
-              Tokens
-              <input
-                type="number"
-                min="0"
-                value={stage.max_output_tokens}
-                onChange={(event) =>
-                  onUpdate({ max_output_tokens: Number(event.target.value) })
-                }
-              />
-            </label>
-          </div>
-          <div>
-            <label>
-              Tentativas
-              <input
-                type="number"
-                min="0"
-                value={stage.retry_limit}
-                onChange={(event) =>
-                  onUpdate({ retry_limit: Number(event.target.value) })
-                }
-              />
-            </label>
-            <label>
-              Timeout
-              <input
-                type="number"
-                min="0"
-                value={stage.timeout_seconds}
-                onChange={(event) =>
-                  onUpdate({ timeout_seconds: Number(event.target.value) })
-                }
-              />
-            </label>
-          </div>
-        </>
-      ) : (
-        <div className="studio-deterministic-fields">
-          <label>
-            Executor
-            <input
-              disabled
-              value={stage.executor_key || stage.stage_type_key}
-            />
-          </label>
-          <label>
-            Timeout
-            <input
-              type="number"
-              min="0"
-              value={stage.timeout_seconds}
-              onChange={(event) =>
-                onUpdate({ timeout_seconds: Number(event.target.value) })
-              }
-            />
-          </label>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StudioNode({ data }: NodeProps<Node<StudioNodeData>>) {
-  const s = data.stage;
-  const inputSide = portSide(s, "input");
-  const outputSide = portSide(s, "output");
-  return (
-    <article
-      className={`studio-node ${s.executor_key === "error_log" ? "error" : ""}`}
-      onClick={data.select}
-    >
-      <header>
-        <span>
-          <i />
-          {s.name}
-        </span>
-        {data.editable && data.removable && (
-          <button
-            aria-label="Remover etapa"
-            onClick={(event) => {
-              event.stopPropagation();
-              data.remove();
-            }}
-          >
-            <Trash2 size={13} />
-          </button>
-        )}
-      </header>
-      <div
-        className={`studio-ports ${inputSide === "right" && outputSide === "left" ? "reversed" : ""}`}
-      >
-        <span className={`input-port ${inputSide}`}>
-          <Handle
-            id={`input-${inputSide}`}
-            type="target"
-            position={handlePosition(inputSide)}
-            className="studio-port-handle"
-            style={{ background: contractColor(s.input_contract?.key) }}
-          />
-          <i style={{ background: contractColor(s.input_contract?.key) }} />
-          {s.input_contract?.key || "Entrada inicial"}
-        </span>
-        <span className={`output-port ${outputSide}`}>
-          {s.output_contract?.key || "Terminal"}
-          <i style={{ background: contractColor(s.output_contract?.key) }} />
-          <Handle
-            id={`output-${outputSide}`}
-            type="source"
-            position={handlePosition(outputSide)}
-            className="studio-port-handle"
-            style={{ background: contractColor(s.output_contract?.key) }}
-          />
-        </span>
-      </div>
-      {data.editable && (
-        <div className="studio-node-meta">
-          <span>{s.stage_type_key}</span>
-          <span>{s.use_llm ? "LLM" : "Determinística"}</span>
-          {s.required && <span>Obrigatória</span>}
-        </div>
-      )}
-      {data.editable ? (
-        <StageFields stage={s} onUpdate={data.update} />
-      ) : (
-        <div className={`studio-run-log ${data.runtime?.status || "pending"}`}>
-          <header>
-            <span>
-              {data.active
-                ? "Em execução"
-                : data.runtime?.status || "Aguardando"}
-            </span>
-            <span>
-              <strong>{stagePercent(data.runtime)}%</strong>
-              <button
-                className="studio-log-button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  data.openLogs();
-                }}
-                title="Abrir logs"
-              >
-                <AlertCircle size={15} />
-              </button>
-            </span>
-          </header>
-          <p>
-            {data.runtime?.message || "Aguardando uma execução desta etapa."}
-          </p>
-          <div>
-            <i style={{ width: `${stagePercent(data.runtime)}%` }} />
-          </div>
-        </div>
-      )}
-    </article>
-  );
-}
-const nodeTypes = { studio: StudioNode, entrypoint: EntrypointNode };
 
 function StageInspector({
   stage,
@@ -817,43 +517,54 @@ function StageInspector({
           )}
           <label>
             Schema completo de entrada
-            <textarea className="studio-contract-schema" readOnly value={schemaText(stage.input_contract)} />
+            <textarea
+              className="studio-contract-schema"
+              readOnly
+              value={schemaText(stage.input_contract)}
+            />
           </label>
           <label>
             Schema completo de saída
-            <textarea className="studio-contract-schema" readOnly value={schemaText(stage.output_contract)} />
+            <textarea
+              className="studio-contract-schema"
+              readOnly
+              value={schemaText(stage.output_contract)}
+            />
           </label>
         </section>
       </>
     );
   return (
     <>
-      <strong>Editar etapa</strong>
+      <strong>Configurar etapa</strong>
       <label>
-        Chave estável
+        Identificador técnico
         <input disabled value={stage.key} />
       </label>
       <label>
-        Executor
+        Tipo de etapa
         <input disabled value={stage.executor_key || stage.stage_type_key} />
       </label>
       <label>
-        Processador
-        <input disabled value={processorKind(stage)} />
+        Processamento
+        <input disabled value={stageProcessorLabel(stage)} />
       </label>
       <label>
-        Contratos
+        Fluxo de dados
         <input
           disabled
           value={`${stage.input_contract?.key || "entrada inicial"} → ${stage.output_contract?.key || "terminal"}`}
         />
       </label>
       <label>
-        Obrigatoriedade
-        <input disabled value={stage.required ? "Etapa obrigatória" : "Etapa opcional"} />
+        Requisito para publicar
+        <input
+          disabled
+          value={stage.required ? "Etapa exigida" : "Etapa opcional"}
+        />
       </label>
       <label>
-        Roteamento de saída
+        Saídas compatíveis
         <select
           value={stage.routing_mode ?? stage.route_mode ?? "all_matches"}
           onChange={(event) =>
@@ -865,13 +576,15 @@ function StageInspector({
         >
           {routeModes.map((mode) => (
             <option key={mode} value={mode}>
-              {mode === "all_matches" ? "Todas as regras compatíveis" : "Primeira regra compatível"}
+              {mode === "all_matches"
+                ? "Seguir todas as condições atendidas"
+                : "Seguir somente a primeira condição atendida"}
             </option>
           ))}
         </select>
       </label>
       <label>
-        Junção de entradas
+        Múltiplas entradas
         <select
           value={stage.join_mode ?? "each_arrival"}
           onChange={(event) =>
@@ -881,7 +594,7 @@ function StageInspector({
           {joinModes.map((mode) => (
             <option key={mode.key} value={mode.key} disabled={!mode.executable}>
               {mode.key === "each_arrival"
-                ? "Executar a cada chegada"
+                ? "Executar a cada entrada recebida"
                 : mode.key === "any"
                   ? "Continuar com qualquer entrada"
                   : "Aguardar todas as entradas"}
@@ -891,14 +604,7 @@ function StageInspector({
         </select>
       </label>
       <label>
-        Nome
-        <input
-          value={stage.name}
-          onChange={(event) => onUpdate({ name: event.target.value })}
-        />
-      </label>
-      <label>
-        Entrada
+        Lado da entrada
         <select
           value={portSide(stage, "input")}
           onChange={(event) =>
@@ -912,7 +618,7 @@ function StageInspector({
         </select>
       </label>
       <label>
-        Saída
+        Lado da saída
         <select
           value={portSide(stage, "output")}
           onChange={(event) =>
@@ -944,7 +650,7 @@ function StageInspector({
       {stage.use_llm ? (
         <>
           <label>
-            Modelo ID
+            Modelo de IA (opcional)
             <input
               type="number"
               value={stage.model_id ?? ""}
@@ -956,9 +662,12 @@ function StageInspector({
                 })
               }
             />
+            <small>
+              Deixe em branco para usar o modelo definido no profile.
+            </small>
           </label>
           <label>
-            Tokens
+            Limite de tokens
             <input
               type="number"
               min="0"
@@ -969,7 +678,7 @@ function StageInspector({
             />
           </label>
           <label>
-            Tentativas
+            Novas tentativas
             <input
               type="number"
               min="0"
@@ -980,7 +689,7 @@ function StageInspector({
             />
           </label>
           <label>
-            Timeout (s)
+            Tempo máximo (segundos)
             <input
               type="number"
               min="0"
@@ -991,7 +700,7 @@ function StageInspector({
             />
           </label>
           <label>
-            Prompt
+            Instruções para o modelo
             <textarea
               value={stage.prompt_template}
               onChange={(event) =>
@@ -1003,14 +712,14 @@ function StageInspector({
       ) : (
         <>
           <label>
-            Executor
+            Tipo de etapa
             <input
               disabled
               value={stage.executor_key || stage.stage_type_key}
             />
           </label>
           <label>
-            Timeout (s)
+            Tempo máximo (segundos)
             <input
               type="number"
               min="0"
@@ -1024,10 +733,12 @@ function StageInspector({
       )}
       {processorKind(stage) === "rule_filter" && (
         <section className="studio-processor-config">
-          <strong>Regra do filtro</strong>
+          <strong>Critérios do filtro</strong>
           <RuleBuilder
             rule={stage.config.rule as Rule | undefined}
             schema={stage.input_contract?.schema}
+            title="Manter itens quando"
+            emptyMessage="Defina uma condição abaixo ou informe extensões incluídas."
             onChange={(rule) => onUpdate({ config: { ...stage.config, rule } })}
           />
         </section>
@@ -1035,7 +746,11 @@ function StageInspector({
       {(processorKind(stage) === "rule_filter" ||
         processorKind(stage) === "transform_merge") && (
         <section className="studio-processor-config">
-          <strong>Configuração controlada</strong>
+          <strong>
+            {processorKind(stage) === "rule_filter"
+              ? "Opções do filtro"
+              : "Opções da transformação"}
+          </strong>
           <ConfigSchemaFields
             schema={processorConfigSchema(processor)}
             config={stage.config}
@@ -1045,11 +760,19 @@ function StageInspector({
       )}
       <label>
         Schema completo de entrada
-        <textarea className="studio-contract-schema" readOnly value={schemaText(stage.input_contract)} />
+        <textarea
+          className="studio-contract-schema"
+          readOnly
+          value={schemaText(stage.input_contract)}
+        />
       </label>
       <label>
         Schema completo de saída
-        <textarea className="studio-contract-schema" readOnly value={schemaText(stage.output_contract)} />
+        <textarea
+          className="studio-contract-schema"
+          readOnly
+          value={schemaText(stage.output_contract)}
+        />
       </label>
     </>
   );
@@ -1114,7 +837,8 @@ export function PipelineManager({
     [selectedEdge, setSelectedEdge] = useState<string | null>(null),
     [selectedNode, setSelectedNode] = useState<string | null>(null),
     [statusOpen, setStatusOpen] = useState(false),
-    [workflowCatalog, setWorkflowCatalog] = useState<WorkflowCatalog>(emptyWorkflowCatalog);
+    [workflowCatalog, setWorkflowCatalog] =
+      useState<WorkflowCatalog>(emptyWorkflowCatalog);
   const handledEditRequest = useRef(0);
   const current = pipelines.find((p) => p.id === pipelineID);
   const editable =
@@ -1163,7 +887,7 @@ export function PipelineManager({
         data: {
           stage,
           editable,
-          removable: !stage.required,
+          removable: true,
           runtime: runtimeEvents[stage.key],
           active: activeStage === stage.key,
           select: () => {
@@ -1233,9 +957,10 @@ export function PipelineManager({
     );
     const loadedTriggers = versionToOpen.triggers ?? [];
     const defaultTarget =
-      versionToOpen.stages.find(
-        (stage) => stage.executor_key === "preparation",
-      )?.key ?? versionToOpen.stages[0]?.key ?? "";
+      versionToOpen.stages.find((stage) => stage.executor_key === "preparation")
+        ?.key ??
+      versionToOpen.stages[0]?.key ??
+      "";
     setTriggers(
       loadedTriggers.length
         ? normalizeTriggers(loadedTriggers)
@@ -1309,7 +1034,7 @@ export function PipelineManager({
           source,
           target,
           ...ports(source, target),
-          label: `${item.type} · ${ruleSummary(item.rule, item.condition_key)}`,
+          label: transitionLabel(item.type, item.rule, item.condition_key),
           data: item,
           animated: item.type !== "success",
           className: isTechnicalTransition(item.type)
@@ -1346,7 +1071,7 @@ export function PipelineManager({
         id: `e-${i}`,
         source: s.key,
         target: stages[i + 1].key,
-        label: "success · always",
+        label: transitionLabel("success"),
         className: "studio-business-edge",
         data: {
           type: "success",
@@ -1377,11 +1102,15 @@ export function PipelineManager({
       true,
       false,
     ];
-    const kind = type ? stageTypeProcessorKind(type) : (llm ? "llm" : "system");
-    const processor = workflowCatalog.processors.find((item) => item.key === kind);
-    const inputSchema = type?.input_contract?.schema ?? workflowCatalog.contracts.find(
-      (contract) => contract.key === type?.input_contract?.key,
-    )?.schema;
+    const kind = type ? stageTypeProcessorKind(type) : llm ? "llm" : "system";
+    const processor = workflowCatalog.processors.find(
+      (item) => item.key === kind,
+    );
+    const inputSchema =
+      type?.input_contract?.schema ??
+      workflowCatalog.contracts.find(
+        (contract) => contract.key === type?.input_contract?.key,
+      )?.schema;
     const config = schemaDefaults(processorConfigSchema(processor));
     const inputFields = schemaFields(inputSchema);
     if (kind === "rule_filter" && inputFields.length)
@@ -1425,7 +1154,10 @@ export function PipelineManager({
       "publication",
       "error_log",
     ].includes(typeKey);
-    if (singleton && nodes.some((node) => node.data.stage.stage_type_key === typeKey)) {
+    if (
+      singleton &&
+      nodes.some((node) => node.data.stage.stage_type_key === typeKey)
+    ) {
       setError("Esta etapa só pode aparecer uma vez no fluxo.");
       return;
     }
@@ -1482,7 +1214,11 @@ export function PipelineManager({
             sourceHandle: `output-${portSide(source, "output")}`,
             targetHandle: `input-${portSide(target, "input")}`,
             id: crypto.randomUUID(),
-            label: `${type} · ${type === "failure" ? "error" : "always"}`,
+            label: transitionLabel(
+              type,
+              undefined,
+              type === "failure" ? "error" : "always",
+            ),
             className: isTechnicalTransition(type)
               ? "studio-technical-edge"
               : "studio-business-edge",
@@ -1511,12 +1247,24 @@ export function PipelineManager({
       max_traversals: number;
     }>,
   ) {
+    const missingRequiredStages = requiredStages.filter(
+      ({ key }) =>
+        !stages.some(
+          (stage) => stage.executor_key === key || stage.stage_type_key === key,
+        ),
+    );
+    if (missingRequiredStages.length)
+      return `A pipeline exige as etapas: ${missingRequiredStages.map(({ label }) => label).join(", ")}.`;
     for (const stage of stages) {
       const kind = processorKind(stage);
-      const processor = workflowCatalog.processors.find((item) => item.key === kind);
+      const processor = workflowCatalog.processors.find(
+        (item) => item.key === kind,
+      );
       if (processor && !processor.executable)
         return `O processador ${processor.name} ainda não é executável pelo runtime.`;
-      const join = workflowCatalog.join_modes.find((item) => item.key === stage.join_mode);
+      const join = workflowCatalog.join_modes.find(
+        (item) => item.key === stage.join_mode,
+      );
       if (join && !join.executable)
         return `O modo de junção ${join.key} ainda não é executável pelo runtime.`;
       if (kind === "rule_filter") {
@@ -1665,10 +1413,11 @@ export function PipelineManager({
         const data = { ...edge.data, ...patch } as Transition;
         return {
           ...edge,
-          label: `${data.type ?? "success"} · ${ruleSummary(
+          label: transitionLabel(
+            data.type ?? "success",
             data.rule,
             data.condition_key ?? "always",
-          )}`,
+          ),
           className: isTechnicalTransition(data.type)
             ? "studio-technical-edge"
             : "studio-business-edge",
@@ -1705,7 +1454,8 @@ export function PipelineManager({
       const draft = draftPipeline.versions.find(
         (candidate) => candidate.status === "draft",
       );
-      if (!draft) throw new Error("O backend não retornou o draft da pipeline.");
+      if (!draft)
+        throw new Error("O backend não retornou o draft da pipeline.");
       setEditing(true);
       onEditingChange?.(true);
       setPipelines([draftPipeline]);
@@ -1713,7 +1463,8 @@ export function PipelineManager({
       setMenuOpen(true);
     } catch (failure) {
       if (failure instanceof Error && failure.message === "AUTH") onAuthError();
-      else setError(failure instanceof Error ? failure.message : String(failure));
+      else
+        setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
       setBusy(false);
     }
@@ -1746,7 +1497,7 @@ export function PipelineManager({
         data: {
           ...node.data,
           editable,
-          removable: !node.data.stage.required,
+          removable: true,
         },
       })),
     );
@@ -1848,18 +1599,20 @@ export function PipelineManager({
   const entrypointEdges: Edge[] = triggers.flatMap((trigger, index) => {
     const target = nodes.find((node) => node.id === trigger.target_stage_key);
     return target
-      ? [{
-        id: `entrypoint-edge-${index}`,
-        source: `entrypoint-${index}`,
-        target: target.id,
-        sourceHandle: "entry-output",
-        targetHandle: `input-${portSide(target.data.stage, "input")}`,
-        selectable: true,
-        deletable: false,
-        animated: trigger.enabled,
-        className: "studio-entrypoint-edge",
-        style: { stroke: "#e6a34e", opacity: trigger.enabled ? 1 : 0.22 },
-      }]
+      ? [
+          {
+            id: `entrypoint-edge-${index}`,
+            source: `entrypoint-${index}`,
+            target: target.id,
+            sourceHandle: "entry-output",
+            targetHandle: `input-${portSide(target.data.stage, "input")}`,
+            selectable: true,
+            deletable: false,
+            animated: trigger.enabled,
+            className: "studio-entrypoint-edge",
+            style: { stroke: "#e6a34e", opacity: trigger.enabled ? 1 : 0.22 },
+          },
+        ]
       : [];
   });
   const formattingNode = nodes.find(
@@ -1870,8 +1623,8 @@ export function PipelineManager({
   );
   const approvalMovesLeft = Boolean(
     formattingNode &&
-      publicationNode &&
-      publicationNode.position.x < formattingNode.position.x,
+    publicationNode &&
+    publicationNode.position.x < formattingNode.position.x,
   );
   const approvalStage: Stage = {
     stage_type_key: "pre-publicacao",
@@ -1901,8 +1654,7 @@ export function PipelineManager({
           id: approvalStage.key,
           type: "studio",
           position: {
-            x:
-              (formattingNode.position.x + publicationNode.position.x) / 2,
+            x: (formattingNode.position.x + publicationNode.position.x) / 2,
             y:
               (formattingNode.position.y + publicationNode.position.y) / 2 +
               (Math.abs(
@@ -1934,7 +1686,7 @@ export function PipelineManager({
           target: approvalNode.id,
           sourceHandle: `output-${portSide(formattingNode!.data.stage, "output")}`,
           targetHandle: `input-${portSide(approvalStage, "input")}`,
-          label: "success · always",
+          label: transitionLabel("success"),
           className: "studio-business-edge",
           selectable: false,
           deletable: false,
@@ -1950,7 +1702,7 @@ export function PipelineManager({
           target: publicationNode!.id,
           sourceHandle: `output-${portSide(approvalStage, "output")}`,
           targetHandle: `input-${portSide(publicationNode!.data.stage, "input")}`,
-          label: "approval",
+          label: "Aprovação manual",
           className: "studio-business-edge",
           selectable: false,
           deletable: false,
@@ -2003,6 +1755,22 @@ export function PipelineManager({
         ].includes(type.key) ||
         !nodes.some((node) => node.data.stage.stage_type_key === type.key),
     );
+  const missingRequiredStages = requiredStages.filter(
+    ({ key }) =>
+      !nodes.some(
+        (node) =>
+          node.data.stage.executor_key === key ||
+          node.data.stage.stage_type_key === key,
+      ),
+  );
+  const statusHasError = Boolean(error || missingRequiredStages.length);
+  const statusText = error
+    ? "Atenção"
+    : missingRequiredStages.length
+      ? `Faltam ${missingRequiredStages.length} etapas`
+      : editable
+        ? "Estrutura mínima completa"
+        : "Carregada";
   return (
     <section
       className={`pipeline-studio ${readOnly ? "runtime-studio" : ""} ${editable ? "editing" : ""}`}
@@ -2057,7 +1825,10 @@ export function PipelineManager({
               <strong>Draft</strong>
               <label>
                 Nome
-                <input value={name} onChange={(event) => setName(event.target.value)} />
+                <input
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
               </label>
               <label>
                 Descrição
@@ -2183,8 +1954,12 @@ export function PipelineManager({
               return (
                 <div className="studio-processor-group" key={group}>
                   <header>
-                    <span>{processor?.name || processorGroupLabels[group]}</span>
-                    <small>{processor?.executable ? "Executável" : "Indisponível"}</small>
+                    <span>
+                      {processor?.name || processorGroupLabels[group]}
+                    </span>
+                    <small>
+                      {processor?.executable ? "Executável" : "Indisponível"}
+                    </small>
                   </header>
                   {processor?.description && <p>{processor.description}</p>}
                   {types.map((type) => (
@@ -2193,38 +1968,33 @@ export function PipelineManager({
                       disabled={!editable || !processor?.executable}
                       draggable={editable && processor?.executable}
                       onDragStart={(event) =>
-                        event.dataTransfer.setData("stage", type.key)}
-                      onClick={() => editable && processor?.executable && addStage(type.key)}
+                        event.dataTransfer.setData("stage", type.key)
+                      }
+                      onClick={() =>
+                        editable && processor?.executable && addStage(type.key)
+                      }
                     >
                       <Plus size={14} /> {type.name}
                     </button>
                   ))}
-                  {!types.length && <small>Nenhuma etapa deste tipo no catálogo.</small>}
+                  {!types.length && (
+                    <small>Nenhuma etapa deste tipo no catálogo.</small>
+                  )}
                 </div>
               );
             })}
           </section>
         </aside>
       )}
-      <main
-        className="studio-canvas"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          const type = e.dataTransfer.getData("stage");
-          if (!type || !editable) return;
-          const position = flowInstance?.screenToFlowPosition({
-            x: e.clientX,
-            y: e.clientY,
-          });
-          addStage(type, position);
-        }}
-      >
-        <ReactFlow
-          nodes={renderedNodes}
-          edges={renderedEdges}
-          nodeTypes={nodeTypes}
-          onInit={setFlowInstance}
-          onNodesChange={(changes) => {
+      <PipelineStudioCanvas
+        nodes={renderedNodes}
+        edges={renderedEdges}
+        nodeTypes={studioNodeTypes}
+        editable={editable}
+        flowInstance={flowInstance}
+        onInit={setFlowInstance}
+        onDropStage={addStage}
+        onNodesChange={(changes) => {
             changes.forEach((change) => {
               if (
                 "id" in change &&
@@ -2245,60 +2015,36 @@ export function PipelineManager({
                 );
               }
             });
-            onNodesChange(
+          onNodesChange(
               changes.filter(
                 (change) =>
                   !("id" in change) || !change.id.startsWith("entrypoint-"),
               ) as Parameters<typeof onNodesChange>[0],
-            );
-          }}
-          onEdgesChange={(changes) =>
-            onEdgesChange(
+          );
+        }}
+        onEdgesChange={(changes) =>
+          onEdgesChange(
               changes.filter(
                 (change) =>
                   !("id" in change) ||
                   !change.id.startsWith("entrypoint-edge-"),
               ),
             )
-          }
-          onConnect={connect}
-          nodesDraggable={editable}
-          nodesConnectable={editable}
-          edgesReconnectable={editable}
-          elementsSelectable
-          deleteKeyCode={null}
-          onEdgeClick={(_, edge) => {
-            setSelectedEdge(edge.id);
-            setSelectedNode(null);
-            setStatusOpen(false);
-          }}
-          fitView
-        >
-          <Background gap={18} size={1} />
-          <Controls />
-        </ReactFlow>
-        <button
-          className="studio-menu-toggle"
-          onClick={() => setMenuOpen(true)}
-          title="Abrir menu"
-        >
-          <PanelLeftOpen size={17} />
-        </button>
-        <div className="studio-hint">
-          <MousePointer2 size={14} /> Configure Entrypoints, arraste etapas e
-          conecte portas compatíveis.
-        </div>
-        <button
-          className={`studio-status ${error ? "error" : "ok"}`}
-          onClick={() => {
-            setStatusOpen((value) => !value);
-            setSelectedNode(null);
-          }}
-          title="Status da pipeline"
-        >
-          <CircleAlert size={16} /> {error ? "Atenção" : editable ? "Editando" : "Carregada"}
-        </button>
-      </main>
+        }
+        onConnect={connect}
+        onEdgeClick={(_, edge) => {
+          setSelectedEdge(edge.id);
+          setSelectedNode(null);
+          setStatusOpen(false);
+        }}
+        onOpenMenu={() => setMenuOpen(true)}
+        statusHasError={statusHasError}
+        statusText={statusText}
+        onOpenStatus={() => {
+          setStatusOpen((value) => !value);
+          setSelectedNode(null);
+        }}
+      />
       {(selectedStage || selectedEdge || statusOpen) && (
         <aside className="studio-inspector">
           <button
@@ -2340,7 +2086,9 @@ export function PipelineManager({
               <div className="studio-error-note">
                 <CircleAlert size={15} />{" "}
                 {error ||
-                  "Pipeline carregada. Rotas failure e fallback só podem apontar para Log de erro."}
+                  (missingRequiredStages.length
+                    ? `Para salvar ou publicar, adicione: ${missingRequiredStages.map(({ label }) => label).join(", ")}.`
+                    : "A estrutura mínima está completa. Rotas de falha e contingência só podem apontar para Log de erro.")}
               </div>
             </>
           ) : null}
@@ -2351,7 +2099,9 @@ export function PipelineManager({
                 Origem
                 <input
                   disabled
-                  value={triggerLabels[triggers[selectedEntrypointIndex].source]}
+                  value={
+                    triggerLabels[triggers[selectedEntrypointIndex].source]
+                  }
                 />
               </label>
               <label>
@@ -2411,9 +2161,7 @@ export function PipelineManager({
                 Tipo
                 <select
                   disabled={!editable}
-                  value={String(
-                    selectedConnection?.data?.type ?? "success",
-                  )}
+                  value={String(selectedConnection?.data?.type ?? "success")}
                   onChange={(event) => {
                     const type = event.target.value;
                     const technical = isTechnicalTransition(type);
@@ -2428,7 +2176,9 @@ export function PipelineManager({
                     ? ["failure", "fallback"]
                     : ["success", "skip"]
                   ).map((v) => (
-                    <option key={v}>{v}</option>
+                    <option key={v} value={v}>
+                      {transitionTypeLabels[v]}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -2447,7 +2197,9 @@ export function PipelineManager({
                     ? technicalConditions
                     : businessConditions
                   ).map((v) => (
-                    <option key={v}>{v}</option>
+                    <option key={v} value={v}>
+                      {conditionLabels[v]}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -2464,6 +2216,8 @@ export function PipelineManager({
                     stageType(selectedConnectionSource?.stage_type_key ?? "")
                       ?.output_contract?.schema
                   }
+                  title="Condição adicional da rota"
+                  emptyMessage="A rota segue a condição selecionada acima."
                   onChange={(rule) => updateSelectedEdge({ rule })}
                 />
               )}
@@ -2473,18 +2227,21 @@ export function PipelineManager({
                   disabled={!editable}
                   min="0"
                   type="number"
-                  value={Number(
-                    selectedConnection?.data?.max_traversals ?? 1,
-                  )}
+                  value={Number(selectedConnection?.data?.max_traversals ?? 1)}
                   onChange={(event) =>
                     updateSelectedEdge({
-                      max_traversals: Number.isFinite(event.target.valueAsNumber)
+                      max_traversals: Number.isFinite(
+                        event.target.valueAsNumber,
+                      )
                         ? Math.max(0, event.target.valueAsNumber)
                         : 0,
                     })
                   }
                 />
-                <small>Obrigatório e maior que zero somente quando a conexão fecha um loop.</small>
+                <small>
+                  Obrigatório e maior que zero somente quando a conexão fecha um
+                  loop.
+                </small>
               </label>
               <button
                 disabled={!editable}
