@@ -42,6 +42,43 @@ export type JoinMode = "each_arrival" | "any" | "wait_all";
 export type PipelineContract = Pick<ReviewSettingsContract, "key"> &
   Partial<Pick<ReviewSettingsContract, "schema">>;
 
+export type WorkflowCatalogSchema = {
+  type?: string | string[];
+  title?: string;
+  description?: string;
+  default?: unknown;
+  enum?: Array<string | number | boolean>;
+  minimum?: number;
+  maximum?: number;
+  items?: WorkflowCatalogSchema;
+  properties?: Record<string, WorkflowCatalogSchema>;
+  required?: string[];
+};
+
+export type WorkflowCatalog = {
+  contracts: Array<{
+    key: string;
+    version: number;
+    schema: Record<string, unknown>;
+    semantic_validator_key: string;
+  }>;
+  processors: Array<{
+    key: string;
+    name: string;
+    description: string;
+    config_schema: WorkflowCatalogSchema;
+    executable: boolean;
+  }>;
+  entrypoints: Array<{
+    key: string;
+    name: string;
+    adapter_key: string;
+    config_schema: WorkflowCatalogSchema;
+  }>;
+  route_modes: RoutingMode[];
+  join_modes: Array<{ key: JoinMode; executable: boolean }>;
+};
+
 export type PipelineStage = {
   id?: number;
   stage_type_key: string;
@@ -91,6 +128,8 @@ type JSONSchema = {
 };
 
 function schemaType(schema: JSONSchema): SchemaField["type"] {
+  if (schema.properties) return "object";
+  if (schema.items) return "array";
   const value = Array.isArray(schema.type)
     ? schema.type.find((item) => item !== "null")
     : schema.type;
@@ -142,19 +181,29 @@ export function collectionItemFields(
   schema: Record<string, unknown> | undefined,
   path: string,
 ): SchemaField[] {
-  let node = schema as JSONSchema | undefined;
-  for (const part of path.split(".")) node = node?.properties?.[part];
-  return node?.items ? schemaFields(node.items as Record<string, unknown>) : [];
+  const itemSchema = collectionItemSchema(schema, path);
+  if (!itemSchema) return [];
+  const fields = schemaFields(itemSchema);
+  if (fields.length || schemaType(itemSchema) === "object") return fields;
+  return [{ path: "$", type: schemaType(itemSchema), collection: false }];
 }
 
-export function ruleSummary(rule?: Rule): string {
-  if (!rule) return "always";
+export function collectionItemSchema(
+  schema: Record<string, unknown> | undefined,
+  path: string,
+): Record<string, unknown> | undefined {
+  let node = schema as JSONSchema | undefined;
+  for (const part of path.split(".")) node = node?.properties?.[part];
+  return node?.items as Record<string, unknown> | undefined;
+}
+
+function fullRuleSummary(rule: Rule): string {
   if (rule.operator === "all" || rule.operator === "any") {
     const separator = rule.operator === "all" ? " AND " : " OR ";
-    const body = rule.rules.map(ruleSummary).join(separator) || "empty";
+    const body = rule.rules.map(fullRuleSummary).join(separator) || "empty";
     return `(${body})`;
   }
-  if (rule.operator === "not") return `NOT ${ruleSummary(rule.rules[0])}`;
+  if (rule.operator === "not") return `NOT ${fullRuleSummary(rule.rules[0])}`;
   const scopedPath = rule.scope
     ? `${rule.scope.path}[${rule.scope.kind}]`
     : rule.path ?? "$";
@@ -163,4 +212,10 @@ export function ruleSummary(rule?: Rule): string {
     ? rule.value.join(", ")
     : String(rule.value ?? "");
   return `${scopedPath} ${rule.operator} ${value}`.trim();
+}
+
+export function ruleSummary(rule?: Rule, fallback = "always"): string {
+  if (!rule) return fallback;
+  const summary = fullRuleSummary(rule);
+  return summary.length > 72 ? `${summary.slice(0, 69)}...` : summary;
 }

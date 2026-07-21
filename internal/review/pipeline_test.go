@@ -2,6 +2,8 @@ package review
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"sync"
@@ -67,6 +69,51 @@ func (*failingPipelineProvider) Chat(context.Context, string, int) (string, prov
 }
 
 type emptyConsolidatorProvider struct{ base *pipelineProvider }
+
+type capturingPipelineProvider struct {
+	base    *pipelineProvider
+	prompts []string
+}
+
+type fallbackPlannerExecutor struct{ receivedOriginal bool }
+
+type mergedFallbackPlannerExecutor struct {
+	primaryID      int64
+	receivedMerged bool
+	artifacts      int
+	sources        int
+	files          int
+}
+
+func (e *mergedFallbackPlannerExecutor) Execute(ctx context.Context, runtime *pipelineRuntime, stage PipelineStage) (StageOutcome, error) {
+	if stage.ID == e.primaryID {
+		return StageOutcome{}, errors.New("primary planner failed")
+	}
+	e.artifacts = len(runtime.currentArtifacts)
+	e.sources = len(runtime.currentSources)
+	e.files = len(runtime.files)
+	e.receivedMerged = e.artifacts == 1 && e.sources == 2 && e.files == 2
+	return plannerExecutor{}.Execute(ctx, runtime, stage)
+}
+
+func (e *fallbackPlannerExecutor) Execute(ctx context.Context, runtime *pipelineRuntime, stage PipelineStage) (StageOutcome, error) {
+	if stage.Key == "planejamento" {
+		return StageOutcome{}, errors.New("primary planner failed")
+	}
+	e.receivedOriginal = len(runtime.currentArtifacts) == 1 && runtime.currentArtifacts[0].Type == "prepared_diff" && len(runtime.files) == 1
+	return plannerExecutor{}.Execute(ctx, runtime, stage)
+}
+
+func (p *capturingPipelineProvider) Name() string { return p.base.Name() }
+func (p *capturingPipelineProvider) Review(ctx context.Context, input providers.Input) (contracts.Result, error) {
+	return p.base.Review(ctx, input)
+}
+func (p *capturingPipelineProvider) Chat(ctx context.Context, prompt string, max int) (string, providers.Usage, error) {
+	if strings.Contains(prompt, "<stage>planner</stage>") {
+		p.prompts = append(p.prompts, prompt)
+	}
+	return p.base.Chat(ctx, prompt, max)
+}
 
 func (*emptyConsolidatorProvider) Name() string { return "test" }
 func (*emptyConsolidatorProvider) Review(context.Context, providers.Input) (contracts.Result, error) {
@@ -240,7 +287,7 @@ func TestPipelineBranchWithNoRuleMatchClosesNormally(t *testing.T) {
 	_, definition, cleanup := seededPipeline(t)
 	defer cleanup()
 	definition.Stages[0].RouteMode = "first_match"
-	definition.Transitions[0].Rule = &Rule{Operator: RuleExists, Path: "missing", Value: true}
+	definition.Transitions[0].Rule = &Rule{Operator: RuleGT, Scope: &CollectionScope{Kind: CollectionCount, Path: "files"}, Value: 99}
 	result, err := NewPipelineEngine(nil).Execute(context.Background(), definition, PipelineExecutionInput{
 		Job: queueInput{ID: "closed-branch"}, RawDiff: "diff --git a/app.go b/app.go\n",
 		Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
@@ -275,16 +322,317 @@ func TestPipelineCyclesRequireEveryTraversalToBeBounded(t *testing.T) {
 	}
 }
 
-func TestPipelineRejectsCatalogedButUnimplementedJoinModes(t *testing.T) {
+func TestPipelineValidatesCyclesAcrossTechnicalTransitions(t *testing.T) {
+	_, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+	left := fileFilterStage(definition, 997, "technical-left", len(definition.Stages)+1)
+	right := fileFilterStage(definition, 998, "technical-right", len(definition.Stages)+2)
+	definition.Stages = append(definition.Stages, left, right)
+	definition.Transitions = append(definition.Transitions,
+		PipelineTransition{ID: 997, FromStageID: left.ID, ToStageID: &right.ID, Type: "fallback", ConditionKey: "error", MaxTraversals: 1},
+		PipelineTransition{ID: 998, FromStageID: right.ID, ToStageID: &left.ID, Type: "failure", ConditionKey: "error", MaxTraversals: 1},
+	)
+	if err := validatePipelineDefinition(definition); err != nil {
+		t.Fatalf("bounded technical cycle was rejected: %v", err)
+	}
+	definition.Transitions[len(definition.Transitions)-1].MaxTraversals = 0
+	if err := validatePipelineDefinition(definition); err == nil {
+		t.Fatal("expected unbounded technical transition cycle to be rejected")
+	}
+}
+
+func TestPipelineAcceptsImplementedJoinModes(t *testing.T) {
 	_, definition, cleanup := seededPipeline(t)
 	defer cleanup()
 	for _, mode := range []string{"any", "wait_all"} {
 		candidate := definition
 		candidate.Stages = append([]PipelineStage(nil), definition.Stages...)
 		candidate.Stages[1].JoinMode = mode
-		if err := validatePipelineDefinition(candidate); err == nil {
-			t.Fatalf("expected join mode %s to be rejected", mode)
+		if err := validatePipelineDefinition(candidate); err != nil {
+			t.Fatalf("expected join mode %s to be executable: %v", mode, err)
 		}
+	}
+}
+
+func TestPipelineJoinModesAndUnmatchedClosure(t *testing.T) {
+	for _, test := range []struct {
+		mode  string
+		calls int
+	}{
+		{mode: "each_arrival", calls: 2},
+		{mode: "any", calls: 1},
+		{mode: "wait_all", calls: 1},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			p := &pipelineProvider{calls: map[string]int{}}
+			_, definition, cleanup := seededPipeline(t)
+			defer cleanup()
+			definition = pipelineWithFileFilterJoin(definition, test.mode)
+			_, err := NewPipelineEngine(nil).Execute(context.Background(), definition, PipelineExecutionInput{
+				Job: queueInput{ID: "joins"}, RawDiff: "diff --git a/app.go b/app.go\n--- a/app.go\n+++ b/app.go\n@@ -1 +1 @@\n-old\n+new\n",
+				Policy:   Policy{MinimumConfidence: .75, MaxParallelGroups: 1},
+				Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
+			})
+			if err != nil {
+				t.Fatalf("calls=%#v err=%v", p.calls, err)
+			}
+			if p.calls["planner"] != test.calls {
+				t.Fatalf("%s executed planner %d times, want %d", test.mode, p.calls["planner"], test.calls)
+			}
+		})
+	}
+
+	p := &pipelineProvider{calls: map[string]int{}}
+	_, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+	definition = pipelineWithFileFilterJoin(definition, "wait_all")
+	for index := range definition.Transitions {
+		if definition.Transitions[index].FromStageID == definition.Stages[0].ID && definition.Transitions[index].Priority == 0 {
+			definition.Transitions[index].Rule = &Rule{Operator: RuleGT, Scope: &CollectionScope{Kind: CollectionCount, Path: "files"}, Value: 99}
+		}
+	}
+	_, err := NewPipelineEngine(nil).Execute(context.Background(), definition, PipelineExecutionInput{
+		Job: queueInput{ID: "one-closed-join"}, RawDiff: "diff --git a/app.go b/app.go\n--- a/app.go\n+++ b/app.go\n@@ -1 +1 @@\n-old\n+new\n",
+		Policy: Policy{MinimumConfidence: .75, MaxParallelGroups: 1}, Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
+	})
+	if err != nil || p.calls["planner"] != 1 {
+		t.Fatalf("wait_all did not consume data plus unmatched closure: calls=%#v err=%v", p.calls, err)
+	}
+
+	p = &pipelineProvider{calls: map[string]int{}}
+	_, definition, cleanup = seededPipeline(t)
+	defer cleanup()
+	definition = pipelineWithFileFilterJoin(definition, "wait_all")
+	for index := range definition.Transitions {
+		if definition.Transitions[index].FromStageID == definition.Stages[0].ID {
+			definition.Transitions[index].Rule = &Rule{Operator: RuleGT, Scope: &CollectionScope{Kind: CollectionCount, Path: "files"}, Value: 99}
+		}
+	}
+	result, err := NewPipelineEngine(nil).Execute(context.Background(), definition, PipelineExecutionInput{Job: queueInput{ID: "closed-join"}, RawDiff: "diff --git a/app.go b/app.go\n"})
+	if err != nil || len(result.Comments) != 0 || p.calls["planner"] != 0 {
+		t.Fatalf("closed wait_all branch did not terminate cleanly: result=%#v calls=%#v err=%v", result, p.calls, err)
+	}
+}
+
+func TestControlledProcessorsFilterAndDeterministicallyMerge(t *testing.T) {
+	prepared := pipelineArtifact{Type: "prepared_diff", Payload: map[string]any{"files": []pipelineFile{{Path: "web.tsx"}, {Path: "api.go"}}, "ignored": 0}}
+	runtime := &pipelineRuntime{currentArtifacts: []pipelineArtifact{prepared}}
+	outcome, err := (ruleFilterExecutor{}).Execute(context.Background(), runtime, PipelineStage{Config: map[string]any{"include_extensions": []string{".tsx"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var filtered struct {
+		Files []pipelineFile `json:"files"`
+	}
+	if err = decodeArtifactPayload(outcome.Artifact, &filtered); err != nil || len(filtered.Files) != 1 || filtered.Files[0].Path != "web.tsx" {
+		t.Fatalf("unexpected file filter output: %#v err=%v", outcome.Artifact, err)
+	}
+	finding := pipelineFinding{ID: "same", File: "app.go", Line: 1, Comment: "fix"}
+	runtime.currentArtifacts = []pipelineArtifact{
+		{Type: "review_findings", Payload: []pipelineGroupReview{{GroupID: "a", Findings: []pipelineFinding{finding}}}},
+		{Type: "review_findings", Payload: []pipelineGroupReview{{GroupID: "b", Findings: []pipelineFinding{finding}}}},
+	}
+	outcome, err = (transformMergeExecutor{}).Execute(context.Background(), runtime, PipelineStage{Config: map[string]any{"operation": "dedupe_findings"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var groups []pipelineGroupReview
+	if err = decodeArtifactPayload(outcome.Artifact, &groups); err != nil || len(groups) != 2 || len(groups[0].Findings)+len(groups[1].Findings) != 1 {
+		t.Fatalf("unexpected deterministic merge: %#v err=%v", outcome.Artifact, err)
+	}
+}
+
+func TestFilteredCollectionArtifactReachesPromptStage(t *testing.T) {
+	base := &pipelineProvider{calls: map[string]int{}}
+	p := &capturingPipelineProvider{base: base}
+	_, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+	definition.Transitions[0].Rule = &Rule{
+		Operator: RuleExists,
+		Scope:    &CollectionScope{Kind: CollectionFilter, Path: "files", Rule: &Rule{Operator: RuleMatches, Path: "Path", Value: `\.tsx$`}},
+		Value:    true,
+	}
+	_, err := NewPipelineEngine(nil).Execute(context.Background(), definition, PipelineExecutionInput{
+		Job:      queueInput{ID: "filtered"},
+		RawDiff:  "diff --git a/web.tsx b/web.tsx\n--- a/web.tsx\n+++ b/web.tsx\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/api.go b/api.go\n--- a/api.go\n+++ b/api.go\n@@ -1 +1 @@\n-old\n+new\n",
+		Policy:   Policy{MinimumConfidence: .75, MaxParallelGroups: 1},
+		Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.prompts) != 1 || !strings.Contains(p.prompts[0], "web.tsx") || strings.Contains(p.prompts[0], "api.go") {
+		t.Fatalf("planner did not receive the filtered artifact: %#v", p.prompts)
+	}
+}
+
+func TestBoundedLoopStopsAtTraversalAndSchedulerBounds(t *testing.T) {
+	p := &pipelineProvider{calls: map[string]int{}}
+	_, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+	filter := fileFilterStage(definition, 900, "loop-filter", len(definition.Stages)+1)
+	definition.Stages = append(definition.Stages, filter)
+	definition.Transitions[0].ToStageID = &filter.ID
+	definition.Transitions = append(definition.Transitions,
+		PipelineTransition{ID: 901, FromStageID: filter.ID, ToStageID: &filter.ID, Type: "success", ConditionKey: "always", MaxTraversals: 2},
+		PipelineTransition{ID: 902, FromStageID: filter.ID, ToStageID: &definition.Stages[1].ID, Type: "success", ConditionKey: "always"},
+	)
+	_, err := NewPipelineEngine(nil).Execute(context.Background(), definition, PipelineExecutionInput{
+		Job: queueInput{ID: "loop"}, RawDiff: "diff --git a/app.go b/app.go\n--- a/app.go\n+++ b/app.go\n@@ -1 +1 @@\n-old\n+new\n",
+		Policy: Policy{MinimumConfidence: .75, MaxParallelGroups: 1}, Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
+	})
+	if err != nil || p.calls["planner"] != 3 {
+		t.Fatalf("bounded loop calls=%#v err=%v", p.calls, err)
+	}
+	definition.SchedulerMaxRuns = 2
+	_, err = NewPipelineEngine(nil).Execute(context.Background(), definition, PipelineExecutionInput{Job: queueInput{ID: "scheduler-bound"}, RawDiff: "diff --git a/app.go b/app.go\n"})
+	if err == nil || !strings.Contains(err.Error(), "scheduler bound") {
+		t.Fatalf("expected scheduler bound error, got %v", err)
+	}
+}
+
+func TestBoundedCycleClosureStopsAtMaxTraversals(t *testing.T) {
+	p := &pipelineProvider{calls: map[string]int{}}
+	_, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+	filter := fileFilterStage(definition, 905, "closed-loop-filter", len(definition.Stages)+1)
+	definition.Stages = append(definition.Stages, filter)
+	definition.Transitions[0].ToStageID = &filter.ID
+	nonmatching := &Rule{Operator: RuleGT, Scope: &CollectionScope{Kind: CollectionCount, Path: "files"}, Value: 99}
+	definition.Transitions = append(definition.Transitions,
+		PipelineTransition{ID: 906, FromStageID: filter.ID, ToStageID: &filter.ID, Type: "success", Rule: nonmatching, MaxTraversals: 2},
+		PipelineTransition{ID: 907, FromStageID: filter.ID, ToStageID: &definition.Stages[1].ID, Type: "success", Rule: nonmatching},
+	)
+	_, err := NewPipelineEngine(nil).Execute(context.Background(), definition, PipelineExecutionInput{
+		Job: queueInput{ID: "closed-loop"}, RawDiff: "diff --git a/app.go b/app.go\n--- a/app.go\n+++ b/app.go\n@@ -1 +1 @@\n-old\n+new\n",
+		Policy: Policy{MinimumConfidence: .75, MaxParallelGroups: 1}, Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
+	})
+	if err != nil || p.calls["planner"] != 0 {
+		t.Fatalf("bounded close propagation did not terminate: calls=%#v err=%v", p.calls, err)
+	}
+}
+
+func TestStageArtifactsPersistInputProvenance(t *testing.T) {
+	p := &pipelineProvider{calls: map[string]int{}}
+	repo, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+	_, err := NewPipelineEngine(repo).Execute(context.Background(), definition, PipelineExecutionInput{
+		Job: queueInput{ID: "rev-1"}, RawDiff: "diff --git a/app.go b/app.go\n--- a/app.go\n+++ b/app.go\n@@ -1 +1 @@\n-old\n+new\n",
+		Policy: Policy{MinimumConfidence: .75, MaxParallelGroups: 1}, Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var links int
+	if err = repo.db.QueryRowContext(context.Background(), `SELECT count(*) FROM stage_artifact_inputs sai JOIN stage_artifacts sa ON sa.id=sai.artifact_id JOIN pipeline_executions pe ON pe.id=sa.pipeline_execution_id WHERE pe.review_id='rev-1'`).Scan(&links); err != nil {
+		t.Fatal(err)
+	}
+	if links < len(definition.Stages)-1 {
+		t.Fatalf("expected provenance for each consumed artifact, got %d links", links)
+	}
+}
+
+func TestFilteredTransitionPersistsExactProjectedInput(t *testing.T) {
+	p := &pipelineProvider{calls: map[string]int{}}
+	repo, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+	definition.Transitions[0].Rule = &Rule{
+		Operator: RuleExists,
+		Scope:    &CollectionScope{Kind: CollectionFilter, Path: "files", Rule: &Rule{Operator: RuleMatches, Path: "Path", Value: `\.tsx$`}},
+		Value:    true,
+	}
+	_, err := NewPipelineEngine(repo).Execute(context.Background(), definition, PipelineExecutionInput{
+		Job:     queueInput{ID: "rev-1"},
+		RawDiff: "diff --git a/web.tsx b/web.tsx\n--- a/web.tsx\n+++ b/web.tsx\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/api.go b/api.go\n--- a/api.go\n+++ b/api.go\n@@ -1 +1 @@\n-old\n+new\n",
+		Policy:  Policy{MinimumConfidence: .75, MaxParallelGroups: 1}, Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload, hash string
+	if err = repo.db.QueryRowContext(context.Background(), `SELECT sai.input_payload_json,sai.input_payload_hash
+		FROM stage_artifact_inputs sai
+		JOIN stage_artifacts sa ON sa.id=sai.artifact_id
+		JOIN stage_executions se ON se.id=sa.stage_execution_id
+		WHERE se.stage_key='planejamento' LIMIT 1`).Scan(&payload, &hash); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(payload, "web.tsx") || strings.Contains(payload, "api.go") {
+		t.Fatalf("persisted transition input was not projected: %s", payload)
+	}
+	sum := sha256.Sum256([]byte(payload))
+	if hash != hex.EncodeToString(sum[:]) {
+		t.Fatalf("projected input hash mismatch: got %s", hash)
+	}
+}
+
+func TestTechnicalFallbackReceivesOriginalInputAndUsesCompatibleProcessor(t *testing.T) {
+	p := &pipelineProvider{calls: map[string]int{}}
+	_, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+	alternate := definition.Stages[1]
+	alternate.ID = 920
+	alternate.Key = "planejamento-fallback"
+	alternate.Position = len(definition.Stages) + 1
+	definition.Stages = append(definition.Stages, alternate)
+	definition.Transitions = append(definition.Transitions,
+		PipelineTransition{ID: 920, FromStageID: definition.Stages[1].ID, ToStageID: &alternate.ID, Type: "fallback", ConditionKey: "error"},
+		PipelineTransition{ID: 921, FromStageID: alternate.ID, ToStageID: definition.Transitions[1].ToStageID, Type: "success", ConditionKey: "always"},
+	)
+	executor := &fallbackPlannerExecutor{}
+	engine := NewPipelineEngine(nil)
+	engine.executors["planner"] = executor
+	_, err := engine.Execute(context.Background(), definition, PipelineExecutionInput{
+		Job: queueInput{ID: "fallback"}, RawDiff: "diff --git a/app.go b/app.go\n--- a/app.go\n+++ b/app.go\n@@ -1 +1 @@\n-old\n+new\n",
+		Policy: Policy{MinimumConfidence: .75, MaxParallelGroups: 1}, Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !executor.receivedOriginal || p.calls["planner"] != 1 {
+		t.Fatalf("fallback did not receive the original prepared_diff: received=%v calls=%#v", executor.receivedOriginal, p.calls)
+	}
+}
+
+func TestWaitAllFallbackReceivesMergedInputAndPreservesOriginals(t *testing.T) {
+	p := &pipelineProvider{calls: map[string]int{}}
+	_, definition, cleanup := seededPipeline(t)
+	defer cleanup()
+	definition = pipelineWithFileFilterJoin(definition, "wait_all")
+	for index := range definition.Stages {
+		switch definition.Stages[index].Key {
+		case "filter-left":
+			definition.Stages[index].Config = map[string]any{"include_extensions": []string{".tsx"}}
+		case "filter-right":
+			definition.Stages[index].Config = map[string]any{"include_extensions": []string{".go"}}
+		}
+	}
+	alternate := definition.Stages[1]
+	alternate.ID = 930
+	alternate.Key = "planejamento-merged-fallback"
+	alternate.Position = len(definition.Stages) + 1
+	definition.Stages = append(definition.Stages, alternate)
+	var reviewerID *int64
+	for index := range definition.Transitions {
+		if definition.Transitions[index].FromStageID == definition.Stages[1].ID && definition.Transitions[index].Type == "success" {
+			reviewerID = definition.Transitions[index].ToStageID
+			break
+		}
+	}
+	definition.Transitions = append(definition.Transitions,
+		PipelineTransition{ID: 930, FromStageID: definition.Stages[1].ID, ToStageID: &alternate.ID, Type: "fallback", ConditionKey: "error"},
+		PipelineTransition{ID: 931, FromStageID: alternate.ID, ToStageID: reviewerID, Type: "success", ConditionKey: "always"},
+	)
+	executor := &mergedFallbackPlannerExecutor{primaryID: definition.Stages[1].ID}
+	engine := NewPipelineEngine(nil)
+	engine.executors["planner"] = executor
+	_, err := engine.Execute(context.Background(), definition, PipelineExecutionInput{
+		Job:     queueInput{ID: "merged-fallback"},
+		RawDiff: "diff --git a/web.tsx b/web.tsx\n--- a/web.tsx\n+++ b/web.tsx\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/api.go b/api.go\n--- a/api.go\n+++ b/api.go\n@@ -1 +1 @@\n-old\n+new\n",
+		Policy:  Policy{MinimumConfidence: .75, MaxParallelGroups: 1}, Provider: func(context.Context, *int64) (providers.LLMProvider, error) { return p, nil },
+	})
+	if err != nil || !executor.receivedMerged {
+		t.Fatalf("wait_all fallback did not consume merged input: received=%v artifacts=%d sources=%d files=%d err=%v", executor.receivedMerged, executor.artifacts, executor.sources, executor.files, err)
 	}
 }
 
@@ -490,6 +838,39 @@ func pipelineWithPlannerFanOut(definition PipelineDefinition) PipelineDefinition
 		Type:         "success",
 		ConditionKey: "always",
 	})
+	return definition
+}
+
+func fileFilterStage(definition PipelineDefinition, id int64, key string, position int) PipelineStage {
+	contract := definition.Stages[0].OutputContract
+	return PipelineStage{
+		ID: id, StageTypeKey: "file_filter", ExecutorKey: "rule_filter", Key: key, Name: key,
+		Position: position, RouteMode: "all_matches", JoinMode: "each_arrival", Config: map[string]any{},
+		InputContract: contract, OutputContract: contract,
+	}
+}
+
+func pipelineWithFileFilterJoin(definition PipelineDefinition, mode string) PipelineDefinition {
+	preparationID := definition.Stages[0].ID
+	plannerID := definition.Stages[1].ID
+	left := fileFilterStage(definition, 910, "filter-left", len(definition.Stages)+1)
+	right := fileFilterStage(definition, 911, "filter-right", len(definition.Stages)+2)
+	definition.Stages = append(definition.Stages, left, right)
+	definition.Stages[1].JoinMode = mode
+	edges := make([]PipelineTransition, 0, len(definition.Transitions)+3)
+	for _, edge := range definition.Transitions {
+		if edge.FromStageID == preparationID && edge.ToStageID != nil && *edge.ToStageID == plannerID {
+			continue
+		}
+		edges = append(edges, edge)
+	}
+	edges = append(edges,
+		PipelineTransition{ID: 910, FromStageID: preparationID, ToStageID: &left.ID, Type: "success", ConditionKey: "always"},
+		PipelineTransition{ID: 911, FromStageID: preparationID, ToStageID: &right.ID, Type: "success", ConditionKey: "always", Priority: 1},
+		PipelineTransition{ID: 912, FromStageID: left.ID, ToStageID: &plannerID, Type: "success", ConditionKey: "always"},
+		PipelineTransition{ID: 913, FromStageID: right.ID, ToStageID: &plannerID, Type: "success", ConditionKey: "always", Priority: 1},
+	)
+	definition.Transitions = edges
 	return definition
 }
 

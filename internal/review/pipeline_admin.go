@@ -434,14 +434,15 @@ func replaceStages(ctx context.Context, tx *sql.Tx, versionID int64, stages []Pi
 			s.JoinMode = "each_arrival"
 		}
 		var typeID int64
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM stage_types WHERE key=? AND is_enabled=1`, s.StageTypeKey).Scan(&typeID); err != nil {
+		var inputContractID, outputContractID sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `SELECT id,input_contract_id,output_contract_id FROM stage_types WHERE key=? AND is_enabled=1`, s.StageTypeKey).Scan(&typeID, &inputContractID, &outputContractID); err != nil {
 			return fmt.Errorf("unknown or disabled stage type %q: %w", s.StageTypeKey, err)
 		}
 		config, err := json.Marshal(s.Config)
 		if err != nil {
 			return errors.New("config must be JSON")
 		}
-		result, err := tx.ExecContext(ctx, `INSERT INTO pipeline_stages(pipeline_version_id,stage_type_id,stage_key,display_name,position,prompt_template,model_id,max_output_tokens,retry_limit,timeout_seconds,use_llm,is_required,is_enabled,config_json,route_mode,join_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)`, versionID, typeID, s.Key, s.Name, i+1, s.Prompt, s.ModelID, s.MaxTokens, s.RetryLimit, s.Timeout, boolDB(s.UseLLM), boolDB(s.Required), string(config), s.RouteMode, s.JoinMode)
+		result, err := tx.ExecContext(ctx, `INSERT INTO pipeline_stages(pipeline_version_id,stage_type_id,stage_key,display_name,position,prompt_template,model_id,max_output_tokens,retry_limit,timeout_seconds,use_llm,is_required,is_enabled,config_json,route_mode,join_mode,input_contract_id,output_contract_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?)`, versionID, typeID, s.Key, s.Name, i+1, s.Prompt, s.ModelID, s.MaxTokens, s.RetryLimit, s.Timeout, boolDB(s.UseLLM), boolDB(s.Required), string(config), s.RouteMode, s.JoinMode, inputContractID, outputContractID)
 		if err != nil {
 			return err
 		}

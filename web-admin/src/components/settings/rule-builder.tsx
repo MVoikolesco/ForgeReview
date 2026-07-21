@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  collectionItemFields,
+  collectionItemSchema,
   defaultRule,
   schemaFields,
   type CollectionScope,
@@ -51,6 +53,7 @@ function valueText(value?: RuleValue) {
 function RuleEditor({
   rule,
   fields,
+  schema,
   disabled,
   depth,
   onChange,
@@ -58,6 +61,7 @@ function RuleEditor({
 }: {
   rule: Rule;
   fields: SchemaField[];
+  schema?: Record<string, unknown>;
   disabled: boolean;
   depth: number;
   onChange: (rule: Rule) => void;
@@ -103,6 +107,7 @@ function RuleEditor({
             key={index}
             rule={child}
             fields={fields}
+            schema={schema}
             disabled={disabled}
             depth={depth + 1}
             onChange={(next) =>
@@ -163,6 +168,7 @@ function RuleEditor({
         <RuleEditor
           rule={rule.rules[0]}
           fields={fields}
+          schema={schema}
           disabled={disabled}
           depth={depth + 1}
           onChange={(next) => onChange({ ...rule, rules: [next] })}
@@ -173,14 +179,11 @@ function RuleEditor({
   const selectedPath = rule.scope?.path ?? rule.path ?? "result";
   const field = fields.find((item) => item.path === selectedPath);
   const itemFields = rule.scope
-    ? fields
-        .filter((item) => item.path.startsWith(`${rule.scope!.path}.`))
-        .map((item) => ({
-          ...item,
-          path: item.path.slice(rule.scope!.path.length + 1),
-          collection: false,
-        }))
+    ? collectionItemFields(schema, rule.scope.path)
     : [];
+  const itemSchema = rule.scope
+    ? collectionItemSchema(schema, rule.scope.path)
+    : undefined;
   const projectedField: SchemaField | undefined = rule.scope
     ? {
         path: rule.scope.path,
@@ -204,22 +207,20 @@ function RuleEditor({
           onChange={(event) => {
             const nextField = fields.find((item) => item.path === event.target.value);
             if (nextField?.type === "array") {
-              const nested = fields
-                .filter((item) => item.path.startsWith(`${nextField.path}.`))
-                .map((item) => ({
-                  ...item,
-                  path: item.path.slice(nextField.path.length + 1),
-                  collection: false,
-                }));
-              onChange({
-                operator: "equals",
-                value: true,
-                scope: {
-                  kind: "any",
-                  path: nextField.path,
-                  rule: defaultRule(nested),
-                },
-              });
+              const nested = collectionItemFields(schema, nextField.path);
+              onChange(
+                nested.length
+                  ? {
+                      operator: "equals",
+                      value: true,
+                      scope: {
+                        kind: "any",
+                        path: nextField.path,
+                        rule: defaultRule(nested),
+                      },
+                    }
+                  : { operator: "exists", path: nextField.path },
+              );
             } else {
               onChange({ ...rule, path: event.target.value, scope: undefined });
             }
@@ -229,9 +230,9 @@ function RuleEditor({
           {fields
             .filter((item) => !item.collection || item.type === "array")
             .map((item) => (
-            <option key={item.path} value={item.path}>
-              {item.path} · {item.type}
-            </option>
+              <option key={item.path} value={item.path}>
+                {item.path} · {item.type}
+              </option>
             ))}
         </select>
         {onRemove && (
@@ -248,21 +249,33 @@ function RuleEditor({
             value={rule.scope.kind}
             onChange={(event) => {
               const kind = event.target.value as CollectionScope;
+              const nestedRule =
+                rule.scope!.rule ??
+                (itemFields.length ? defaultRule(itemFields) : undefined);
               onChange({
                 ...rule,
                 operator:
                   kind === "count"
                     ? "gt"
                     : kind === "filter"
-                      ? "contains"
+                      ? "exists"
                       : "equals",
-                value: kind === "count" ? 0 : kind === "filter" ? "" : true,
-                scope: { ...rule.scope!, kind },
+                value: kind === "count" ? 0 : kind === "filter" ? undefined : true,
+                scope: {
+                  ...rule.scope!,
+                  kind,
+                  rule: kind === "count" ? rule.scope!.rule : nestedRule,
+                },
               });
             }}
           >
             {collectionScopes.map((scope) => (
-              <option key={scope}>{scope}</option>
+              <option
+                disabled={scope !== "count" && !itemFields.length}
+                key={scope}
+              >
+                {scope}
+              </option>
             ))}
           </select>
         )}
@@ -330,6 +343,7 @@ function RuleEditor({
             <RuleEditor
               rule={rule.scope.rule}
               fields={itemFields}
+              schema={itemSchema}
               disabled={disabled}
               depth={depth + 1}
               onChange={(next) =>
@@ -384,6 +398,7 @@ export function RuleBuilder({
         <RuleEditor
           rule={rule}
           fields={fields}
+          schema={schema}
           disabled={disabled}
           depth={0}
           onChange={onChange}

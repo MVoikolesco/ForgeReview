@@ -53,7 +53,7 @@ func (r *Repository) WorkflowCatalog(ctx context.Context) (WorkflowCatalog, erro
 		Processors:  []WorkflowProcessorCatalogItem{},
 		Entrypoints: []WorkflowEntrypointCatalogItem{},
 		RouteModes:  []string{"all_matches", "first_match"},
-		JoinModes:   []WorkflowModeCatalogItem{{Key: "each_arrival", Executable: true}, {Key: "any", Executable: false}, {Key: "wait_all", Executable: false}},
+		JoinModes:   []WorkflowModeCatalogItem{{Key: "each_arrival", Executable: true}, {Key: "any", Executable: true}, {Key: "wait_all", Executable: true}},
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT key,version,schema_json,semantic_validator_key FROM stage_contracts WHERE is_system=1 ORDER BY key,version`)
 	if err != nil {

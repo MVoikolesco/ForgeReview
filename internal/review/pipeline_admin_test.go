@@ -196,6 +196,37 @@ func TestDynamicWorkflowFieldsSurviveAdminRoundTripAndClone(t *testing.T) {
 	}
 }
 
+func TestProcessorConfigsSurviveRepositoryPublishRoundTrip(t *testing.T) {
+	repo, published, cleanup := seededPipeline(t)
+	defer cleanup()
+	ctx := context.Background()
+	stages := processorPipelineStages(published)
+	created, err := repo.CreatePipelineDraft(ctx, PipelineCreateInput{
+		Key: "processor-roundtrip",
+		PipelineDraftInput: PipelineDraftInput{
+			Name: "Processor roundtrip", Stages: stages,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := created.Versions[0]
+	if err = repo.ValidatePipelineDraft(ctx, created.ID, draft.ID); err != nil {
+		t.Fatal(err)
+	}
+	publishedPipeline, err := repo.PublishPipelineDraft(ctx, created.ID, draft.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := publishedPipeline.Versions[0].Stages
+	if len(got) != len(stages) || got[1].StageTypeKey != "file_filter" || got[1].Config["input_side"] != "left" || got[1].Config["output_side"] != "right" {
+		t.Fatalf("file_filter config did not survive publication: %#v", got)
+	}
+	if got[3].StageTypeKey != "findings_merge" || got[3].Config["operation"] != "dedupe_findings" || got[3].Config["x"] != float64(360) || got[3].Config["y"] != float64(120) {
+		t.Fatalf("transform_merge config did not survive publication: %#v", got[3])
+	}
+}
+
 func TestWorkflowCatalogIsSystemControlledAndMarksUnsupportedModes(t *testing.T) {
 	repo, _, cleanup := seededPipeline(t)
 	defer cleanup()
@@ -217,11 +248,11 @@ func TestWorkflowCatalogIsSystemControlledAndMarksUnsupportedModes(t *testing.T)
 		}
 	}
 	for _, processor := range catalog.Processors {
-		if (processor.Key == "rule_filter" || processor.Key == "transform_merge") && processor.Executable {
-			t.Fatalf("unsupported processor was exposed as executable: %#v", processor)
+		if (processor.Key == "rule_filter" || processor.Key == "transform_merge") && !processor.Executable {
+			t.Fatalf("implemented processor was not exposed as executable: %#v", processor)
 		}
 	}
-	if catalog.JoinModes[0].Key != "each_arrival" || !catalog.JoinModes[0].Executable || catalog.JoinModes[1].Executable || catalog.JoinModes[2].Executable {
+	if catalog.JoinModes[0].Key != "each_arrival" || !catalog.JoinModes[0].Executable || !catalog.JoinModes[1].Executable || !catalog.JoinModes[2].Executable {
 		t.Fatalf("unexpected join mode capabilities: %#v", catalog.JoinModes)
 	}
 }
@@ -316,3 +347,23 @@ func linearTransitions(definition PipelineDefinition) []PipelineTransitionInput 
 	return out
 }
 func transitionInputPtr(items []PipelineTransitionInput) *[]PipelineTransitionInput { return &items }
+
+func processorPipelineStages(definition PipelineDefinition) []PipelineStageInput {
+	base := stageInputs(definition)
+	filter := base[1]
+	filter.StageTypeKey = "file_filter"
+	filter.Key = "extension-filter"
+	filter.Name = "Extension filter"
+	filter.UseLLM = false
+	filter.Config = map[string]any{"include_extensions": []string{".tsx"}, "x": 120, "y": 80, "input_side": "left", "output_side": "right"}
+	reviewer := base[2]
+	reviewer.StageTypeKey = "llm_review"
+	reviewer.Key = "llm-review"
+	merge := base[3]
+	merge.StageTypeKey = "findings_merge"
+	merge.Key = "findings-merge"
+	merge.Name = "Findings merge"
+	merge.UseLLM = false
+	merge.Config = map[string]any{"operation": "dedupe_findings", "x": 360, "y": 120, "input_side": "top", "output_side": "bottom"}
+	return append([]PipelineStageInput{base[0], filter, reviewer, merge}, base[3:]...)
+}

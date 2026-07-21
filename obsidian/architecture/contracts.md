@@ -21,6 +21,12 @@ Rotas especiais consumidas pelo frontend:
 - `GET /review/settings` agrega profiles, policies efetivas, prompt ativo,
   pipelines publicados, stages ordenados e catálogo de tipos/contratos para a
   tela administrativa somente leitura.
+- `GET /review/workflow-catalog` retorna contratos controlados, processors,
+  adapters de Entrypoint e modos de roteamento/junção, indicando quais recursos
+  já são executáveis pelo runtime.
+- Drafts de pipeline persistem `route_mode`/`join_mode` em stages e `rule`,
+  `max_traversals` e prioridade em transitions. Regras usam apenas operadores
+  controlados e campos existentes no JSON Schema do contrato de saída.
 - `GET /reviews/pending?name=...` e `POST /reviews/pending/{approve|reject|rerun}?name=...`.
 - `POST /gitea/instances/test`, `/:id/test`, `/:id/organizations`, `/:id/repositories`, `/:id/pull-requests`.
 

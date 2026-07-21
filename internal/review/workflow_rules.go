@@ -65,7 +65,7 @@ func ValidateRule(rule Rule, schemaJSON string) error {
 func validateRule(rule Rule, schema any) error {
 	switch rule.Operator {
 	case RuleAll, RuleAny:
-		if len(rule.Rules) == 0 || rule.Path != "" || rule.Scope != nil {
+		if len(rule.Rules) == 0 || rule.Path != "" || rule.Scope != nil || rule.Value != nil {
 			return fmt.Errorf("operator %s requires rules only", rule.Operator)
 		}
 		for _, child := range rule.Rules {
@@ -75,7 +75,7 @@ func validateRule(rule Rule, schema any) error {
 		}
 		return nil
 	case RuleNot:
-		if len(rule.Rules) != 1 || rule.Path != "" || rule.Scope != nil {
+		if len(rule.Rules) != 1 || rule.Path != "" || rule.Scope != nil || rule.Value != nil {
 			return errors.New("operator not requires exactly one rule")
 		}
 		return validateRule(rule.Rules[0], schema)
@@ -83,8 +83,8 @@ func validateRule(rule Rule, schema any) error {
 	default:
 		return fmt.Errorf("unsupported rule operator %q", rule.Operator)
 	}
-	if len(rule.Rules) != 0 || rule.Path == "" && rule.Scope == nil {
-		return fmt.Errorf("operator %s requires a path or scope", rule.Operator)
+	if len(rule.Rules) != 0 || rule.Path == "" && rule.Scope == nil || rule.Path != "" && rule.Scope != nil {
+		return fmt.Errorf("operator %s requires exactly one path or scope", rule.Operator)
 	}
 	valueSchema := schema
 	if rule.Scope != nil {
@@ -98,6 +98,20 @@ func validateRule(rule Rule, schema any) error {
 	} else if schemaHasProperties(schema) {
 		return fmt.Errorf("rule path %q is not defined by the contract schema", rule.Path)
 	}
+	valueType := schemaType(valueSchema)
+	if rule.Operator == RuleExists {
+		if rule.Value != nil {
+			if _, ok := rule.Value.(bool); !ok {
+				return errors.New("operator exists requires a boolean value")
+			}
+		}
+		return nil
+	}
+	if rule.Operator == RuleIn {
+		if _, ok := rule.Value.([]any); !ok {
+			return errors.New("operator in requires an array value")
+		}
+	}
 	if rule.Operator == RuleMatches {
 		pattern, ok := rule.Value.(string)
 		if !ok {
@@ -106,13 +120,28 @@ func validateRule(rule Rule, schema any) error {
 		if _, err := regexp.Compile(pattern); err != nil {
 			return fmt.Errorf("invalid matches pattern: %w", err)
 		}
+		if valueType != "" && valueType != "string" {
+			return errors.New("operator matches requires a string path")
+		}
+	}
+	if rule.Operator == RuleContains {
+		if valueType != "" && valueType != "string" && valueType != "array" {
+			return errors.New("operator contains requires a string or array path")
+		}
+		if valueType == "string" {
+			if _, ok := rule.Value.(string); !ok {
+				return errors.New("operator contains requires a string value for a string path")
+			}
+		}
 	}
 	if rule.Operator == RuleGT || rule.Operator == RuleGTE || rule.Operator == RuleLT || rule.Operator == RuleLTE {
 		if _, ok := number(rule.Value); !ok {
 			return fmt.Errorf("operator %s requires a numeric value", rule.Operator)
 		}
+		if valueType != "" && valueType != "number" && valueType != "integer" {
+			return fmt.Errorf("operator %s requires a numeric path", rule.Operator)
+		}
 	}
-	_ = valueSchema
 	return nil
 }
 
@@ -148,28 +177,118 @@ func validateScope(scope CollectionScope, schema any) (any, error) {
 	default:
 		return nil, fmt.Errorf("unsupported collection scope %q", scope.Kind)
 	}
-	return nil, nil
+	switch scope.Kind {
+	case CollectionAny, CollectionAll:
+		return map[string]any{"type": "boolean"}, nil
+	case CollectionCount:
+		return map[string]any{"type": "integer"}, nil
+	default:
+		return map[string]any{"type": "array", "items": itemSchema}, nil
+	}
 }
 
 // EvaluateRule validates the payload against the contract schema before routing.
 func EvaluateRule(rule Rule, schemaJSON string, payload any) (bool, error) {
+	matched, _, err := EvaluateRuleArtifact(rule, schemaJSON, payload)
+	return matched, err
+}
+
+// EvaluateRuleArtifact returns the payload that must travel over a matching
+// edge. A filter scope replaces its source collection in a private JSON copy.
+func EvaluateRuleArtifact(rule Rule, schemaJSON string, payload any) (bool, any, error) {
 	if err := ValidateRule(rule, schemaJSON); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	normalized, err := normalizeJSON(payload)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if schemaJSON != "" {
 		var schema any
 		if err = json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
-			return false, err
+			return false, nil, err
 		}
 		if err = validateSchemaValue(schema, normalized, "$", true); err != nil {
-			return false, fmt.Errorf("contract_invalid: %w", err)
+			return false, nil, fmt.Errorf("contract_invalid: %w", err)
 		}
 	}
-	return evaluateRule(rule, normalized)
+	matched, scopes, err := evaluateRuleScopes(rule, normalized)
+	if err != nil || !matched {
+		return matched, normalized, err
+	}
+	projected := normalized
+	for _, scope := range scopes {
+		filtered, exists, scopeErr := evaluateScope(scope, projected)
+		if scopeErr != nil {
+			return false, nil, scopeErr
+		}
+		if exists {
+			projected, scopeErr = valueWithPath(projected, scope.Path, filtered)
+			if scopeErr != nil {
+				return false, nil, scopeErr
+			}
+		}
+	}
+	return true, projected, nil
+}
+
+func evaluateRuleScopes(rule Rule, payload any) (bool, []CollectionScope, error) {
+	switch rule.Operator {
+	case RuleAll:
+		scopes := []CollectionScope{}
+		for _, child := range rule.Rules {
+			matched, childScopes, err := evaluateRuleScopes(child, payload)
+			if err != nil || !matched {
+				return false, nil, err
+			}
+			scopes = append(scopes, childScopes...)
+		}
+		return true, scopes, nil
+	case RuleAny:
+		for _, child := range rule.Rules {
+			matched, scopes, err := evaluateRuleScopes(child, payload)
+			if err != nil {
+				return false, nil, err
+			}
+			if matched {
+				return true, scopes, nil
+			}
+		}
+		return false, nil, nil
+	case RuleNot:
+		matched, _, err := evaluateRuleScopes(rule.Rules[0], payload)
+		return !matched, nil, err
+	default:
+		matched, err := evaluateRule(rule, payload)
+		if !matched || err != nil || rule.Scope == nil || rule.Scope.Kind != CollectionFilter {
+			return matched, nil, err
+		}
+		return true, []CollectionScope{*rule.Scope}, nil
+	}
+}
+
+func valueWithPath(payload any, path string, replacement any) (any, error) {
+	if path == "" || path == "$" {
+		return replacement, nil
+	}
+	current := payload
+	parts := strings.Split(strings.TrimPrefix(path, "$."), ".")
+	for index, part := range parts {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("filter path %q cannot be projected", path)
+		}
+		if index == len(parts)-1 {
+			object[part] = replacement
+			return payload, nil
+		}
+		next, exists := object[part]
+		if !exists {
+			return nil, fmt.Errorf("filter path %q cannot be projected", path)
+		}
+		current = next
+	}
+	return payload, nil
 }
 
 func evaluateRule(rule Rule, payload any) (bool, error) {
@@ -201,8 +320,7 @@ func evaluateRule(rule Rule, payload any) (bool, error) {
 	var exists bool
 	var err error
 	if rule.Scope != nil {
-		left, err = evaluateScope(*rule.Scope, payload)
-		exists = err == nil
+		left, exists, err = evaluateScope(*rule.Scope, payload)
 	} else {
 		left, exists = valueAtPath(payload, rule.Path)
 	}
@@ -223,12 +341,7 @@ func evaluateRule(rule Rule, payload any) (bool, error) {
 	}
 	switch rule.Operator {
 	case RuleEquals:
-		if actual, ok := number(left); ok {
-			if expected, numeric := number(rule.Value); numeric {
-				return actual == expected, nil
-			}
-		}
-		return reflect.DeepEqual(left, rule.Value), nil
+		return valuesEqual(left, rule.Value), nil
 	case RuleContains:
 		switch value := left.(type) {
 		case string:
@@ -236,7 +349,7 @@ func evaluateRule(rule Rule, payload any) (bool, error) {
 			return ok && strings.Contains(value, needle), nil
 		case []any:
 			for _, item := range value {
-				if reflect.DeepEqual(item, rule.Value) {
+				if valuesEqual(item, rule.Value) {
 					return true, nil
 				}
 			}
@@ -253,7 +366,7 @@ func evaluateRule(rule Rule, payload any) (bool, error) {
 					return true, nil
 				}
 			}
-			if reflect.DeepEqual(left, item) {
+			if valuesEqual(left, item) {
 				return true, nil
 			}
 		}
@@ -284,14 +397,14 @@ func evaluateRule(rule Rule, payload any) (bool, error) {
 	return false, nil
 }
 
-func evaluateScope(scope CollectionScope, payload any) (any, error) {
+func evaluateScope(scope CollectionScope, payload any) (any, bool, error) {
 	value, ok := valueAtPath(payload, scope.Path)
 	if !ok {
-		return nil, nil
+		return nil, false, nil
 	}
 	items, ok := value.([]any)
 	if !ok {
-		return nil, fmt.Errorf("collection scope path %q is not an array", scope.Path)
+		return nil, true, fmt.Errorf("collection scope path %q is not an array", scope.Path)
 	}
 	filtered := make([]any, 0, len(items))
 	for _, item := range items {
@@ -300,7 +413,7 @@ func evaluateScope(scope CollectionScope, payload any) (any, error) {
 		if scope.Rule != nil {
 			matched, err = evaluateRule(*scope.Rule, item)
 			if err != nil {
-				return nil, err
+				return nil, true, err
 			}
 		}
 		if matched {
@@ -309,15 +422,15 @@ func evaluateScope(scope CollectionScope, payload any) (any, error) {
 	}
 	switch scope.Kind {
 	case CollectionAny:
-		return len(filtered) > 0, nil
+		return len(filtered) > 0, true, nil
 	case CollectionAll:
-		return len(filtered) == len(items), nil
+		return len(filtered) == len(items), true, nil
 	case CollectionCount:
-		return float64(len(filtered)), nil
+		return float64(len(filtered)), true, nil
 	case CollectionFilter:
-		return filtered, nil
+		return filtered, true, nil
 	}
-	return nil, fmt.Errorf("unsupported collection scope %q", scope.Kind)
+	return nil, true, fmt.Errorf("unsupported collection scope %q", scope.Kind)
 }
 
 func normalizeJSON(value any) (any, error) {
@@ -391,6 +504,21 @@ func schemaHasProperties(schema any) bool {
 	return ok
 }
 
+func schemaType(schema any) string {
+	object, _ := schema.(map[string]any)
+	kind, _ := object["type"].(string)
+	return kind
+}
+
+func valuesEqual(left, right any) bool {
+	if actual, ok := number(left); ok {
+		if expected, numeric := number(right); numeric {
+			return actual == expected
+		}
+	}
+	return reflect.DeepEqual(left, right)
+}
+
 func number(value any) (float64, bool) {
 	switch item := value.(type) {
 	case json.Number:
@@ -420,9 +548,11 @@ func validateSchemaValue(schema, value any, path string, requiredOnly bool) erro
 		if !ok {
 			return fmt.Errorf("%s must be an object", path)
 		}
+		requiredFields := map[string]bool{}
 		if required, ok := object["required"].([]any); ok {
 			for _, field := range required {
 				name, _ := field.(string)
+				requiredFields[name] = true
 				if _, exists := item[name]; !exists {
 					return fmt.Errorf("%s.%s is required", path, name)
 				}
@@ -431,6 +561,9 @@ func validateSchemaValue(schema, value any, path string, requiredOnly bool) erro
 		if properties, ok := object["properties"].(map[string]any); ok {
 			for name, childSchema := range properties {
 				if child, exists := item[name]; exists {
+					if child == nil && !requiredFields[name] {
+						continue
+					}
 					if err := validateSchemaValue(childSchema, child, path+"."+name, requiredOnly); err != nil {
 						return err
 					}

@@ -2,6 +2,25 @@
 
 ## 2026-07-20
 
+- Completado o motor dinâmico orientado a artifacts. O scheduler agora isola
+  estado por ramo/iteração, implementa `each_arrival`, `any` e `wait_all` com
+  fechamento de ramos, transporta lotes filtrados, limita loops e entrega o
+  input original a fallbacks técnicos. `rule_filter` e `transform_merge` são
+  executáveis; contratos v2 ficam fixados por stage e as migrations 018--019
+  auditam proveniência, payload projetado e hash. O Studio usa o catálogo real,
+  configura processors/joins/regras e preserva `scheduler_max_runs`. Validação:
+  `go test ./...`, `go vet ./...`, `npm --prefix web-admin run lint`, `npm
+  --prefix web-admin run build` e revisão independente sem bloqueios. Ver
+  [[architecture/pipeline-2.0|pipeline 2.0]].
+- Adicionada a fundação de workflows dinâmicos na migration 017: AST de regras
+  validada pelo contrato, scopes de coleção, roteamento `all_matches` e
+  `first_match`, loops limitados por aresta e por execução e catálogos de
+  processors/adapters. O Studio ganhou construtor visual recursivo de regras,
+  resumo nas arestas e edição dos modos/limites. Joins `any`/`wait_all` e os
+  processors `rule_filter`/`transform_merge` permanecem catalogados como não
+  executáveis e são rejeitados na publicação. Validação: `go test ./...`, `go
+  vet ./...`, `npm --prefix web-admin run lint` e `npm --prefix web-admin run
+  build`. Ver [[architecture/pipeline-2.0|pipeline 2.0]].
 - Entrypoints passaram a integrar a definição persistida do workflow. A migration
   `016_pipeline_entrypoints.sql` adiciona posição e destino a cada origem; jobs
   preservam `webhook`, `api` ou `manual` até o worker, e o scheduler inicia na

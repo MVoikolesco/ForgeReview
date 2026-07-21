@@ -6,10 +6,14 @@ import type {
   ReviewSettingsStageType,
 } from "@/lib/contracts";
 import {
+  defaultRule,
   ruleSummary,
+  schemaFields,
   type PipelineStage,
   type PipelineTransition,
   type Rule,
+  type WorkflowCatalog,
+  type WorkflowCatalogSchema,
 } from "./pipeline-types";
 import { RuleBuilder } from "./rule-builder";
 import {
@@ -59,6 +63,7 @@ type Version = {
   version: number;
   status: string;
   profile_id?: number;
+  scheduler_max_runs: number;
   stages: Stage[];
   transitions: Transition[];
   triggers?: Trigger[] | null;
@@ -116,14 +121,28 @@ const normalizeTriggers = (items: Trigger[]) =>
       items.find((item) => item.source === source)?.target_stage_key ?? "",
     config: items.find((item) => item.source === source)?.config ?? {},
   }));
-const conditions = [
+const businessConditions = [
   "always",
   "has_findings",
   "no_findings",
   "partial_result",
-  "contract_invalid",
   "confidence_below_threshold",
 ];
+const technicalConditions = ["error", "timeout", "contract_invalid"];
+const processorGroups = ["llm", "rule_filter", "transform_merge", "system"] as const;
+const processorGroupLabels = {
+  llm: "LLM",
+  rule_filter: "Rule filter",
+  transform_merge: "Transform / merge",
+  system: "Sistema",
+};
+const emptyWorkflowCatalog: WorkflowCatalog = {
+  contracts: [],
+  processors: [],
+  entrypoints: [],
+  route_modes: ["all_matches", "first_match"],
+  join_modes: [{ key: "each_arrival", executable: true }],
+};
 const defaultPositions = [
   { x: 0, y: 0 },
   { x: 400, y: 0 },
@@ -138,6 +157,8 @@ const entrypointPositions = [
   { x: -450, y: 40 },
   { x: -450, y: 230 },
 ];
+const defaultSchedulerMaxRuns = 256;
+const maxSchedulerMaxRuns = 10000;
 
 function contractColor(key?: string) {
   if (key?.includes("findings")) return "#46c892";
@@ -176,7 +197,264 @@ function stagePercent(event?: RuntimeEvent) {
     : (event?.percent ?? 0);
 }
 function processorKind(stage: Stage) {
-  return stage.processor_kind || (stage.use_llm ? "llm" : "deterministic");
+  if (stage.executor_key === "rule_filter" || stage.executor_key === "transform_merge")
+    return stage.executor_key;
+  const kind = stage.processor_kind || (stage.use_llm ? "llm" : "system");
+  return kind === "deterministic" ? "system" : kind;
+}
+
+function stageTypeProcessorKind(type: ReviewSettingsStageType) {
+  if (type.executor_key === "rule_filter" || type.executor_key === "transform_merge")
+    return type.executor_key;
+  if (type.processor_kind) return type.processor_kind === "deterministic" ? "system" : type.processor_kind;
+  return ["preparation", "publication", "error_log"].includes(type.executor_key)
+    ? "system"
+    : "llm";
+}
+
+function isTechnicalTransition(type: unknown) {
+  return type === "failure" || type === "fallback";
+}
+
+function catalogFieldType(schema: WorkflowCatalogSchema) {
+  return Array.isArray(schema.type)
+    ? schema.type.find((type) => type !== "null")
+    : schema.type;
+}
+
+function configValue(config: Record<string, unknown>, path: string[]) {
+  return path.reduce<unknown>((value, key) =>
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)[key]
+      : undefined, config);
+}
+
+function patchConfigValue(
+  config: Record<string, unknown>,
+  path: string[],
+  value: unknown,
+) {
+  const updated = { ...config };
+  let cursor = updated;
+  path.forEach((key, index) => {
+    if (index === path.length - 1) cursor[key] = value;
+    else {
+      const child = cursor[key];
+      cursor[key] = child && typeof child === "object" && !Array.isArray(child)
+        ? { ...(child as Record<string, unknown>) }
+        : {};
+      cursor = cursor[key] as Record<string, unknown>;
+    }
+  });
+  return updated;
+}
+
+function schemaDefaults(schema?: WorkflowCatalogSchema): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(schema?.properties ?? {}).flatMap(([key, field]) => {
+      if (field.default !== undefined) return [[key, field.default]];
+      if (catalogFieldType(field) === "object") {
+        const nested = schemaDefaults(field);
+        return Object.keys(nested).length ? [[key, nested]] : [];
+      }
+      return field.enum?.length ? [[key, field.enum[0]]] : [];
+    }),
+  );
+}
+
+function meaningfulRule(rule: Rule): boolean {
+  if (rule.operator === "all" || rule.operator === "any")
+    return rule.rules.length > 0 && rule.rules.every(meaningfulRule);
+  if (rule.operator === "not") return meaningfulRule(rule.rules[0]);
+  if (rule.scope) {
+    if (!rule.scope.path.trim()) return false;
+    if (
+      rule.scope.kind !== "count" &&
+      (!rule.scope.rule || !meaningfulRule(rule.scope.rule))
+    )
+      return false;
+  } else if (!rule.path?.trim()) return false;
+  if (rule.operator === "exists") return true;
+  if (Array.isArray(rule.value))
+    return (
+      rule.value.length > 0 &&
+      rule.value.every((value) => typeof value !== "string" || value.trim() !== "")
+    );
+  return (
+    rule.value !== undefined &&
+    rule.value !== null &&
+    (typeof rule.value !== "string" || rule.value.trim() !== "")
+  );
+}
+
+function stageConfigForSave(stage: Stage, position: { x: number; y: number }) {
+  const config = { ...stage.config };
+  const kind = processorKind(stage);
+  if (kind === "rule_filter" || kind === "transform_merge") {
+    delete config.x;
+    delete config.y;
+    delete config.input_side;
+    delete config.output_side;
+    if (kind === "rule_filter" && Array.isArray(config.include_extensions)) {
+      const extensions = config.include_extensions
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      if (extensions.length) config.include_extensions = extensions;
+      else delete config.include_extensions;
+    }
+    return config;
+  }
+  return { ...config, x: position.x, y: position.y };
+}
+
+function processorConfigSchema(
+  processor?: WorkflowCatalog["processors"][number],
+): WorkflowCatalogSchema | undefined {
+  if (!processor) return undefined;
+  const implemented: Record<string, Record<string, WorkflowCatalogSchema>> = {
+    rule_filter: {
+      include_extensions: {
+        type: "array",
+        title: "Extensões incluídas",
+        description: "Lista separada por vírgulas, por exemplo .go, .ts.",
+        items: { type: "string" },
+        default: [],
+      },
+    },
+    transform_merge: {
+      operation: {
+        type: "string",
+        title: "Operação",
+        enum: ["identity", "merge", "dedupe_findings"],
+        default: "identity",
+      },
+    },
+  };
+  return {
+    ...processor.config_schema,
+    properties: {
+      ...implemented[processor.key],
+      ...processor.config_schema.properties,
+    },
+  };
+}
+
+function graphReaches(
+  adjacency: Map<string, string[]>,
+  current: string,
+  target: string,
+  seen = new Set<string>(),
+): boolean {
+  if (current === target) return true;
+  if (seen.has(current)) return false;
+  seen.add(current);
+  return (adjacency.get(current) ?? []).some((next) =>
+    graphReaches(adjacency, next, target, seen));
+}
+
+function ConfigSchemaFields({
+  schema,
+  config,
+  onChange,
+  path = [],
+}: {
+  schema?: WorkflowCatalogSchema;
+  config: Record<string, unknown>;
+  onChange: (config: Record<string, unknown>) => void;
+  path?: string[];
+}) {
+  return Object.entries(schema?.properties ?? {}).map(([key, field]) => {
+    if (["rule", "prompt_template", "model_id", "max_output_tokens"].includes(key))
+      return null;
+    const fieldPath = [...path, key];
+    const value = configValue(config, fieldPath) ?? field.default;
+    const label = field.title || key.replaceAll("_", " ");
+    const type = catalogFieldType(field);
+    if (type === "object" && field.properties)
+      return (
+        <fieldset className="studio-config-group" key={fieldPath.join(".")}>
+          <legend>{label}</legend>
+          <ConfigSchemaFields
+            schema={field}
+            config={config}
+            onChange={onChange}
+            path={fieldPath}
+          />
+        </fieldset>
+      );
+    if (type === "boolean")
+      return (
+        <label className="studio-checkbox" key={fieldPath.join(".")}>
+          <input
+            type="checkbox"
+            checked={Boolean(value)}
+            onChange={(event) =>
+              onChange(patchConfigValue(config, fieldPath, event.target.checked))
+            }
+          />
+          {label}
+        </label>
+      );
+    if (type === "array" && catalogFieldType(field.items ?? {}) === "string")
+      return (
+        <label key={fieldPath.join(".")} title={field.description}>
+          {label}
+          <input
+            value={Array.isArray(value) ? value.join(", ") : ""}
+            onChange={(event) =>
+              onChange(patchConfigValue(
+                config,
+                fieldPath,
+                event.target.value
+                  .split(",")
+                  .map((item) => item.trim())
+                  .filter(Boolean),
+              ))
+            }
+          />
+          {field.description && <small>{field.description}</small>}
+        </label>
+      );
+    return (
+      <label key={fieldPath.join(".")} title={field.description}>
+        {label}
+        {field.enum ? (
+          <select
+            value={String(value ?? field.enum[0] ?? "")}
+            onChange={(event) =>
+              onChange(patchConfigValue(
+                config,
+                fieldPath,
+                field.enum?.find((option) => String(option) === event.target.value),
+              ))
+            }
+          >
+            {field.enum.map((option) => (
+              <option key={String(option)} value={String(option)}>{String(option)}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type={type === "integer" || type === "number" ? "number" : "text"}
+            min={field.minimum}
+            max={field.maximum}
+            value={String(value ?? "")}
+            onChange={(event) =>
+              onChange(patchConfigValue(
+                config,
+                fieldPath,
+                type === "integer" || type === "number"
+                  ? event.target.valueAsNumber
+                  : event.target.value,
+              ))
+            }
+          />
+        )}
+        {field.description && <small>{field.description}</small>}
+      </label>
+    );
+  });
 }
 function triggerIcon(source: Trigger["source"]) {
   if (source === "api") return <Braces size={15} />;
@@ -441,13 +719,26 @@ function StageInspector({
   stage,
   editable,
   runtime,
+  workflowCatalog,
   onUpdate,
 }: {
   stage: Stage;
   editable: boolean;
   runtime?: RuntimeEvent;
+  workflowCatalog: WorkflowCatalog;
   onUpdate: (patch: Partial<Stage>) => void;
 }) {
+  const processor = workflowCatalog.processors.find(
+    (item) => item.key === processorKind(stage),
+  );
+  const joinModes = workflowCatalog.join_modes.length
+    ? workflowCatalog.join_modes
+    : emptyWorkflowCatalog.join_modes;
+  const routeModes = workflowCatalog.route_modes.length
+    ? workflowCatalog.route_modes
+    : emptyWorkflowCatalog.route_modes;
+  const schemaText = (contract?: Stage["input_contract"]) =>
+    JSON.stringify(contract?.schema ?? {}, null, 2);
   if (!editable)
     return (
       <>
@@ -524,6 +815,14 @@ function StageInspector({
               </label>
             </>
           )}
+          <label>
+            Schema completo de entrada
+            <textarea className="studio-contract-schema" readOnly value={schemaText(stage.input_contract)} />
+          </label>
+          <label>
+            Schema completo de saída
+            <textarea className="studio-contract-schema" readOnly value={schemaText(stage.output_contract)} />
+          </label>
         </section>
       </>
     );
@@ -556,27 +855,39 @@ function StageInspector({
       <label>
         Roteamento de saída
         <select
-          value={stage.routing_mode ?? "all_matches"}
+          value={stage.routing_mode ?? stage.route_mode ?? "all_matches"}
           onChange={(event) =>
             onUpdate({
+              route_mode: event.target.value as Stage["route_mode"],
               routing_mode: event.target.value as Stage["routing_mode"],
             })
           }
         >
-          <option value="all_matches">Todas as regras compatíveis</option>
-          <option value="first_match">Primeira regra compatível</option>
+          {routeModes.map((mode) => (
+            <option key={mode} value={mode}>
+              {mode === "all_matches" ? "Todas as regras compatíveis" : "Primeira regra compatível"}
+            </option>
+          ))}
         </select>
       </label>
       <label>
         Junção de entradas
         <select
-          value={stage.join_mode ?? "all"}
+          value={stage.join_mode ?? "each_arrival"}
           onChange={(event) =>
             onUpdate({ join_mode: event.target.value as Stage["join_mode"] })
           }
         >
-          <option value="all">Aguardar todas</option>
-          <option value="any">Continuar com qualquer entrada</option>
+          {joinModes.map((mode) => (
+            <option key={mode.key} value={mode.key} disabled={!mode.executable}>
+              {mode.key === "each_arrival"
+                ? "Executar a cada chegada"
+                : mode.key === "any"
+                  ? "Continuar com qualquer entrada"
+                  : "Aguardar todas as entradas"}
+              {!mode.executable ? " (indisponível)" : ""}
+            </option>
+          ))}
         </select>
       </label>
       <label>
@@ -711,6 +1022,35 @@ function StageInspector({
           </label>
         </>
       )}
+      {processorKind(stage) === "rule_filter" && (
+        <section className="studio-processor-config">
+          <strong>Regra do filtro</strong>
+          <RuleBuilder
+            rule={stage.config.rule as Rule | undefined}
+            schema={stage.input_contract?.schema}
+            onChange={(rule) => onUpdate({ config: { ...stage.config, rule } })}
+          />
+        </section>
+      )}
+      {(processorKind(stage) === "rule_filter" ||
+        processorKind(stage) === "transform_merge") && (
+        <section className="studio-processor-config">
+          <strong>Configuração controlada</strong>
+          <ConfigSchemaFields
+            schema={processorConfigSchema(processor)}
+            config={stage.config}
+            onChange={(config) => onUpdate({ config })}
+          />
+        </section>
+      )}
+      <label>
+        Schema completo de entrada
+        <textarea className="studio-contract-schema" readOnly value={schemaText(stage.input_contract)} />
+      </label>
+      <label>
+        Schema completo de saída
+        <textarea className="studio-contract-schema" readOnly value={schemaText(stage.output_contract)} />
+      </label>
     </>
   );
 }
@@ -764,6 +1104,7 @@ export function PipelineManager({
     [name, setName] = useState(""),
     [description, setDescription] = useState(""),
     [profileID, setProfileID] = useState(""),
+    [schedulerMaxRuns, setSchedulerMaxRuns] = useState(defaultSchedulerMaxRuns),
     [triggers, setTriggers] = useState<Trigger[]>(defaultTriggers),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -772,13 +1113,18 @@ export function PipelineManager({
     [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null),
     [selectedEdge, setSelectedEdge] = useState<string | null>(null),
     [selectedNode, setSelectedNode] = useState<string | null>(null),
-    [statusOpen, setStatusOpen] = useState(false);
+    [statusOpen, setStatusOpen] = useState(false),
+    [workflowCatalog, setWorkflowCatalog] = useState<WorkflowCatalog>(emptyWorkflowCatalog);
   const handledEditRequest = useRef(0);
   const current = pipelines.find((p) => p.id === pipelineID);
   const editable =
     editing || (!readOnly && (!version || version.status === "draft"));
   const load = useCallback(async () => {
     try {
+      const loadedWorkflowCatalog = await request<WorkflowCatalog>(
+        "review/workflow-catalog",
+      );
+      setWorkflowCatalog(loadedWorkflowCatalog);
       if (readOnly) {
         const item = await request<Pipeline>(
           `review/pipelines/select${runtimeProfileID ? `?profile_id=${runtimeProfileID}` : ""}`,
@@ -787,7 +1133,7 @@ export function PipelineManager({
           (candidate) => candidate.status === "published",
         );
         setPipelines([item]);
-        if (active) open(active, item, false);
+        if (active) open(active, item, false, loadedWorkflowCatalog);
         return;
       }
       const items = await request<Pipeline[]>("review/pipelines");
@@ -870,13 +1216,21 @@ export function PipelineManager({
       setEdges,
     ],
   );
-  function open(versionToOpen: Version, parent: Pipeline, _editingMode = editable) {
+  function open(
+    versionToOpen: Version,
+    parent: Pipeline,
+    _editingMode = editable,
+    availableWorkflowCatalog = workflowCatalog,
+  ) {
     setPipelineID(parent.id);
     setVersion(versionToOpen);
     setName(parent.name);
     onPipelineName?.(parent.name);
     setDescription(parent.description);
     setProfileID(String(versionToOpen.profile_id ?? parent.profile_id ?? ""));
+    setSchedulerMaxRuns(
+      versionToOpen.scheduler_max_runs || defaultSchedulerMaxRuns,
+    );
     const loadedTriggers = versionToOpen.triggers ?? [];
     const defaultTarget =
       versionToOpen.stages.find(
@@ -892,30 +1246,51 @@ export function PipelineManager({
     );
     const stages = versionToOpen.stages.map((stage) => {
       const metadata = stageType(stage.stage_type_key);
+      const kind = processorKind({
+        ...stage,
+        processor_kind: stage.processor_kind ?? metadata?.processor_kind,
+      });
+      const processor = availableWorkflowCatalog.processors.find(
+        (item) => item.key === kind,
+      );
+      const inputContract = stage.input_contract ?? metadata?.input_contract;
+      const outputContract = stage.output_contract ?? metadata?.output_contract;
+      const catalogInput = availableWorkflowCatalog.contracts.find(
+        (contract) => contract.key === inputContract?.key,
+      );
+      const catalogOutput = availableWorkflowCatalog.contracts.find(
+        (contract) => contract.key === outputContract?.key,
+      );
       return {
         ...stage,
-        processor_kind:
-          stage.processor_kind ??
-          metadata?.processor_kind ??
-          (stage.use_llm ? "llm" : "deterministic"),
-        routing_mode: stage.routing_mode ?? "all_matches",
-        join_mode: stage.join_mode ?? "all",
-        input_contract: stage.input_contract
+        processor_kind: kind,
+        route_mode: stage.route_mode ?? stage.routing_mode ?? "all_matches",
+        routing_mode: stage.routing_mode ?? stage.route_mode ?? "all_matches",
+        join_mode: stage.join_mode ?? "each_arrival",
+        config: {
+          ...schemaDefaults(processorConfigSchema(processor)),
+          ...stage.config,
+        },
+        input_contract: inputContract
           ? {
               ...metadata?.input_contract,
-              ...stage.input_contract,
+              ...inputContract,
               schema:
-                stage.input_contract.schema ?? metadata?.input_contract?.schema,
+                inputContract.schema ??
+                metadata?.input_contract?.schema ??
+                catalogInput?.schema,
             }
-          : metadata?.input_contract,
-        output_contract: stage.output_contract
+          : undefined,
+        output_contract: outputContract
           ? {
               ...metadata?.output_contract,
-              ...stage.output_contract,
+              ...outputContract,
               schema:
-                stage.output_contract.schema ?? metadata?.output_contract?.schema,
+                outputContract.schema ??
+                metadata?.output_contract?.schema ??
+                catalogOutput?.schema,
             }
-          : metadata?.output_contract,
+          : undefined,
       } satisfies Stage;
     });
     setNodes(stages.map(buildNode));
@@ -934,9 +1309,12 @@ export function PipelineManager({
           source,
           target,
           ...ports(source, target),
-          label: `${item.type} · ${ruleSummary(item.rule)}`,
+          label: `${item.type} · ${ruleSummary(item.rule, item.condition_key)}`,
           data: item,
           animated: item.type !== "success",
+          className: isTechnicalTransition(item.type)
+            ? "studio-technical-edge"
+            : "studio-business-edge",
           style: {
             stroke: contractColor(stageByKey.get(source)?.output_contract?.key),
           },
@@ -950,6 +1328,7 @@ export function PipelineManager({
     setName("");
     setDescription("");
     setProfileID("");
+    setSchedulerMaxRuns(defaultSchedulerMaxRuns);
     const keys = [
       "preparation",
       "planner",
@@ -968,6 +1347,7 @@ export function PipelineManager({
         source: s.key,
         target: stages[i + 1].key,
         label: "success · always",
+        className: "studio-business-edge",
         data: {
           type: "success",
           condition_key: "always",
@@ -997,26 +1377,43 @@ export function PipelineManager({
       true,
       false,
     ];
+    const kind = type ? stageTypeProcessorKind(type) : (llm ? "llm" : "system");
+    const processor = workflowCatalog.processors.find((item) => item.key === kind);
+    const inputSchema = type?.input_contract?.schema ?? workflowCatalog.contracts.find(
+      (contract) => contract.key === type?.input_contract?.key,
+    )?.schema;
+    const config = schemaDefaults(processorConfigSchema(processor));
+    const inputFields = schemaFields(inputSchema);
+    if (kind === "rule_filter" && inputFields.length)
+      config.rule = defaultRule(inputFields);
     return {
       stage_type_key: typeKey,
       executor_key: type?.executor_key,
-      processor_kind: type?.processor_kind ?? (llm ? "llm" : "deterministic"),
+      processor_kind: kind,
       key,
       name: title,
       prompt_template: "",
       max_output_tokens: 2000,
       retry_limit: 1,
       timeout_seconds: 900,
-      use_llm: llm,
+      use_llm: kind === "llm",
       required,
       routing_mode: "all_matches",
-      join_mode: "all",
-      config: { x: 100 + index * 70, y: 120 + index * 40 },
+      route_mode: "all_matches",
+      join_mode: "each_arrival",
+      config: { ...config, x: 100 + index * 70, y: 120 + index * 40 },
       input_contract: type?.input_contract
-        ? { key: type.input_contract.key }
+        ? { key: type.input_contract.key, schema: inputSchema }
         : undefined,
       output_contract: type?.output_contract
-        ? { key: type.output_contract.key }
+        ? {
+            key: type.output_contract.key,
+            schema:
+              type.output_contract.schema ??
+              workflowCatalog.contracts.find(
+                (contract) => contract.key === type.output_contract?.key,
+              )?.schema,
+          }
         : undefined,
     };
   }
@@ -1085,11 +1482,14 @@ export function PipelineManager({
             sourceHandle: `output-${portSide(source, "output")}`,
             targetHandle: `input-${portSide(target, "input")}`,
             id: crypto.randomUUID(),
-            label: `${type} · always`,
+            label: `${type} · ${type === "failure" ? "error" : "always"}`,
+            className: isTechnicalTransition(type)
+              ? "studio-technical-edge"
+              : "studio-business-edge",
             style: { stroke: contractColor(source.output_contract?.key) },
             data: {
               type,
-              condition_key: "always",
+              condition_key: type === "failure" ? "error" : "always",
               max_traversals: 1,
               priority: 0,
             },
@@ -1100,6 +1500,73 @@ export function PipelineManager({
     },
     [editable, edges, nodes, setEdges, triggers],
   );
+  function validateDraft(
+    stages: Stage[],
+    transitions: Array<{
+      from_stage_key: string;
+      to_stage_key: string;
+      type: string;
+      condition_key: string;
+      rule?: Rule;
+      max_traversals: number;
+    }>,
+  ) {
+    for (const stage of stages) {
+      const kind = processorKind(stage);
+      const processor = workflowCatalog.processors.find((item) => item.key === kind);
+      if (processor && !processor.executable)
+        return `O processador ${processor.name} ainda não é executável pelo runtime.`;
+      const join = workflowCatalog.join_modes.find((item) => item.key === stage.join_mode);
+      if (join && !join.executable)
+        return `O modo de junção ${join.key} ainda não é executável pelo runtime.`;
+      if (kind === "rule_filter") {
+        const extensions = Array.isArray(stage.config.include_extensions)
+          ? stage.config.include_extensions.filter(
+              (value): value is string =>
+                typeof value === "string" && value.trim() !== "",
+            )
+          : [];
+        const rule = stage.config.rule as Rule | undefined;
+        if ((!rule || !meaningfulRule(rule)) && extensions.length === 0)
+          return `A etapa ${stage.name} precisa de uma regra ou extensão de filtro válida.`;
+      }
+    }
+
+    const adjacency = new Map<string, string[]>();
+    transitions.forEach((transition) => {
+      if (!isTechnicalTransition(transition.type))
+        adjacency.set(transition.from_stage_key, [
+          ...(adjacency.get(transition.from_stage_key) ?? []),
+          transition.to_stage_key,
+        ]);
+    });
+    for (const transition of transitions) {
+      const technical = isTechnicalTransition(transition.type);
+      if (technical && !technicalConditions.includes(transition.condition_key))
+        return "Fallbacks técnicos aceitam somente error, timeout ou contract_invalid.";
+      if (technical && transition.rule)
+        return "Fallbacks técnicos não podem usar regras sobre o payload.";
+      if (!technical && technicalConditions.includes(transition.condition_key))
+        return "Conexões de negócio não podem usar categorias de fallback técnico.";
+      if (
+        !technical &&
+        !transition.rule &&
+        !businessConditions.includes(transition.condition_key)
+      )
+        return "A conexão de negócio precisa de uma regra ou condição válida.";
+      if (
+        !technical &&
+        graphReaches(
+          adjacency,
+          transition.to_stage_key,
+          transition.from_stage_key,
+        ) &&
+        transition.max_traversals < 1
+      )
+        return "Toda conexão que fecha um loop precisa de um máximo de travessias maior que zero.";
+    }
+    return "";
+  }
   async function save(publish = false) {
     if (busy) return;
     const persistedNodes = nodes.filter(
@@ -1108,11 +1575,7 @@ export function PipelineManager({
     const stageKeys = new Set(persistedNodes.map((node) => node.id));
     const stages = persistedNodes.map((node, index) => ({
       ...node.data.stage,
-      config: {
-        ...node.data.stage.config,
-        x: node.position.x,
-        y: node.position.y,
-      },
+      config: stageConfigForSave(node.data.stage, node.position),
       position: index + 1,
     }));
     const transitions = edges
@@ -1127,17 +1590,21 @@ export function PipelineManager({
           type: String(edge.data?.type ?? "success"),
           condition_key: String(edge.data?.condition_key ?? "always"),
           ...(rule ? { rule } : {}),
-          max_traversals: Math.max(
-            1,
-            Number(edge.data?.max_traversals ?? 1),
-          ),
+          max_traversals: Math.max(0, Number(edge.data?.max_traversals ?? 0)),
           priority,
         };
       });
+    const localError = validateDraft(stages, transitions);
+    if (localError) {
+      setError(localError);
+      setStatusOpen(true);
+      return;
+    }
     const body = {
       name,
       description,
       profile_id: profileID ? Number(profileID) : null,
+      scheduler_max_runs: schedulerMaxRuns,
       stages,
       transitions,
       triggers,
@@ -1193,15 +1660,21 @@ export function PipelineManager({
   }
   const updateSelectedEdge = (patch: Partial<Transition>) =>
     setEdges((all) =>
-      all.map((edge) =>
-        edge.id === selectedEdge
-          ? {
-              ...edge,
-              label: `${String(patch.type ?? edge.data?.type ?? "success")} · ${ruleSummary((patch.rule ?? edge.data?.rule) as Rule | undefined)}`,
-              data: { ...edge.data, ...patch },
-            }
-          : edge,
-      ),
+      all.map((edge) => {
+        if (edge.id !== selectedEdge) return edge;
+        const data = { ...edge.data, ...patch } as Transition;
+        return {
+          ...edge,
+          label: `${data.type ?? "success"} · ${ruleSummary(
+            data.rule,
+            data.condition_key ?? "always",
+          )}`,
+          className: isTechnicalTransition(data.type)
+            ? "studio-technical-edge"
+            : "studio-business-edge",
+          data,
+        };
+      }),
     );
   async function beginEditing() {
     if (!current || !version || busy) return;
@@ -1297,7 +1770,11 @@ export function PipelineManager({
         all.map((edge) => ({
           ...edge,
           animated: edge.source === activeStage || edge.target === activeStage,
-          className: "studio-runtime-edge",
+          className: `studio-runtime-edge ${
+            isTechnicalTransition(edge.data?.type)
+              ? "studio-technical-edge"
+              : "studio-business-edge"
+          }`,
         })),
       );
   }, [readOnly, activeStage, setEdges]);
@@ -1409,7 +1886,8 @@ export function PipelineManager({
     required: false,
     processor_kind: "manual",
     routing_mode: "all_matches",
-    join_mode: "all",
+    route_mode: "all_matches",
+    join_mode: "each_arrival",
     config: {
       input_side: approvalMovesLeft ? "right" : "left",
       output_side: approvalMovesLeft ? "left" : "right",
@@ -1456,7 +1934,8 @@ export function PipelineManager({
           target: approvalNode.id,
           sourceHandle: `output-${portSide(formattingNode!.data.stage, "output")}`,
           targetHandle: `input-${portSide(approvalStage, "input")}`,
-           label: "success · always",
+          label: "success · always",
+          className: "studio-business-edge",
           selectable: false,
           deletable: false,
           style: {
@@ -1472,6 +1951,7 @@ export function PipelineManager({
           sourceHandle: `output-${portSide(approvalStage, "output")}`,
           targetHandle: `input-${portSide(publicationNode!.data.stage, "input")}`,
           label: "approval",
+          className: "studio-business-edge",
           selectable: false,
           deletable: false,
           style: { stroke: "#e6a34e" },
@@ -1507,6 +1987,22 @@ export function PipelineManager({
   const selectedConnectionSource = nodes.find(
     (node) => node.id === selectedConnection?.source,
   )?.data.stage;
+  const selectedConnectionTechnical = isTechnicalTransition(
+    selectedConnection?.data?.type,
+  );
+  const addableStageTypes = catalog
+    .filter((type) => type.is_enabled)
+    .filter(
+      (type) =>
+        ![
+          "preparation",
+          "verification",
+          "formatting",
+          "publication",
+          "error_log",
+        ].includes(type.key) ||
+        !nodes.some((node) => node.data.stage.stage_type_key === type.key),
+    );
   return (
     <section
       className={`pipeline-studio ${readOnly ? "runtime-studio" : ""} ${editable ? "editing" : ""}`}
@@ -1584,6 +2080,23 @@ export function PipelineManager({
                   ))}
                 </select>
               </label>
+              <label>
+                Máximo de execuções do scheduler
+                <input
+                  type="number"
+                  min="1"
+                  max={maxSchedulerMaxRuns}
+                  value={schedulerMaxRuns}
+                  onChange={(event) =>
+                    setSchedulerMaxRuns(
+                      Math.min(
+                        maxSchedulerMaxRuns,
+                        Math.max(1, event.target.valueAsNumber || 1),
+                      ),
+                    )
+                  }
+                />
+              </label>
             </section>
           )}
           <section>
@@ -1659,33 +2172,37 @@ export function PipelineManager({
             </section>
           )}
           <section>
-            <strong>Etapas</strong>
-            {catalog
-              .filter((t) => t.is_enabled)
-              .filter(
-                (type) =>
-                  ![
-                    "preparation",
-                    "verification",
-                    "formatting",
-                    "publication",
-                    "error_log",
-                  ].includes(type.key) ||
-                  !nodes.some(
-                    (node) => node.data.stage.stage_type_key === type.key,
-                  ),
-              )
-              .map((type) => (
-                <button
-                  key={type.key}
-                  disabled={!editable}
-                  draggable
-                  onDragStart={(e) => e.dataTransfer.setData("stage", type.key)}
-                  onClick={() => editable && addStage(type.key)}
-                >
-                  <Plus size={14} /> {type.name}
-                </button>
-              ))}
+            <strong>Processadores e etapas</strong>
+            {processorGroups.map((group) => {
+              const processor = workflowCatalog.processors.find(
+                (item) => item.key === group,
+              );
+              const types = addableStageTypes.filter((type) => {
+                return stageTypeProcessorKind(type) === group;
+              });
+              return (
+                <div className="studio-processor-group" key={group}>
+                  <header>
+                    <span>{processor?.name || processorGroupLabels[group]}</span>
+                    <small>{processor?.executable ? "Executável" : "Indisponível"}</small>
+                  </header>
+                  {processor?.description && <p>{processor.description}</p>}
+                  {types.map((type) => (
+                    <button
+                      key={type.key}
+                      disabled={!editable || !processor?.executable}
+                      draggable={editable && processor?.executable}
+                      onDragStart={(event) =>
+                        event.dataTransfer.setData("stage", type.key)}
+                      onClick={() => editable && processor?.executable && addStage(type.key)}
+                    >
+                      <Plus size={14} /> {type.name}
+                    </button>
+                  ))}
+                  {!types.length && <small>Nenhuma etapa deste tipo no catálogo.</small>}
+                </div>
+              );
+            })}
           </section>
         </aside>
       )}
@@ -1800,6 +2317,7 @@ export function PipelineManager({
               stage={selectedStage}
               editable={editable}
               runtime={runtimeEvents[selectedStage.key]}
+              workflowCatalog={workflowCatalog}
               onUpdate={(patch) =>
                 setNodes((all) =>
                   all.map((node) =>
@@ -1884,7 +2402,11 @@ export function PipelineManager({
             </section>
           ) : selectedEdge ? (
             <section className="studio-edge">
-              <strong>Conexão</strong>
+              <strong>
+                {selectedConnectionTechnical
+                  ? "Fallback técnico"
+                  : "Conexão de negócio"}
+              </strong>
               <label>
                 Tipo
                 <select
@@ -1892,7 +2414,15 @@ export function PipelineManager({
                   value={String(
                     selectedConnection?.data?.type ?? "success",
                   )}
-                  onChange={(e) => updateSelectedEdge({ type: e.target.value })}
+                  onChange={(event) => {
+                    const type = event.target.value;
+                    const technical = isTechnicalTransition(type);
+                    updateSelectedEdge({
+                      type,
+                      condition_key: technical ? "error" : "always",
+                      rule: undefined,
+                    });
+                  }}
                 >
                   {(selectedConnectionTarget?.executor_key === "error_log"
                     ? ["failure", "fallback"]
@@ -1913,36 +2443,48 @@ export function PipelineManager({
                     updateSelectedEdge({ condition_key: e.target.value })
                   }
                 >
-                  {conditions.map((v) => (
+                  {(selectedConnectionTechnical
+                    ? technicalConditions
+                    : businessConditions
+                  ).map((v) => (
                     <option key={v}>{v}</option>
                   ))}
                 </select>
               </label>
-              <RuleBuilder
-                disabled={!editable}
-                rule={selectedConnection?.data?.rule as Rule | undefined}
-                schema={
-                  selectedConnectionSource?.output_contract?.schema ??
-                  stageType(selectedConnectionSource?.stage_type_key ?? "")
-                    ?.output_contract?.schema
-                }
-                onChange={(rule) => updateSelectedEdge({ rule })}
-              />
+              {selectedConnectionTechnical ? (
+                <p className="studio-edge-kind-note">
+                  Esta rota reage a falhas do runtime e não avalia o payload.
+                </p>
+              ) : (
+                <RuleBuilder
+                  disabled={!editable}
+                  rule={selectedConnection?.data?.rule as Rule | undefined}
+                  schema={
+                    selectedConnectionSource?.output_contract?.schema ??
+                    stageType(selectedConnectionSource?.stage_type_key ?? "")
+                      ?.output_contract?.schema
+                  }
+                  onChange={(rule) => updateSelectedEdge({ rule })}
+                />
+              )}
               <label>
                 Máximo de travessias
                 <input
                   disabled={!editable}
-                  min="1"
+                  min="0"
                   type="number"
                   value={Number(
                     selectedConnection?.data?.max_traversals ?? 1,
                   )}
                   onChange={(event) =>
                     updateSelectedEdge({
-                      max_traversals: Math.max(1, Number(event.target.value)),
+                      max_traversals: Number.isFinite(event.target.valueAsNumber)
+                        ? Math.max(0, event.target.valueAsNumber)
+                        : 0,
                     })
                   }
                 />
+                <small>Obrigatório e maior que zero somente quando a conexão fecha um loop.</small>
               </label>
               <button
                 disabled={!editable}

@@ -17,8 +17,11 @@
 | `stage_types` | executor e contratos suportados | 1:N `pipeline_stages` | catálogo controlado pelo sistema |
 | `pipeline_definitions` | identidade do workflow | profile opcional; 1:N versões | seed; CRUD dedicado futuro |
 | `pipeline_versions` | configuração publicada imutável | N:1 definição | uma versão publicada por definição |
-| `pipeline_stages` | instâncias ordenadas de executors | N:1 versão; modelo opcional | prompt, tokens, retry e parâmetros |
-| `pipeline_transitions` | encadeamento persistido | etapas de uma versão | execução condicional futura |
+| `pipeline_stages` | instâncias ordenadas de processors | N:1 versão; contratos fixados e modelo opcional | prompt, modos de join/roteamento e configuração controlada |
+| `pipeline_transitions` | rotas de negócio e fallback | etapas de uma versão | AST de regra, prioridade e limite de travessias |
+| `pipeline_version_triggers` | Entrypoints persistidos | N:1 versão; destino por chave de stage | adapter, posição, ativação e etapa inicial |
+| `workflow_processor_catalog` | processors permitidos | catálogo da aplicação | system, LLM, filtro e transformação/merge |
+| `workflow_entrypoint_catalog` | tipos de evento permitidos | adapter registrado em código | configuração sem reestruturar o grafo |
 
 ## Estado de execução
 
@@ -30,6 +33,7 @@
 | `pipeline_executions` | review, versão, status e snapshot JSON | uma linha por execução/rerun |
 | `stage_executions` | etapa, tentativa, status, duração e metadata | auditoria ordenada da execução |
 | `stage_artifacts` | tipo e payload JSON validado | output de uma execução de etapa |
+| `stage_artifact_inputs` | artifacts consumidos, payload projetado e hash | proveniência N:N de joins/transições | preserva exatamente o lote recebido por cada execução |
 | `review_publications` | fingerprint e estado da publicação | reserva local; reconcilia a marca `forgereview` no Gitea antes de repetir envio incerto |
 | `schema_migrations` | nome/aplicação | evita reaplicar migrations |
 

@@ -35,14 +35,33 @@ A fundação banco-first foi implementada na migration
 - `review_steps` continua sendo a projeção compatível com o painel atual.
 
 O runtime hardcoded anterior foi removido. A implementação atual interpreta um
-DAG persistido por `pipeline_transitions`, com worklist determinística limitada.
-As transições `success` usam apenas condições conhecidas; `retry` permanece
-interno ao limite da etapa, e rotas de falha/fallback terminam em `error_log`.
-O validador compartilhado rejeita ciclos, contratos incompatíveis, publicação
-não terminal e as invariantes das etapas obrigatórias. Cada versão também
+grafo persistido por `pipeline_transitions`, com worklist determinística limitada.
+Transições de negócio aceitam uma AST de regras tipada contra o JSON Schema do
+contrato de saída. Cada etapa escolhe `all_matches` ou `first_match`; ciclos só
+são aceitos quando suas arestas possuem `max_traversals`, além do limite global
+`scheduler_max_runs`. `retry` permanece interno à etapa. Fallbacks aceitam apenas
+erro técnico, timeout ou contrato inválido. O validador compartilhado rejeita
+regras incompatíveis, loops sem limite, contratos incompatíveis, publicação não
+terminal e as invariantes das etapas obrigatórias. Cada versão também
 persiste os triggers `webhook`, `api` e `manual`, validados antes de criar a
 review. Ver `internal/review/pipeline_definition.go`,
-`internal/review/pipeline_engine.go` e migrations 014--016.
+`internal/review/pipeline_engine.go`, `internal/review/workflow_rules.go` e
+migrations 014--019.
+
+A migration 017 adiciona os modos de roteamento/junção, regras e limites das
+arestas, além dos catálogos de processors e adapters de Entrypoint. O runtime é
+orientado a artifacts isolados e eventos de dados/fechamento. Executa
+`each_arrival`, `any` e `wait_all`, incluindo fechamento de ramos sem match;
+saídas usam `all_matches` ou `first_match`. Os processors controlados
+`rule_filter` e `transform_merge` filtram lotes e aplicam transformações/merges
+determinísticos sem código arbitrário. As migrations 018--019 fixam contratos
+versionados por stage e auditam a proveniência, o payload projetado consumido e
+seu hash em joins e transições filtradas.
+
+Fallbacks técnicos recebem o artifact original que falhou, inclusive o artifact
+mesclado por `wait_all`, e só são disparados por erro, timeout ou contrato
+inválido. O estado mutável dos executors legados é clonado por evento para evitar
+mistura de arquivos e achados entre ramos ou iterações.
 
 Em Observabilidade > Execuções, o Pipeline Studio exibe em modo leitura o
 pipeline efetivo do profile padrão, sem os demais cards operacionais. O canvas
@@ -88,7 +107,8 @@ stages será exposta pelo CRUD dedicado futuro.
 - Falhas, retries, duração, tokens e outputs devem ser rastreáveis.
 - Nenhuma etapa configurável pode publicar diretamente ou executar código
   arbitrário.
-- O grafo é acíclico entre etapas; retry permanece interno ao executor.
+- Loops exigem limite explícito por aresta e limite global do scheduler; retry
+  permanece interno ao executor.
 - A publicação permanece uma operação de domínio controlada pelo backend.
 
 ## Arquitetura banco-first

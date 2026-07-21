@@ -27,6 +27,14 @@ func TestReviewSettingsReturnsPublishedPipelineCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = db.SQL.ExecContext(ctx, `
+		INSERT INTO stage_contracts(key,version,schema_json,is_system) VALUES('legacy_prepared_diff',1,'{}',0);
+		UPDATE pipeline_stages SET input_contract_id=(SELECT id FROM stage_contracts WHERE key='legacy_prepared_diff')
+		WHERE id=(SELECT ps.id FROM pipeline_stages ps JOIN pipeline_versions pv ON pv.id=ps.pipeline_version_id
+			JOIN pipeline_definitions pd ON pd.id=pv.pipeline_definition_id
+			WHERE pd.key='system-default' AND ps.stage_key='planejamento' LIMIT 1);`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.SQL.ExecContext(ctx, `
 		INSERT INTO ai_connections(provider_id,name,base_url,is_enabled)
 		VALUES((SELECT id FROM ai_providers WHERE name='ollama'),'Local','http://localhost:11434',1);
 		INSERT INTO ai_models(connection_id,provider_model_name,display_name,is_enabled)
@@ -59,10 +67,21 @@ func TestReviewSettingsReturnsPublishedPipelineCatalog(t *testing.T) {
 	if err = json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Pipelines) != 2 || len(payload.Pipelines[0].Stages) != 7 || len(payload.StageCatalog) != 9 {
+	if len(payload.Pipelines) != 2 || len(payload.Pipelines[0].Stages) != 7 || len(payload.StageCatalog) != 11 {
 		t.Fatalf("unexpected settings payload: pipelines=%d stages=%d catalog=%d", len(payload.Pipelines), len(payload.Pipelines[0].Stages), len(payload.StageCatalog))
 	}
 	if len(payload.Profiles) != 1 || payload.Profiles[0].Prompt == nil || payload.Profiles[0].Prompt.Name != "Ativo" {
 		t.Fatalf("unexpected profile settings: %#v", payload.Profiles)
+	}
+	foundPinned := false
+	for _, pipeline := range payload.Pipelines {
+		for _, stage := range pipeline.Stages {
+			if pipeline.Key == "system-default" && stage.Key == "planejamento" && stage.InputContract == "legacy_prepared_diff" {
+				foundPinned = true
+			}
+		}
+	}
+	if !foundPinned {
+		t.Fatal("published settings pipeline used the current stage type contract instead of its pin")
 	}
 }

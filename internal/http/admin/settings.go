@@ -265,8 +265,8 @@ func (h *AdminHandler) settingsPipelines(c *gin.Context) ([]settingsPipeline, er
 		LEFT JOIN ai_models m ON m.id=ps.model_id
 		LEFT JOIN ai_connections ac ON ac.id=m.connection_id
 		LEFT JOIN ai_providers ap ON ap.id=ac.provider_id
-		LEFT JOIN stage_contracts ic ON ic.id=st.input_contract_id AND ic.is_system=1
-		LEFT JOIN stage_contracts oc ON oc.id=st.output_contract_id AND oc.is_system=1
+		LEFT JOIN stage_contracts ic ON ic.id=COALESCE(ps.input_contract_id,st.input_contract_id)
+		LEFT JOIN stage_contracts oc ON oc.id=COALESCE(ps.output_contract_id,st.output_contract_id)
 		WHERE ps.pipeline_version_id IN (SELECT id FROM pipeline_versions WHERE status='published')
 		  AND ps.is_enabled=1 ORDER BY ps.pipeline_version_id,ps.position`)
 	if err != nil {

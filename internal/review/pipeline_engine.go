@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -64,6 +65,24 @@ type pipelineRuntime struct {
 	repo              *Repository
 	executionID       int64
 	currentError      map[string]any
+	currentArtifacts  []pipelineArtifact
+	currentSources    []pipelineArtifact
+}
+
+type pipelineArtifact struct {
+	ID      int64
+	Type    string
+	Payload any
+}
+
+type schedulerEvent struct {
+	stage      PipelineStage
+	via        *PipelineTransition
+	artifact   *pipelineArtifact
+	state      *pipelineRuntime
+	closed     bool
+	errPayload map[string]any
+	originals  []pipelineArtifact
 }
 
 type stageCallResult struct {
@@ -79,14 +98,16 @@ type stageCallResult struct {
 // NewPipelineEngine creates the only orchestration runtime used by reviews.
 func NewPipelineEngine(repo *Repository) *PipelineEngine {
 	return &PipelineEngine{repo: repo, executors: map[string]StageExecutor{
-		"preparation":  preparationExecutor{},
-		"planner":      plannerExecutor{},
-		"reviewer":     reviewerExecutor{},
-		"consolidator": consolidatorExecutor{},
-		"verification": verificationExecutor{},
-		"formatting":   formattingExecutor{},
-		"publication":  publicationExecutor{},
-		"error_log":    errorLogExecutor{},
+		"preparation":     preparationExecutor{},
+		"planner":         plannerExecutor{},
+		"reviewer":        reviewerExecutor{},
+		"consolidator":    consolidatorExecutor{},
+		"verification":    verificationExecutor{},
+		"formatting":      formattingExecutor{},
+		"publication":     publicationExecutor{},
+		"error_log":       errorLogExecutor{},
+		"rule_filter":     ruleFilterExecutor{},
+		"transform_merge": transformMergeExecutor{},
 	}}
 }
 
@@ -98,7 +119,7 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 	if input.Progress == nil {
 		input.Progress = func(string, string, string, map[string]any, time.Time, error) {}
 	}
-	runtime := &pipelineRuntime{
+	baseRuntime := &pipelineRuntime{
 		definition: definition,
 		input:      input,
 		meta: map[string]any{
@@ -119,8 +140,8 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 			return Result{}, err
 		}
 	}
-	runtime.repo = e.repo
-	runtime.executionID = executionID
+	baseRuntime.repo = e.repo
+	baseRuntime.executionID = executionID
 	executionStatus := "completed"
 	byID := map[int64]PipelineStage{}
 	byKey := map[string]PipelineStage{}
@@ -128,12 +149,7 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 		byID[stage.ID] = stage
 		byKey[stage.Key] = stage
 	}
-	type arrival struct {
-		stage      PipelineStage
-		via        *PipelineTransition
-		errPayload map[string]any
-	}
-	work := []arrival{}
+	work := []schedulerEvent{}
 	triggerSource := input.TriggerSource
 	if triggerSource == "" {
 		triggerSource = "webhook"
@@ -149,7 +165,7 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 		if !ok {
 			return Result{}, fmt.Errorf("pipeline entrypoint %s targets unknown stage %s", triggerSource, trigger.TargetStageKey)
 		}
-		work = append(work, arrival{stage: stage})
+		work = append(work, schedulerEvent{stage: stage, state: baseRuntime})
 		break
 	}
 	if len(work) == 0 {
@@ -160,7 +176,33 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 		maxRuns = 256
 	}
 	runs, published, publicationScheduled := 0, false, false
+	var completedResult Result
 	transitionTraversals := make(map[int]int, len(definition.Transitions))
+	incoming := map[int64][]int{}
+	outgoing := map[int64][]int{}
+	for index, edge := range definition.Transitions {
+		outgoing[edge.FromStageID] = append(outgoing[edge.FromStageID], index)
+		if edge.ToStageID != nil {
+			incoming[*edge.ToStageID] = append(incoming[*edge.ToStageID], index)
+		}
+	}
+	type joinBucket struct {
+		signals map[int][]schedulerEvent
+		fired   bool
+	}
+	joins := map[int64]*joinBucket{}
+	propagateClose := func(stage PipelineStage, source schedulerEvent) {
+		for _, edgeIndex := range outgoing[stage.ID] {
+			edge := &definition.Transitions[edgeIndex]
+			if edge.MaxTraversals > 0 && transitionTraversals[edgeIndex] >= edge.MaxTraversals {
+				continue
+			}
+			if edge.ToStageID != nil {
+				transitionTraversals[edgeIndex]++
+				work = append(work, schedulerEvent{stage: byID[*edge.ToStageID], via: edge, state: source.state, closed: true, originals: source.originals})
+			}
+		}
+	}
 	for len(work) > 0 {
 		if runs >= maxRuns {
 			err := errors.New("pipeline scheduler bound exceeded")
@@ -173,6 +215,83 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 		item := work[0]
 		work = work[1:]
 		stage := item.stage
+		joinMode := stage.JoinMode
+		if joinMode == "" {
+			joinMode = "each_arrival"
+		}
+		if item.via != nil && joinMode != "each_arrival" {
+			bucket := joins[stage.ID]
+			if bucket == nil {
+				bucket = &joinBucket{signals: map[int][]schedulerEvent{}}
+				joins[stage.ID] = bucket
+			}
+			edgeIndex := transitionIndex(definition.Transitions, item.via)
+			bucket.signals[edgeIndex] = append(bucket.signals[edgeIndex], item)
+			if joinMode == "any" {
+				if item.closed || bucket.fired {
+					allClosed := true
+					for _, index := range incoming[stage.ID] {
+						if len(bucket.signals[index]) == 0 {
+							allClosed = false
+						}
+					}
+					if allClosed {
+						if !bucket.fired {
+							propagateClose(stage, item)
+						}
+						for _, index := range incoming[stage.ID] {
+							bucket.signals[index] = bucket.signals[index][1:]
+						}
+						bucket.fired = false
+					}
+					continue
+				}
+				bucket.fired = true
+				if len(incoming[stage.ID]) == 1 {
+					bucket.signals[edgeIndex] = bucket.signals[edgeIndex][1:]
+					bucket.fired = false
+				}
+			} else {
+				ready := true
+				for _, index := range incoming[stage.ID] {
+					if len(bucket.signals[index]) == 0 {
+						ready = false
+						break
+					}
+				}
+				if !ready {
+					continue
+				}
+				joined := []pipelineArtifact{}
+				sources := []pipelineArtifact{}
+				for _, index := range incoming[stage.ID] {
+					signal := bucket.signals[index][0]
+					bucket.signals[index] = bucket.signals[index][1:]
+					if signal.artifact != nil {
+						joined = append(joined, *signal.artifact)
+						if len(signal.originals) > 0 {
+							sources = append(sources, signal.originals...)
+						} else {
+							sources = append(sources, *signal.artifact)
+						}
+					}
+				}
+				if len(joined) == 0 {
+					propagateClose(stage, item)
+					continue
+				}
+				artifact, joinErr := mergePipelineArtifacts(joined)
+				if joinErr != nil {
+					return Result{}, fmt.Errorf("join %s: %w", stage.Key, joinErr)
+				}
+				item.artifact = &artifact
+				item.originals = sources
+			}
+		}
+		if item.closed {
+			propagateClose(stage, item)
+			continue
+		}
 		// Multiple branches may converge on the single publication stage. Its
 		// external effect is intentionally scheduled once; repository-level
 		// publication reservation remains the second line of defense.
@@ -182,7 +301,7 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 			}
 			publicationScheduled = true
 		}
-		runtime.currentError = item.errPayload
+		runtime := runtimeForEvent(baseRuntime, item)
 		executor, ok := e.executors[stage.ExecutorKey]
 		if !ok {
 			err := fmt.Errorf("executor %q não registrado", stage.ExecutorKey)
@@ -206,6 +325,24 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 		if stage.TimeoutSeconds > 0 {
 			stageCtx, cancel = context.WithTimeout(ctx, time.Duration(stage.TimeoutSeconds)*time.Second)
 		}
+		if item.artifact != nil && stage.InputContract != nil && stage.ExecutorKey != "error_log" {
+			if contractErr := validateContractPayload(stage.InputContract.SchemaJSON, item.artifact.Payload); contractErr != nil {
+				stageErr := fmt.Errorf("contract_invalid: %w", contractErr)
+				cancel()
+				outcome := StageOutcome{Status: "failed"}
+				if e.repo != nil {
+					_, _ = e.repo.finishStageExecution(ctx, executionID, stageExecutionID, stageStarted, outcome.Status, "", nil, nil, stageErr, item.via, item.originals)
+				}
+				work, stageErr = e.routeStage(definition, byID, outgoing, transitionTraversals, work, item, stage, outcome, stageErr, runtime)
+				if stageErr != nil {
+					if e.repo != nil {
+						_ = e.repo.FinishPipelineExecution(ctx, executionID, "failed", stageErr)
+					}
+					return Result{}, fmt.Errorf("etapa %s: %w", stage.Key, stageErr)
+				}
+				continue
+			}
+		}
 		outcome, stageErr := executor.Execute(stageCtx, runtime, stage)
 		cancel()
 		if outcome.Status == "" {
@@ -215,8 +352,16 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 				outcome.Status = "completed"
 			}
 		}
+		if stageErr == nil && stage.OutputContract != nil && outcome.Artifact != nil {
+			if contractErr := validateContractPayload(stage.OutputContract.SchemaJSON, outcome.Artifact); contractErr != nil {
+				stageErr = fmt.Errorf("contract_invalid: %w", contractErr)
+				outcome.Status = "failed"
+			}
+		}
+		artifactID := int64(0)
 		if e.repo != nil {
-			persistErr := e.repo.finishStageExecution(ctx, executionID, stageExecutionID, stageStarted, outcome.Status, outcome.ArtifactType, outcome.Artifact, outcome.Metadata, stageErr, item.via)
+			var persistErr error
+			artifactID, persistErr = e.repo.finishStageExecution(ctx, executionID, stageExecutionID, stageStarted, outcome.Status, outcome.ArtifactType, outcome.Artifact, outcome.Metadata, stageErr, item.via, item.originals)
 			if stageErr == nil && persistErr != nil {
 				stageErr = persistErr
 			}
@@ -224,55 +369,20 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 		if stage.ExecutorKey == "publication" && stageErr == nil {
 			published = true
 		}
-		matched := false
-		for edgeIndex := range definition.Transitions {
-			edge := &definition.Transitions[edgeIndex]
-			if edge.FromStageID != stage.ID || edge.ToStageID == nil {
-				continue
-			}
-			isError := stageErr != nil
-			edgeMatches := false
-			if (edge.Type == "failure" || edge.Type == "fallback") && isError {
-				edgeMatches = edge.ConditionKey == technicalErrorKind(stageErr)
-			} else if (edge.Type == "success" || edge.Type == "skip") && !isError {
-				if edge.Rule != nil {
-					schema := ""
-					if stage.OutputContract != nil {
-						schema = stage.OutputContract.SchemaJSON
-					}
-					var ruleErr error
-					edgeMatches, ruleErr = EvaluateRule(*edge.Rule, schema, outcome.Artifact)
-					if ruleErr != nil {
-						stageErr = fmt.Errorf("contract_invalid: %w", ruleErr)
-						continue
-					}
-				} else {
-					edgeMatches = conditionMatches(edge.ConditionKey, outcome, runtime)
-				}
-			}
-			if !edgeMatches {
-				continue
-			}
-			transitionTraversals[edgeIndex]++
-			if edge.MaxTraversals > 0 && transitionTraversals[edgeIndex] > edge.MaxTraversals {
-				continue
-			}
-			if isError {
-				payload := normalizedStageError(stage, *edge, stageErr)
-				work = append(work, arrival{stage: byID[*edge.ToStageID], via: edge, errPayload: payload})
-			} else {
-				work = append(work, arrival{stage: byID[*edge.ToStageID], via: edge})
-			}
-			matched = true
-			if stage.RouteMode == "first_match" {
-				break
-			}
+		if stageErr == nil && outcome.Artifact != nil {
+			item.artifact = &pipelineArtifact{ID: artifactID, Type: outcome.ArtifactType, Payload: outcome.Artifact}
+			item.originals = []pipelineArtifact{*item.artifact}
 		}
-		if stageErr != nil && !matched {
+		if stage.ExecutorKey == "formatting" && stageErr == nil {
+			completedResult = runtime.result
+		}
+		var unhandled error
+		work, unhandled = e.routeStage(definition, byID, outgoing, transitionTraversals, work, item, stage, outcome, stageErr, runtime)
+		if unhandled != nil {
 			if e.repo != nil {
-				_ = e.repo.FinishPipelineExecution(ctx, executionID, "failed", stageErr)
+				_ = e.repo.FinishPipelineExecution(ctx, executionID, "failed", unhandled)
 			}
-			return Result{}, fmt.Errorf("etapa %s: %w", stage.Key, stageErr)
+			return Result{}, fmt.Errorf("etapa %s: %w", stage.Key, unhandled)
 		}
 		if outcome.Status == "waiting" {
 			executionStatus = "waiting"
@@ -280,9 +390,12 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 			executionStatus = "cancelled"
 		}
 	}
-	runtime.meta["total_duration_ms"] = time.Since(started).Milliseconds()
-	if runtime.result.Metadata == nil {
-		runtime.result.Metadata = runtime.meta
+	baseRuntime.meta["total_duration_ms"] = time.Since(started).Milliseconds()
+	if completedResult.Metadata != nil {
+		completedResult.Metadata["total_duration_ms"] = time.Since(started).Milliseconds()
+	}
+	if completedResult.Metadata == nil {
+		completedResult.Metadata = baseRuntime.meta
 	}
 	if !published {
 		if e.repo != nil {
@@ -292,7 +405,7 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 		}
 		return Result{}, nil
 	}
-	if err := validateResult(runtime.result); err != nil {
+	if err := validateResult(completedResult); err != nil {
 		if e.repo != nil {
 			_ = e.repo.FinishPipelineExecution(ctx, executionID, "failed", err)
 		}
@@ -303,7 +416,232 @@ func (e *PipelineEngine) Execute(ctx context.Context, definition PipelineDefinit
 			return Result{}, err
 		}
 	}
-	return runtime.result, nil
+	return completedResult, nil
+}
+
+func (e *PipelineEngine) routeStage(definition PipelineDefinition, byID map[int64]PipelineStage, outgoing map[int64][]int, traversals map[int]int, work []schedulerEvent, item schedulerEvent, stage PipelineStage, outcome StageOutcome, stageErr error, runtime *pipelineRuntime) ([]schedulerEvent, error) {
+	matched := false
+	selected := -1
+	projected := map[int]any{}
+	if stageErr == nil {
+		for _, edgeIndex := range outgoing[stage.ID] {
+			edge := &definition.Transitions[edgeIndex]
+			if edge.ToStageID == nil || edge.Type != "success" && edge.Type != "skip" {
+				continue
+			}
+			edgeMatched := false
+			payload := outcome.Artifact
+			if edge.Rule != nil {
+				schema := ""
+				if stage.OutputContract != nil {
+					schema = stage.OutputContract.SchemaJSON
+				}
+				var err error
+				edgeMatched, payload, err = EvaluateRuleArtifact(*edge.Rule, schema, outcome.Artifact)
+				if err != nil {
+					return e.routeStage(definition, byID, outgoing, traversals, work, item, stage, StageOutcome{}, fmt.Errorf("contract_invalid: %w", err), runtime)
+				}
+			} else {
+				edgeMatched = conditionMatches(edge.ConditionKey, outcome, runtime)
+			}
+			if edgeMatched {
+				selected = edgeIndex
+				projected[edgeIndex] = payload
+				if stage.RouteMode == "first_match" {
+					break
+				}
+			}
+		}
+	}
+	for _, edgeIndex := range outgoing[stage.ID] {
+		edge := &definition.Transitions[edgeIndex]
+		if edge.ToStageID == nil {
+			continue
+		}
+		edgeMatched := false
+		exhausted := false
+		if stageErr != nil {
+			edgeMatched = (edge.Type == "failure" || edge.Type == "fallback") && edge.ConditionKey == technicalErrorKind(stageErr)
+		} else if edge.Type == "success" || edge.Type == "skip" {
+			_, edgeMatched = projected[edgeIndex]
+			if selected >= 0 && stage.RouteMode != "first_match" {
+				_, edgeMatched = projected[edgeIndex]
+			}
+		}
+		if edgeMatched {
+			traversals[edgeIndex]++
+			if edge.MaxTraversals > 0 && traversals[edgeIndex] > edge.MaxTraversals {
+				edgeMatched = false
+				exhausted = true
+			}
+		}
+		if !edgeMatched {
+			if exhausted {
+				continue
+			}
+			traversals[edgeIndex]++
+			if edge.MaxTraversals > 0 && traversals[edgeIndex] > edge.MaxTraversals {
+				continue
+			}
+			work = append(work, schedulerEvent{stage: byID[*edge.ToStageID], via: edge, state: runtime, closed: true, originals: item.originals})
+			continue
+		}
+		matched = true
+		if stageErr != nil {
+			work = append(work, schedulerEvent{stage: byID[*edge.ToStageID], via: edge, artifact: item.artifact, state: runtime, originals: item.originals, errPayload: normalizedStageError(stage, *edge, stageErr)})
+			continue
+		}
+		payload := outcome.Artifact
+		if value, ok := projected[edgeIndex]; ok {
+			payload = value
+		}
+		artifact := pipelineArtifact{Type: outcome.ArtifactType, Payload: payload}
+		if item.artifact != nil {
+			artifact.ID = item.artifact.ID
+		}
+		work = append(work, schedulerEvent{stage: byID[*edge.ToStageID], via: edge, artifact: &artifact, state: runtime, originals: []pipelineArtifact{artifact}})
+	}
+	if stageErr != nil && !matched {
+		return work, stageErr
+	}
+	return work, nil
+}
+
+func transitionIndex(edges []PipelineTransition, target *PipelineTransition) int {
+	for index := range edges {
+		if &edges[index] == target || edges[index].ID != 0 && edges[index].ID == target.ID {
+			return index
+		}
+	}
+	return -1
+}
+
+func runtimeForEvent(base *pipelineRuntime, item schedulerEvent) *pipelineRuntime {
+	if item.state != nil {
+		base = item.state
+	}
+	consumed := item.originals
+	if item.artifact != nil {
+		consumed = []pipelineArtifact{*item.artifact}
+	}
+	runtime := &pipelineRuntime{
+		definition: base.definition, input: base.input, repo: base.repo, executionID: base.executionID,
+		providers: base.providers, currentError: item.errPayload, currentArtifacts: append([]pipelineArtifact(nil), consumed...),
+		currentSources: append([]pipelineArtifact(nil), item.originals...),
+		meta:           map[string]any{}, files: append([]pipelineFile(nil), base.files...), plan: base.plan,
+		reviews: append([]pipelineGroupReview(nil), base.reviews...), failed: append([]string(nil), base.failed...),
+		consolidated: base.consolidated, consolidatedReady: base.consolidatedReady,
+		approved: append([]pipelineFinding(nil), base.approved...), result: base.result, providerName: base.providerName,
+	}
+	for key, value := range base.meta {
+		if metrics, ok := value.([]map[string]any); ok {
+			runtime.meta[key] = append([]map[string]any(nil), metrics...)
+		} else {
+			runtime.meta[key] = value
+		}
+	}
+	if item.artifact != nil {
+		hydrateRuntime(runtime, *item.artifact)
+	}
+	return runtime
+}
+
+func hydrateRuntime(runtime *pipelineRuntime, artifact pipelineArtifact) {
+	switch artifact.Type {
+	case "prepared_diff":
+		var value struct {
+			Files   []pipelineFile `json:"files"`
+			Ignored int            `json:"ignored"`
+		}
+		if decodeArtifactPayload(artifact.Payload, &value) == nil {
+			runtime.files = value.Files
+		}
+	case "review_plan":
+		_ = decodeArtifactPayload(artifact.Payload, &runtime.plan)
+	case "review_findings":
+		_ = decodeArtifactPayload(artifact.Payload, &runtime.reviews)
+	case "consolidated_findings":
+		if decodeArtifactPayload(artifact.Payload, &runtime.consolidated) == nil {
+			runtime.consolidatedReady = true
+		}
+	case "verified_findings":
+		_ = decodeArtifactPayload(artifact.Payload, &runtime.approved)
+	case "formatted_review":
+		_ = decodeArtifactPayload(artifact.Payload, &runtime.result)
+	}
+}
+
+func decodeArtifactPayload(payload any, target any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(body, target)
+}
+
+func validateContractPayload(schemaJSON string, payload any) error {
+	if schemaJSON == "" {
+		return nil
+	}
+	var schema any
+	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
+		return err
+	}
+	normalized, err := normalizeJSON(payload)
+	if err != nil {
+		return err
+	}
+	return validateSchemaValue(schema, normalized, "$", true)
+}
+
+func mergePipelineArtifacts(items []pipelineArtifact) (pipelineArtifact, error) {
+	if len(items) == 0 {
+		return pipelineArtifact{}, errors.New("no artifacts to merge")
+	}
+	out := pipelineArtifact{Type: items[0].Type}
+	for _, item := range items[1:] {
+		if item.Type != out.Type {
+			return pipelineArtifact{}, fmt.Errorf("incompatible artifact types %s and %s", out.Type, item.Type)
+		}
+	}
+	switch out.Type {
+	case "prepared_diff":
+		files := []pipelineFile{}
+		ignored := 0
+		for _, item := range items {
+			var value struct {
+				Files   []pipelineFile `json:"files"`
+				Ignored int            `json:"ignored"`
+			}
+			if err := decodeArtifactPayload(item.Payload, &value); err != nil {
+				return out, err
+			}
+			files = append(files, value.Files...)
+			ignored += value.Ignored
+		}
+		out.Payload = map[string]any{"files": files, "ignored": ignored}
+	case "review_findings":
+		values := []pipelineGroupReview{}
+		for _, item := range items {
+			var value []pipelineGroupReview
+			if err := decodeArtifactPayload(item.Payload, &value); err != nil {
+				return out, err
+			}
+			values = append(values, value...)
+		}
+		out.Payload = values
+	default:
+		if len(items) == 1 {
+			out.Payload = items[0].Payload
+		} else {
+			values := make([]any, len(items))
+			for index := range items {
+				values[index] = items[index].Payload
+			}
+			out.Payload = values
+		}
+	}
+	return out, nil
 }
 
 func technicalErrorKind(err error) string {
@@ -722,4 +1060,121 @@ func (errorLogExecutor) Execute(_ context.Context, r *pipelineRuntime, _ Pipelin
 		payload = map[string]any{"error": "unknown pipeline error"}
 	}
 	return StageOutcome{Status: "completed", ArtifactType: "error_log", Artifact: payload, Metadata: payload}, nil
+}
+
+type ruleFilterExecutor struct{}
+
+func (ruleFilterExecutor) Execute(_ context.Context, r *pipelineRuntime, stage PipelineStage) (StageOutcome, error) {
+	if len(r.currentArtifacts) == 0 {
+		return StageOutcome{}, errors.New("rule_filter requires an input artifact")
+	}
+	input := r.currentArtifacts[0]
+	payload := input.Payload
+	if rawRule, ok := stage.Config["rule"]; ok {
+		body, err := json.Marshal(rawRule)
+		if err != nil {
+			return StageOutcome{}, err
+		}
+		var rule Rule
+		if err = json.Unmarshal(body, &rule); err != nil {
+			return StageOutcome{}, fmt.Errorf("invalid rule_filter rule: %w", err)
+		}
+		schema := ""
+		if stage.InputContract != nil {
+			schema = stage.InputContract.SchemaJSON
+		}
+		matched, projected, err := EvaluateRuleArtifact(rule, schema, payload)
+		if err != nil {
+			return StageOutcome{}, err
+		}
+		if !matched {
+			projected = emptyFilteredArtifact(input.Type, payload)
+		}
+		payload = projected
+	}
+	if extensions, ok := stringList(stage.Config["include_extensions"]); ok && input.Type == "prepared_diff" {
+		var value struct {
+			Files   []pipelineFile `json:"files"`
+			Ignored int            `json:"ignored"`
+		}
+		if err := decodeArtifactPayload(payload, &value); err != nil {
+			return StageOutcome{}, err
+		}
+		filtered := value.Files[:0]
+		for _, file := range value.Files {
+			for _, extension := range extensions {
+				if strings.HasSuffix(strings.ToLower(file.Path), strings.ToLower(extension)) {
+					filtered = append(filtered, file)
+					break
+				}
+			}
+		}
+		payload = map[string]any{"files": filtered, "ignored": value.Ignored + len(value.Files) - len(filtered)}
+	}
+	return StageOutcome{ArtifactType: input.Type, Artifact: payload}, nil
+}
+
+func emptyFilteredArtifact(artifactType string, payload any) any {
+	if artifactType == "prepared_diff" {
+		return map[string]any{"files": []pipelineFile{}, "ignored": 0}
+	}
+	normalized, _ := normalizeJSON(payload)
+	if _, ok := normalized.([]any); ok {
+		return []any{}
+	}
+	return normalized
+}
+
+func stringList(value any) ([]string, bool) {
+	if value == nil {
+		return nil, false
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var out []string
+	if json.Unmarshal(body, &out) != nil {
+		return nil, false
+	}
+	return out, len(out) > 0
+}
+
+type transformMergeExecutor struct{}
+
+func (transformMergeExecutor) Execute(_ context.Context, r *pipelineRuntime, stage PipelineStage) (StageOutcome, error) {
+	if len(r.currentArtifacts) == 0 {
+		return StageOutcome{}, errors.New("transform_merge requires input artifacts")
+	}
+	merged, err := mergePipelineArtifacts(r.currentArtifacts)
+	if err != nil {
+		return StageOutcome{}, err
+	}
+	operation, _ := stage.Config["operation"].(string)
+	if operation == "" || operation == "identity" || operation == "merge" {
+		return StageOutcome{ArtifactType: merged.Type, Artifact: merged.Payload}, nil
+	}
+	if operation == "dedupe_findings" && merged.Type == "review_findings" {
+		var groups []pipelineGroupReview
+		if err = decodeArtifactPayload(merged.Payload, &groups); err != nil {
+			return StageOutcome{}, err
+		}
+		seen := map[string]bool{}
+		for groupIndex := range groups {
+			findings := groups[groupIndex].Findings[:0]
+			for _, finding := range groups[groupIndex].Findings {
+				key := finding.ID
+				if key == "" {
+					key = fmt.Sprintf("%s:%d:%s", finding.File, finding.Line, finding.Comment)
+				}
+				if !seen[key] {
+					seen[key] = true
+					findings = append(findings, finding)
+				}
+			}
+			groups[groupIndex].Findings = findings
+		}
+		return StageOutcome{ArtifactType: merged.Type, Artifact: groups}, nil
+	}
+	return StageOutcome{}, fmt.Errorf("unsupported transform_merge operation %q", operation)
 }

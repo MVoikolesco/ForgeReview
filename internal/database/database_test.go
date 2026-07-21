@@ -78,3 +78,48 @@ func TestMigrateAndSeed(t *testing.T) {
 		}
 	}
 }
+
+func TestSeedPreservesExistingContractPinsAndUsesV2ForNewStages(t *testing.T) {
+	db, err := Open(config.Config{DatabaseDriver: "sqlite", DatabaseDSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if err = db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.SQL.ExecContext(ctx, `
+		INSERT INTO stage_contracts(key,version,response_instruction,schema_json,semantic_validator_key,is_system)
+		SELECT key,1,response_instruction,schema_json,semantic_validator_key,0 FROM stage_contracts WHERE key='prepared_diff' AND version=2;
+		UPDATE pipeline_stages SET input_contract_id=NULL,
+			output_contract_id=(SELECT id FROM stage_contracts WHERE key='prepared_diff' AND version=1)
+		WHERE id=(SELECT ps.id FROM pipeline_stages ps JOIN stage_types st ON st.id=ps.stage_type_id WHERE st.key='preparation' LIMIT 1);`); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var inputVersion *int
+	var outputVersion int
+	if err = db.SQL.QueryRowContext(ctx, `SELECT ic.version,oc.version FROM pipeline_stages ps
+		JOIN stage_types st ON st.id=ps.stage_type_id
+		LEFT JOIN stage_contracts ic ON ic.id=ps.input_contract_id
+		JOIN stage_contracts oc ON oc.id=ps.output_contract_id
+		WHERE st.key='preparation' LIMIT 1`).Scan(&inputVersion, &outputVersion); err != nil {
+		t.Fatal(err)
+	}
+	if inputVersion != nil || outputVersion != 1 {
+		t.Fatalf("seed changed immutable pins: input=%v output=%d", inputVersion, outputVersion)
+	}
+	var newOutputVersion int
+	if err = db.SQL.QueryRowContext(ctx, `SELECT sc.version FROM stage_types st JOIN stage_contracts sc ON sc.id=st.output_contract_id WHERE st.key='preparation'`).Scan(&newOutputVersion); err != nil {
+		t.Fatal(err)
+	}
+	if newOutputVersion != 2 {
+		t.Fatalf("new stages would not use v2 contract: %d", newOutputVersion)
+	}
+}

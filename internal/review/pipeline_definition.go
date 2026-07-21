@@ -200,8 +200,8 @@ func (r *Repository) loadPipelineVersion(ctx context.Context, versionID int64) (
 		oc.id,oc.key,oc.version,oc.response_instruction,oc.schema_json,oc.semantic_validator_key
 		FROM pipeline_stages ps
 		JOIN stage_types st ON st.id=ps.stage_type_id AND st.is_enabled=1
-		LEFT JOIN stage_contracts ic ON ic.id=st.input_contract_id
-		LEFT JOIN stage_contracts oc ON oc.id=st.output_contract_id
+		LEFT JOIN stage_contracts ic ON ic.id=COALESCE(ps.input_contract_id,st.input_contract_id)
+		LEFT JOIN stage_contracts oc ON oc.id=COALESCE(ps.output_contract_id,st.output_contract_id)
 		WHERE ps.pipeline_version_id=? AND ps.is_enabled=1 ORDER BY ps.position`, versionID)
 	if err != nil {
 		return item, err
@@ -293,7 +293,7 @@ func validatePipelineDefinition(definition PipelineDefinition) error {
 	if len(definition.Stages) == 0 {
 		return errors.New("não possui etapas")
 	}
-	known := map[string]bool{"preparation": true, "planner": true, "reviewer": true, "consolidator": true, "verification": true, "formatting": true, "publication": true, "error_log": true}
+	known := map[string]bool{"preparation": true, "planner": true, "reviewer": true, "consolidator": true, "verification": true, "formatting": true, "publication": true, "error_log": true, "rule_filter": true, "transform_merge": true}
 	counts := map[string]int{}
 	positions := map[string]int{}
 	expectedOutputs := map[string]string{
@@ -322,12 +322,19 @@ func validatePipelineDefinition(definition PipelineDefinition) error {
 		if joinMode == "" {
 			joinMode = "each_arrival"
 		}
-		if joinMode != "each_arrival" {
-			return fmt.Errorf("join mode %q is cataloged but not executable", joinMode)
+		if joinMode != "each_arrival" && joinMode != "any" && joinMode != "wait_all" {
+			return fmt.Errorf("unsupported join mode %q", joinMode)
 		}
 		positions[stage.ExecutorKey] = stage.Position
-		if stage.OutputContract == nil || stage.OutputContract.Key != expectedOutputs[stage.ExecutorKey] {
+		expectedOutput, fixedOutput := expectedOutputs[stage.ExecutorKey]
+		if stage.OutputContract == nil || fixedOutput && stage.OutputContract.Key != expectedOutput {
 			return fmt.Errorf("contrato de saída incompatível na etapa %q", stage.Key)
+		}
+		if (stage.ExecutorKey == "rule_filter" || stage.ExecutorKey == "transform_merge") && (stage.InputContract == nil || stage.InputContract.Key != stage.OutputContract.Key) {
+			return fmt.Errorf("processor %q must preserve its artifact contract", stage.Key)
+		}
+		if err := validateProcessorConfig(stage); err != nil {
+			return fmt.Errorf("processor %q: %w", stage.Key, err)
 		}
 	}
 	for _, required := range []string{"preparation", "verification", "formatting", "publication"} {
@@ -366,6 +373,7 @@ func validatePipelineDefinition(definition PipelineDefinition) error {
 	allowedConditions := map[string]bool{"always": true, "has_findings": true, "no_findings": true, "partial_result": true, "confidence_below_threshold": true}
 	technicalFallbacks := map[string]bool{"error": true, "timeout": true, "contract_invalid": true}
 	adj := map[int64][]int64{}
+	executableAdj := map[int64][]int64{}
 	for _, edge := range definition.Transitions {
 		from, ok := byID[edge.FromStageID]
 		if !ok {
@@ -404,8 +412,8 @@ func validatePipelineDefinition(definition PipelineDefinition) error {
 				return fmt.Errorf("invalid rule from %q: %w", from.Key, err)
 			}
 		}
-		if (edge.Type == "failure" || edge.Type == "fallback") && to.ExecutorKey != "error_log" {
-			return errors.New("transições de erro devem apontar para error_log")
+		if (edge.Type == "failure" || edge.Type == "fallback") && to.ExecutorKey != "error_log" && (from.InputContract == nil || to.InputContract == nil || from.InputContract.Key != to.InputContract.Key) {
+			return errors.New("technical fallback must target error_log or a processor compatible with the original input")
 		}
 		if to.ExecutorKey == "error_log" && (edge.Type == "success" || edge.Type == "skip") {
 			return errors.New("error_log aceita apenas rotas de erro")
@@ -418,12 +426,13 @@ func validatePipelineDefinition(definition PipelineDefinition) error {
 			incoming[to.ID]++
 			outgoing[from.ID] = true
 		}
+		executableAdj[from.ID] = append(executableAdj[from.ID], to.ID)
 	}
 	for _, edge := range definition.Transitions {
-		if edge.ToStageID == nil || edge.Type != "success" && edge.Type != "skip" {
+		if edge.ToStageID == nil || edge.Type == "retry" {
 			continue
 		}
-		if graphReaches(adj, *edge.ToStageID, edge.FromStageID, map[int64]bool{}) && edge.MaxTraversals < 1 {
+		if graphReaches(executableAdj, *edge.ToStageID, edge.FromStageID, map[int64]bool{}) && edge.MaxTraversals < 1 {
 			return fmt.Errorf("cyclic transition %d requires max_traversals", edge.ID)
 		}
 	}
@@ -463,6 +472,48 @@ func validatePipelineDefinition(definition PipelineDefinition) error {
 		}
 		if (stage.ExecutorKey == "preparation" || stage.ExecutorKey == "verification" || stage.ExecutorKey == "formatting" || stage.ExecutorKey == "publication") && !reachable[stage.ID] {
 			return fmt.Errorf("etapa obrigatória %q não é alcançável", stage.Key)
+		}
+	}
+	return nil
+}
+
+func validateProcessorConfig(stage PipelineStage) error {
+	if stage.ExecutorKey != "rule_filter" && stage.ExecutorKey != "transform_merge" {
+		return nil
+	}
+	allowed := map[string]bool{"x": true, "y": true, "input_side": true, "output_side": true}
+	if stage.ExecutorKey == "rule_filter" {
+		allowed["rule"], allowed["include_extensions"] = true, true
+		if raw, ok := stage.Config["rule"]; ok {
+			body, err := json.Marshal(raw)
+			if err != nil {
+				return errors.New("rule must be JSON")
+			}
+			var rule Rule
+			if err = json.Unmarshal(body, &rule); err != nil {
+				return errors.New("rule is invalid")
+			}
+			if err = ValidateRule(rule, stage.InputContract.SchemaJSON); err != nil {
+				return err
+			}
+		}
+		if raw, ok := stage.Config["include_extensions"]; ok {
+			var values []string
+			body, err := json.Marshal(raw)
+			if err != nil || json.Unmarshal(body, &values) != nil || len(values) == 0 {
+				return errors.New("include_extensions must be a non-empty string array")
+			}
+		}
+	} else {
+		allowed["operation"] = true
+		operation, _ := stage.Config["operation"].(string)
+		if operation != "" && operation != "identity" && operation != "merge" && operation != "dedupe_findings" {
+			return fmt.Errorf("unsupported operation %q", operation)
+		}
+	}
+	for key := range stage.Config {
+		if !allowed[key] {
+			return fmt.Errorf("unsupported config field %q", key)
 		}
 	}
 	return nil
@@ -543,7 +594,7 @@ func (r *Repository) recordStageAttempt(ctx context.Context, executionID int64, 
 	return err
 }
 
-func (r *Repository) finishStageExecution(ctx context.Context, executionID, stageExecutionID int64, started time.Time, status, artifactType string, artifact, metadata any, stageErr error, via *PipelineTransition) error {
+func (r *Repository) finishStageExecution(ctx context.Context, executionID, stageExecutionID int64, started time.Time, status, artifactType string, artifact, metadata any, stageErr error, via *PipelineTransition, inputs []pipelineArtifact) (int64, error) {
 	metadataJSON, _ := json.Marshal(metadata)
 	errorText := ""
 	if stageErr != nil {
@@ -553,24 +604,44 @@ func (r *Repository) finishStageExecution(ctx context.Context, executionID, stag
 	if _, err := r.db.ExecContext(ctx, `UPDATE stage_executions SET status=?,artifact_type=?,metadata_json=?,
 		finished_at=?,duration_ms=?,error_message=? WHERE id=?`, status, artifactType, metadataJSON,
 		finished, finished.Sub(started).Milliseconds(), errorText, stageExecutionID); err != nil {
-		return err
+		return 0, err
 	}
 	if artifactType == "" || artifact == nil {
-		return nil
+		return 0, nil
 	}
 	payload, err := json.Marshal(artifact)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var sourceStage, sourceTransition any
 	if via != nil {
 		sourceStage = via.FromStageID
 		sourceTransition = via.ID
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO stage_artifacts(
+	result, err := r.db.ExecContext(ctx, `INSERT INTO stage_artifacts(
 		pipeline_execution_id,stage_execution_id,artifact_type,payload_json,source_stage_id,source_transition_id) VALUES(?,?,?,?,?,?)`,
 		executionID, stageExecutionID, artifactType, payload, sourceStage, sourceTransition)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	artifactID, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	for ordinal, input := range inputs {
+		if input.ID == 0 {
+			continue
+		}
+		inputPayload, marshalErr := json.Marshal(input.Payload)
+		if marshalErr != nil {
+			return 0, marshalErr
+		}
+		sum := sha256.Sum256(inputPayload)
+		if _, err = r.db.ExecContext(ctx, `INSERT INTO stage_artifact_inputs(artifact_id,input_artifact_id,ordinal,input_payload_json,input_payload_hash) VALUES(?,?,?,?,?)`, artifactID, input.ID, ordinal, inputPayload, hex.EncodeToString(sum[:])); err != nil {
+			return 0, err
+		}
+	}
+	return artifactID, nil
 }
 
 // BeginPublication atomically reserves publication and blocks duplicate sends.

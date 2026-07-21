@@ -1,6 +1,9 @@
 package review
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestRuleValidationAndEvaluation(t *testing.T) {
 	schema := `{
@@ -61,5 +64,32 @@ func TestRuleRejectsUnknownSchemaPathInvalidRegexAndPayload(t *testing.T) {
 	_, err := EvaluateRule(Rule{Operator: RuleEquals, Path: "status", Value: "ready"}, schema, map[string]any{})
 	if err == nil {
 		t.Fatal("expected payload missing a required contract field to be rejected")
+	}
+}
+
+func TestRuleProjectsOnlyFiltersFromSuccessfulLogicalBranches(t *testing.T) {
+	schema := `{"type":"object","required":["files","mode"],"properties":{"mode":{"type":"string"},"files":{"type":"array","items":{"type":"object","required":["path"],"properties":{"path":{"type":"string"}}}}}}`
+	payload := map[string]any{"mode": "active", "files": []map[string]any{{"path": "web.tsx"}, {"path": "api.go"}}}
+	tsxFilter := Rule{Operator: RuleExists, Scope: &CollectionScope{Kind: CollectionFilter, Path: "files", Rule: &Rule{Operator: RuleMatches, Path: "path", Value: `\.tsx$`}}, Value: true}
+	goFilter := Rule{Operator: RuleExists, Scope: &CollectionScope{Kind: CollectionFilter, Path: "files", Rule: &Rule{Operator: RuleMatches, Path: "path", Value: `\.go$`}}, Value: true}
+
+	tests := []struct {
+		name string
+		rule Rule
+	}{
+		{name: "nonmatching any branch", rule: Rule{Operator: RuleAny, Rules: []Rule{{Operator: RuleAll, Rules: []Rule{tsxFilter, {Operator: RuleEquals, Path: "mode", Value: "inactive"}}}, goFilter}}},
+		{name: "inverted branch", rule: Rule{Operator: RuleAll, Rules: []Rule{{Operator: RuleNot, Rules: []Rule{{Operator: RuleAll, Rules: []Rule{tsxFilter, {Operator: RuleEquals, Path: "mode", Value: "inactive"}}}}}, goFilter}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			matched, projected, err := EvaluateRuleArtifact(test.rule, schema, payload)
+			if err != nil || !matched {
+				t.Fatalf("rule did not match: matched=%v err=%v", matched, err)
+			}
+			body, _ := json.Marshal(projected)
+			if string(body) != `{"files":[{"path":"api.go"}],"mode":"active"}` {
+				t.Fatalf("inactive filter scope changed projection: %s", body)
+			}
+		})
 	}
 }

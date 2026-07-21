@@ -246,6 +246,37 @@
   margin-left: auto;
 }
 
+.studio-processor-group {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid #2d3a49;
+  border-radius: 6px;
+  background: #101720;
+}
+
+.studio-processor-group header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #c8d5e4;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.studio-processor-group header small,
+.studio-processor-group>small,
+.studio-processor-group p {
+  margin: 0;
+  color: #7f93aa;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.studio-processor-group button:disabled {
+  opacity: .45;
+}
+
 .studio-trigger {
   display: flex;
   align-items: center;
@@ -581,6 +612,15 @@
   stroke-width: 2;
 }
 
+.studio-canvas .studio-business-edge .react-flow__edge-path {
+  stroke-width: 2.2;
+}
+
+.studio-canvas .studio-technical-edge .react-flow__edge-path {
+  stroke: #e25f67 !important;
+  stroke-dasharray: 7 5;
+}
+
 .studio-canvas .react-flow__edge-text {
   fill: #c5d3e1;
   font-size: 10px;
@@ -610,6 +650,59 @@
   display: grid;
   align-content: start;
   gap: 10px;
+}
+
+.studio-processor-config {
+  padding: 9px;
+  border: 1px solid #2f3e4f;
+  border-radius: 6px;
+  background: #101720;
+}
+
+.studio-processor-config>strong,
+.studio-config-group legend {
+  color: #aebed0;
+  font-size: 10px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.studio-config-group {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid #2f3e4f;
+}
+
+.studio-checkbox {
+  display: flex !important;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.studio-checkbox input {
+  width: auto;
+  min-height: 0;
+}
+
+.studio-contract-schema {
+  min-height: 150px !important;
+  color: #9eb1c6 !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 9px !important;
+  white-space: pre;
+}
+
+.studio-edge-kind-note {
+  margin: 0;
+  padding: 8px;
+  border-left: 2px solid #e25f67;
+  color: #c69a9f;
+  font-size: 10px;
+  line-height: 1.4;
+  background: #21161a;
 }
 
 .studio-edge {
