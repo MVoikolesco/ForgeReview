@@ -24,6 +24,18 @@
     justify-content: flex-end;
 }
 
+.error {
+    color: #f0a0ad;
+}
+
+.error small {
+    color: #e87b91;
+}
+
+.error :global(.react-flow__handle) {
+    background: #e87b91 !important;
+}
+
 .port :global(.react-flow__handle) {
     width: 9px;
     height: 9px;

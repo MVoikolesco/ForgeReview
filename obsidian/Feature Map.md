@@ -49,3 +49,12 @@
   rascunho/publicada/arquivada states and permits publication only from a draft.
   Studio has separate draft-save and publish controls; publishing saves the
   visible canvas before calling the version publish endpoint.
+- Generic card error policy: cards support fail, continue, partial, or an
+  explicit typed error route. The Studio exposes the policy and only shows the
+  error handle while route is selected; error paths are distinct on the canvas.
+  `error_control` handles routed typed errors as terminal fail, continue, or a
+   fallback output, including inside loop child scopes.
+- Reusable model profiles: integrations retain provider transport and encrypted
+  credentials; profiles select the model and reference an active LLM connection.
+  Model cards select profiles, and the runner resolves the profile in memory
+  before calling the controlled provider adapter.

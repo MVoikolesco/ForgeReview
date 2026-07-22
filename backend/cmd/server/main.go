@@ -31,13 +31,14 @@ func main() {
 	}
 	defer workflows.Close()
 	adapters := workflow.Adapters{
-		Integrations: workflows,
-		Secrets:      secrets,
-		Gitea:        integration.HTTPGiteaClient{},
-		GiteaWriter:  integration.HTTPGiteaClient{},
-		OpenAI:       integration.HTTPOpenAIClient{},
-		Ollama:       integration.HTTPOllamaClient{},
-		Publications: workflows,
+		Integrations:  workflows,
+		ModelProfiles: workflows,
+		Secrets:       secrets,
+		Gitea:         integration.HTTPGiteaClient{},
+		GiteaWriter:   integration.HTTPGiteaClient{},
+		OpenAI:        integration.HTTPOpenAIClient{},
+		Ollama:        integration.HTTPOllamaClient{},
+		Publications:  workflows,
 	}
 	if redisURL := os.Getenv("FORGEREVIEW_REDIS_URL"); redisURL != "" {
 		queue, queueErr := dispatch.NewRedisQueue(redisURL)

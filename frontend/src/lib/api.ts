@@ -1,6 +1,7 @@
 import type {
   CardType,
   Integration,
+  ModelProfile,
   NewIntegration,
   WorkflowDefinition,
   WorkflowSummary,
@@ -22,6 +23,7 @@ export const normalizeCard = (card: CardType): CardType => ({
   ...card,
   inputs: Array.isArray(card.inputs) ? card.inputs : [],
   outputs: Array.isArray(card.outputs) ? card.outputs : [],
+  error_output: card.error_output,
 });
 
 export const getCards = async () =>
@@ -33,6 +35,13 @@ export const createIntegration = (integration: NewIntegration) =>
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(integration),
+  });
+export const getModelProfiles = () => request<ModelProfile[]>("/api/model-profiles");
+export const createModelProfile = (profile: ModelProfile) =>
+  request<ModelProfile>("/api/model-profiles", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(profile),
   });
 export const saveWorkflow = (definition: WorkflowDefinition) =>
   request<{ version_id: number; status: "draft" }>("/api/workflows", {

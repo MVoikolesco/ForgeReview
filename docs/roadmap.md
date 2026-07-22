@@ -38,6 +38,13 @@ docs/      Arquitetura, auditoria e este roadmap
 - Validação backend de tipo de card, portas existentes e contratos compatíveis.
 - Runner por disponibilidade de entradas obrigatórias, com tokens e relatório
   por nó/escopo.
+- Política de erro por card: `fail` interrompe com erro sanitizado; `continue`
+  registra a falha e não emite saída; `partial` registra execução parcial; e
+  `route` exige uma aresta explícita da porta condicional `error` para uma
+  entrada compatível. A porta só aparece no Studio quando a rota é selecionada.
+- `error_control` aceita somente o token tipado e sanitizado de erro roteado;
+  pode encerrar, concluir a rota, ou emitir `fallback_result`. Roteamentos em
+  loops preservam o escopo filho e podem alimentar a agregação do loop.
 - Estados de execução persistidos: fila, execução, conclusão e falha.
 - Ciclo de vida de versão: rascunho, publicação atômica e arquivamento da
   versão publicada anterior.
@@ -69,6 +76,8 @@ docs/      Arquitetura, auditoria e este roadmap
 ### Integrações e segurança
 
 - Integrações persistidas para Gitea, Ollama e OpenAI-compatible/OpenRouter.
+- Perfis de modelo reutilizáveis separam a seleção de modelo da conexão e de
+  sua credencial. Cada perfil referencia uma conexão LLM registrada e ativa.
 - Tokens/API keys não entram na definição de pipeline nem em respostas HTTP.
 - Cada Token/API key é cifrado com AES-256-GCM antes de persistir em SQLite;
   apenas `secret_configured` é exposto pela API.
@@ -102,6 +111,8 @@ docs/      Arquitetura, auditoria e este roadmap
 - `GET /api/cards`
 - `GET /api/integrations`
 - `POST /api/integrations`
+- `GET /api/model-profiles`
+- `POST /api/model-profiles`
 - `GET /api/workflows`
 - `POST /api/workflows`
 - `GET /api/workflow-versions/:id`
@@ -113,8 +124,6 @@ docs/      Arquitetura, auditoria e este roadmap
 
 ### 1. Completar a primeira pipeline de review
 
-- Completar políticas de erro por card: parar, ignorar, parcial, fallback e rota
-  de erro.
 - Reimplementar a decisão final de review, comentários inline e publicação de
   review no Gitea a partir das regras maduras da POC.
 - Criar pipeline seed oficial versionada para o fluxo de review.
@@ -137,7 +146,6 @@ docs/      Arquitetura, auditoria e este roadmap
 - Catálogo de modelos por provider e seleção em vez de entrada textual livre.
 - Parâmetros por card de modelo: temperatura, top-p, tokens, timeout,
   keep-alive, fallback e limites de custo.
-- Separar configurações reutilizáveis de modelo das conexões de provider.
 
 ### 4. Execução durável e observabilidade
 
@@ -162,7 +170,7 @@ docs/      Arquitetura, auditoria e este roadmap
 - Transformações declarativas e variáveis com namespaces controlados.
 - Subpipelines (`workflow`) com interfaces de entrada/saída publicadas.
 - Cache com TTL e invalidação.
-- Controle de erro avançado, joins `any`/`all` e ramos condicionais múltiplos.
+- Joins `any`/`all` e ramos condicionais múltiplos.
 - Novos adaptadores: GitHub, GitLab, Gemini, Groq e outros providers
   OpenAI-compatible, sempre registrados no backend.
 

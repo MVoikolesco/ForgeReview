@@ -106,3 +106,25 @@ capped at 60 seconds. Each retry is revalidated and cannot schedule another
 graph traversal, so an exhausted limit preserves `validate.invalid` routing.
 Attempt metadata contains counts and statuses only, avoiding new persistence of
 prompt, response, or secret plaintext. See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-22: Explicit, sanitized graph error routes
+
+All executable cards use `on_error` with `fail`, `continue`, `partial`, or
+`route`; a route is valid only through its declared `error` output edge, never
+by a destination node key in configuration. The runner records a stable
+`execution_failed` code, selected action, and scope in node-run metadata while
+omitting the underlying provider error. The routed `ErrorToken` preserves the
+current root or loop-child scope. `error_control` is intentionally separate: its
+`on_error` chooses terminal fail, continue, or a required fallback result.
+This keeps recovery visible and type-checked without exposing provider bodies
+or credentials. See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-22: Reusable model profiles separate from connections
+
+An LLM integration now represents a credential-bearing provider connection, not
+a single model choice. SQLite `model_profiles` records a safe reusable model
+selection tied to an OpenAI-compatible or Ollama connection. The runner resolves
+an active profile and active integration, then supplies the profile model only in
+the in-memory provider configuration. This avoids duplicating credentials for
+each model while preserving execution of prior workflow versions that reference
+an integration directly. See [[Architecture]] and [[Feature Map]].

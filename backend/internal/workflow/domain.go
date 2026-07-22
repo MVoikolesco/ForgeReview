@@ -23,6 +23,9 @@ type CardType struct {
 	Description string `json:"description"`
 	Inputs      []Port `json:"inputs"`
 	Outputs     []Port `json:"outputs"`
+	// ErrorOutput is an opt-in output: it is usable only when a node selects
+	// config.on_error="route", so ordinary cards do not gain a permanent port.
+	ErrorOutput *Port `json:"error_output,omitempty"`
 }
 
 type Node struct {
@@ -87,6 +90,13 @@ func Validate(definition Definition, catalog Catalog) error {
 		if _, ok := catalog.Get(node.Type); !ok {
 			return fmt.Errorf("node %q uses unknown card type %q", node.Key, node.Type)
 		}
+		if node.Type == "error_control" {
+			if _, err := errorControlSettingsFor(node); err != nil {
+				return err
+			}
+		} else if _, err := errorPolicyFor(node); err != nil {
+			return err
+		}
 		if node.Type == "loop" {
 			if _, err := loopSettingsFor(node); err != nil {
 				return err
@@ -95,6 +105,11 @@ func Validate(definition Definition, catalog Catalog) error {
 		if node.Type == "model" {
 			if _, err := modelSettingsFor(node); err != nil {
 				return err
+			}
+			if _, profile := node.Config["model_profile"].(string); !profile {
+				if _, legacy := node.Config["integration"].(string); !legacy {
+					return fmt.Errorf("model card %q requires config.model_profile", node.Key)
+				}
 			}
 		}
 		nodes[node.Key] = node
@@ -108,12 +123,29 @@ func Validate(definition Definition, catalog Catalog) error {
 		fromType, _ := catalog.Get(from.Type)
 		toType, _ := catalog.Get(to.Type)
 		output, outputOK := port(fromType.Outputs, edge.FromPort)
+		if !outputOK && edge.FromPort == "error" && fromType.ErrorOutput != nil && errorPolicyForNode(from) == "route" {
+			output, outputOK = *fromType.ErrorOutput, true
+		}
 		input, inputOK := port(toType.Inputs, edge.ToPort)
 		if !outputOK || !inputOK {
 			return fmt.Errorf("edge %q references an unknown port", edge.Key)
 		}
 		if output.Contract != "any" && input.Contract != "any" && output.Contract != input.Contract {
 			return fmt.Errorf("edge %q connects incompatible contracts", edge.Key)
+		}
+	}
+	for _, node := range definition.Nodes {
+		if node.Type != "error_control" && errorPolicyForNode(node) == "route" {
+			hasRoute := false
+			for _, edge := range definition.Edges {
+				if edge.FromNode == node.Key && edge.FromPort == "error" {
+					hasRoute = true
+					break
+				}
+			}
+			if !hasRoute {
+				return fmt.Errorf("node %q config.on_error \"route\" requires an explicit error edge", node.Key)
+			}
 		}
 	}
 	return nil

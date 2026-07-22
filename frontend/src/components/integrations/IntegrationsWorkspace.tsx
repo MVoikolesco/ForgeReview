@@ -3,19 +3,22 @@
 import { Braces, Plus } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { getIntegrations } from "../../lib/api";
-import type { Integration } from "../../lib/types";
+import { getIntegrations, getModelProfiles } from "../../lib/api";
+import type { Integration, ModelProfile } from "../../lib/types";
 import { ConnectionWizard } from "./ConnectionWizard";
 import { IntegrationList } from "./IntegrationList";
 import styles from "./IntegrationsWorkspace.module.scss";
 
 export function IntegrationsWorkspace() {
   const [items, setItems] = useState<Integration[]>([]);
+  const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [showWizard, setShowWizard] = useState(false);
   const [message, setMessage] = useState("Carregando conexões...");
   const load = async () => {
     try {
-      setItems(await getIntegrations());
+      const [connections, modelProfiles] = await Promise.all([getIntegrations(), getModelProfiles()]);
+      setItems(connections);
+      setProfiles(modelProfiles);
       setMessage("");
     } catch {
       setMessage("Não foi possível carregar as integrações.");
@@ -54,7 +57,7 @@ export function IntegrationsWorkspace() {
             {message}
           </p>
         ) : (
-          <IntegrationList items={items} />
+            <IntegrationList items={items} profiles={profiles} />
         )}
       </section>
       {showWizard && (
@@ -63,6 +66,7 @@ export function IntegrationsWorkspace() {
           onClose={() => setShowWizard(false)}
           onCreated={(item) => {
             setItems((all) => [...all, item]);
+            void load();
             setMessage("");
           }}
         />

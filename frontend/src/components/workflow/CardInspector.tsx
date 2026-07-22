@@ -1,14 +1,18 @@
-import type { CardData, Integration } from "../../lib/types";
+import type { CardData, Integration, ModelProfile } from "../../lib/types";
 import { configList, configNumber, configText } from "../../lib/workflow";
 import styles from "./CardInspector.module.scss";
 
 export function CardInspector({
   selected,
   integrations,
+  modelProfiles,
+  hasErrorRoute,
   onChange,
 }: {
   selected: CardData;
   integrations: Integration[];
+  modelProfiles: ModelProfile[];
+  hasErrorRoute: boolean;
   onChange: (patch: Partial<CardData>) => void;
 }) {
   const updateConfig = (key: string, value: unknown) =>
@@ -16,21 +20,21 @@ export function CardInspector({
   const gitea = integrations.filter(
     (item) => item.type === "gitea" && item.status === "active",
   );
-  const models = integrations.filter(
-    (item) => item.type !== "gitea" && item.status === "active",
-  );
+  const models = modelProfiles.filter((item) => item.status === "active");
   const connectionFields = (
     <label>
-      Integração
+      {selected.type === "model" ? "Perfil de modelo" : "Integração"}
       <select
-        value={configText(selected.config.integration)}
-        onChange={(event) => updateConfig("integration", event.target.value)}
+        value={configText(selected.config[selected.type === "model" ? "model_profile" : "integration"])}
+        onChange={(event) =>
+          updateConfig(selected.type === "model" ? "model_profile" : "integration", event.target.value)
+        }
       >
-        <option value="">Selecione uma conexão</option>
+        <option value="">{selected.type === "model" ? "Selecione um perfil" : "Selecione uma conexão"}</option>
         {(selected.type === "model" ? models : gitea).map((item) => (
           <option key={item.key} value={item.key}>
             {item.name}
-            {item.type !== "gitea" ? ` · ${item.config.model}` : ""}
+            {selected.type === "model" && "model" in item ? ` · ${item.model}` : ""}
           </option>
         ))}
       </select>
@@ -87,7 +91,7 @@ export function CardInspector({
         <dd>{selected.type}</dd>
         <dt>Portas</dt>
         <dd>
-          {selected.inputs.length} entrada(s) · {selected.outputs.length}{" "}
+          {selected.inputs.length} entrada(s) · {selected.outputs.length + (selected.config.on_error === "route" && selected.errorOutput ? 1 : 0)}{" "}
           saída(s)
         </dd>
       </dl>
@@ -233,23 +237,36 @@ export function CardInspector({
                 ordem e a rastreabilidade dos resultados.
               </small>
             </label>
-            <label>
-              Ao falhar uma iteração
-              <select
-                value={configText(selected.config.on_error) || "fail"}
-                onChange={(event) =>
-                  updateConfig("on_error", event.target.value)
-                }
-              >
-                <option value="fail">Interromper workflow</option>
-                <option value="partial">Continuar com resultados parciais</option>
-              </select>
-            </label>
             <p>
               Use <code>item</code> para os cards do grupo e conecte apenas
               <code>results</code> ao consolidar. Assim consolidar, formatar e
               publicar executam uma vez no escopo raiz.
             </p>
+          </>
+        )}
+        {selected.type === "error_control" && (
+          <>
+            <label>
+              Ao receber erro roteado
+              <select
+                value={configText(selected.config.on_error) || "continue"}
+                onChange={(event) => updateConfig("on_error", event.target.value)}
+              >
+                <option value="fail">Encerrar workflow</option>
+                <option value="continue">Encerrar rota e continuar</option>
+                <option value="fallback">Emitir resultado de fallback</option>
+              </select>
+            </label>
+            {configText(selected.config.on_error) === "fallback" && (
+              <label>
+                Resultado de fallback
+                <input
+                  value={configText(selected.config.fallback_result)}
+                  onChange={(event) => updateConfig("fallback_result", event.target.value)}
+                  placeholder="Resultado seguro"
+                />
+              </label>
+            )}
           </>
         )}
         {selected.type === "condition" && (
@@ -301,10 +318,35 @@ export function CardInspector({
           "condition",
           "validate",
           "response_filter",
+          "error_control",
         ].includes(selected.type) && (
           <p>Este card não possui parâmetros obrigatórios nesta fase.</p>
         )}
       </section>
+      {selected.type !== "error_control" && selected.errorOutput && (
+        <section className={styles.errorPolicy}>
+          <strong>Política de erro</strong>
+          <label>
+            Ao falhar
+            <select
+              value={configText(selected.config.on_error) || "fail"}
+              onChange={(event) => updateConfig("on_error", event.target.value)}
+            >
+              <option value="fail">Interromper workflow</option>
+              <option value="continue">Continuar sem saída</option>
+              <option value="partial">Continuar parcialmente</option>
+              <option value="route">Rotear para porta Erro</option>
+            </select>
+          </label>
+          {configText(selected.config.on_error) === "route" && (
+            <p className={hasErrorRoute ? styles.valid : styles.invalid}>
+              {hasErrorRoute
+                ? "A rota Erro está conectada a uma porta tipada."
+                : "Conecte a nova porta Erro a uma entrada compatível do grafo antes de salvar."}
+            </p>
+          )}
+        </section>
+      )}
       <p className={styles.note}>
         O backend valida cada conexão e configuração antes de executar uma
         versão.

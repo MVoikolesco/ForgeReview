@@ -12,6 +12,7 @@ import (
 )
 
 type memoryIntegrations map[string]integration.Integration
+type memoryModelProfiles map[string]integration.ModelProfile
 
 const workflowTestEncryptionKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
@@ -40,6 +41,14 @@ func (items memoryIntegrations) Integration(_ context.Context, key string) (inte
 		return integration.Integration{}, errors.New("not found")
 	}
 	return item, nil
+}
+
+func (profiles memoryModelProfiles) ModelProfile(_ context.Context, key string) (integration.ModelProfile, error) {
+	profile, ok := profiles[key]
+	if !ok {
+		return integration.ModelProfile{}, errors.New("not found")
+	}
+	return profile, nil
 }
 
 func TestRunExecutesReadyNodesAndRoutesTokens(t *testing.T) {
@@ -142,11 +151,88 @@ func TestRunLoopRejectsItemsAboveConfiguredMaximum(t *testing.T) {
 		{Key: "loop", Type: "loop", Name: "Loop", Config: map[string]any{"max_iterations": 1}},
 	}, Edges: []Edge{{Key: "items", FromNode: "start", FromPort: "event", ToNode: "loop", ToPort: "items"}}}
 	report, err := Run(context.Background(), definition, DefaultCatalog(), nil)
-	if err == nil || err.Error() != `loop card "loop" received 2 items, exceeding config.max_iterations 1` {
+	if err == nil || err.Error() != `card "loop" execution failed` {
 		t.Fatalf("loop limit error = %v", err)
 	}
 	if report.Status != "failed" || len(report.Runs) != 2 || report.Runs[1].ScopeKey != "root" {
 		t.Fatalf("loop limit report = %#v", report)
+	}
+}
+
+func TestRunAppliesGenericErrorPoliciesWithoutLeakingExecutionDetails(t *testing.T) {
+	base := func(policy string) Definition {
+		return Definition{Key: policy, Name: policy, Nodes: []Node{
+			{Key: "start", Type: "trigger", Name: "Start"},
+			{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"on_error": policy}},
+		}, Edges: []Edge{{Key: "context", FromNode: "start", FromPort: "event", ToNode: "template", ToPort: "context"}}}
+	}
+	t.Run("fail", func(t *testing.T) {
+		report, err := Run(context.Background(), base("fail"), DefaultCatalog(), nil)
+		if err == nil || err.Error() != `card "template" execution failed` || report.Status != "failed" {
+			t.Fatalf("fail policy = %#v, %v", report, err)
+		}
+		run := nodeRunFor(t, report, "template", "root")
+		if run.Error != "execution failed" || run.Metadata["error_code"] != "execution_failed" || run.Metadata["error_scope"] != "root" {
+			t.Fatalf("unsafe failure report = %#v", run)
+		}
+	})
+	t.Run("continue", func(t *testing.T) {
+		report, err := Run(context.Background(), base("continue"), DefaultCatalog(), nil)
+		if err != nil || report.Status != "completed" {
+			t.Fatalf("continue policy = %#v, %v", report, err)
+		}
+		run := nodeRunFor(t, report, "template", "root")
+		if run.Status != "failed" || run.Metadata["error_action"] != "continued" {
+			t.Fatalf("continue run = %#v", run)
+		}
+	})
+}
+
+func TestRunRoutesTypedErrorToFallback(t *testing.T) {
+	definition := Definition{Key: "routed", Name: "Routed", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start"},
+		{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"on_error": "route"}},
+		{Key: "control", Type: "error_control", Name: "Control", Config: map[string]any{"on_error": "fallback", "fallback_result": "safe result"}},
+	}, Edges: []Edge{
+		{Key: "context", FromNode: "start", FromPort: "event", ToNode: "template", ToPort: "context"},
+		{Key: "error", FromNode: "template", FromPort: "error", ToNode: "control", ToPort: "error"},
+	}}
+	report, err := Run(context.Background(), definition, DefaultCatalog(), nil)
+	if err != nil || report.Status != "completed" {
+		t.Fatalf("routed fallback = %#v, %v", report, err)
+	}
+	template := nodeRunFor(t, report, "template", "root")
+	if template.Metadata["error_action"] != "routed" || template.Metadata["error_scope"] != "root" || template.Outputs[0].Value.(ErrorToken).ScopeKey != "root" {
+		t.Fatalf("routed token = %#v", template)
+	}
+	if got := outputFor(t, report, "control", "recovered"); got != "safe result" {
+		t.Fatalf("fallback output = %#v", got)
+	}
+}
+
+func TestRunRoutesFallbackInsideLoopScope(t *testing.T) {
+	definition := Definition{Key: "scoped-route", Name: "Scoped route", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": []any{"one", "two"}}},
+		{Key: "loop", Type: "loop", Name: "Loop", Config: map[string]any{"max_iterations": 2}},
+		{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"on_error": "route"}},
+		{Key: "control", Type: "error_control", Name: "Control", Config: map[string]any{"on_error": "fallback", "fallback_result": "fallback"}},
+	}, Edges: []Edge{
+		{Key: "items", FromNode: "start", FromPort: "event", ToNode: "loop", ToPort: "items"},
+		{Key: "context", FromNode: "loop", FromPort: "item", ToNode: "template", ToPort: "context"},
+		{Key: "error", FromNode: "template", FromPort: "error", ToNode: "control", ToPort: "error"},
+	}}
+	report, err := Run(context.Background(), definition, DefaultCatalog(), nil)
+	if err != nil || report.Status != "completed" {
+		t.Fatalf("scoped fallback = %#v, %v", report, err)
+	}
+	if scopes := nodeScopes(report, "control"); len(scopes) != 2 || scopes[0] != "loop:000001" || scopes[1] != "loop:000002" {
+		t.Fatalf("fallback scopes = %#v", report.Runs)
+	}
+	if run := nodeRunFor(t, report, "template", "loop:000001"); run.Metadata["error_scope"] != "loop:000001" {
+		t.Fatalf("scoped error metadata = %#v", run.Metadata)
+	}
+	if results := outputFor(t, report, "loop", "results").([]any); len(results) != 2 || results[0] != "fallback" || results[1] != "fallback" {
+		t.Fatalf("scoped fallback results = %#v", results)
 	}
 }
 
@@ -241,19 +327,23 @@ func TestRunWithAdaptersExecutesFetchAndModelCards(t *testing.T) {
 				http.NotFound(writer, request)
 				return
 			}
+			var payload map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload["model"] != "reviewer" {
+				t.Fatalf("model profile payload = %#v, %v", payload, err)
+			}
 			_, _ = writer.Write([]byte(`{"choices":[{"message":{"content":"review complete"}}]}`))
 		}))
 		defer server.Close()
-		config, _ := json.Marshal(map[string]string{"base_url": server.URL, "model": "reviewer"})
+		config, _ := json.Marshal(map[string]string{"base_url": server.URL})
 		definition := Definition{Key: "model", Name: "Model", Nodes: []Node{
 			{Key: "start", Type: "trigger", Name: "Start"},
 			{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"template": "review this"}},
-			{Key: "model", Type: "model", Name: "Model", Config: map[string]any{"integration": "openai"}},
+			{Key: "model", Type: "model", Name: "Model", Config: map[string]any{"model_profile": "reviewer"}},
 		}, Edges: []Edge{
 			{Key: "context", FromNode: "start", FromPort: "event", ToNode: "template", ToPort: "context"},
 			{Key: "prompt", FromNode: "template", FromPort: "prompt", ToNode: "model", ToPort: "prompt"},
 		}}
-		adapters := Adapters{Integrations: memoryIntegrations{"openai": encryptedIntegration(t, integration.Integration{Key: "openai", Name: "OpenAI", Type: integration.TypeOpenAI, Config: config, Status: integration.StatusActive}, "secret")}, Secrets: testSecrets(t), OpenAI: integration.HTTPOpenAIClient{Client: server.Client()}}
+		adapters := Adapters{Integrations: memoryIntegrations{"openai": encryptedIntegration(t, integration.Integration{Key: "openai", Name: "OpenAI", Type: integration.TypeOpenAI, Config: config, Status: integration.StatusActive}, "secret")}, ModelProfiles: memoryModelProfiles{"reviewer": {Key: "reviewer", Name: "Reviewer", IntegrationKey: "openai", Model: "reviewer", Status: integration.StatusActive}}, Secrets: testSecrets(t), OpenAI: integration.HTTPOpenAIClient{Client: server.Client()}}
 		report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, adapters)
 		if err != nil {
 			t.Fatalf("run model: %v", err)
@@ -267,7 +357,7 @@ func TestRunWithAdaptersExecutesFetchAndModelCards(t *testing.T) {
 func TestRunFetchRequiresConfiguredIntegration(t *testing.T) {
 	definition := Definition{Key: "fetch", Name: "Fetch", Nodes: []Node{{Key: "start", Type: "trigger", Name: "Start"}, {Key: "fetch", Type: "fetch", Name: "Fetch"}}, Edges: []Edge{{Key: "event", FromNode: "start", FromPort: "event", ToNode: "fetch", ToPort: "event"}}}
 	_, err := Run(context.Background(), definition, DefaultCatalog(), nil)
-	if err == nil || err.Error() != `fetch card "fetch" requires config.integration` {
+	if err == nil || err.Error() != `card "fetch" execution failed` {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

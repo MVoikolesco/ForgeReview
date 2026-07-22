@@ -66,6 +66,8 @@ func (i Integration) Validate() error {
 		return fmt.Errorf("integration config must be a JSON object")
 	}
 	allowed := map[string]bool{"base_url": true}
+	// model remains accepted for workflow versions saved before model profiles.
+	// New connections keep provider transport separate from model selection.
 	if i.Type == TypeOpenAI || i.Type == TypeOllama {
 		allowed["model"] = true
 	}
@@ -78,9 +80,6 @@ func (i Integration) Validate() error {
 	parsed, err := url.ParseRequestURI(baseURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return fmt.Errorf("integration config.base_url must be an absolute URL without credentials")
-	}
-	if (i.Type == TypeOpenAI || i.Type == TypeOllama) && strings.TrimSpace(config["model"]) == "" {
-		return fmt.Errorf("integration config.model is required")
 	}
 	return nil
 }
@@ -95,6 +94,30 @@ func (i Integration) ConfigValues() (map[string]string, error) {
 
 type Lookup interface {
 	Integration(context.Context, string) (Integration, error)
+}
+
+// ModelProfile is a reusable model selection over a credential-bearing LLM
+// integration. It intentionally contains no transport details or secrets.
+type ModelProfile struct {
+	Key            string `json:"key"`
+	Name           string `json:"name"`
+	IntegrationKey string `json:"integration_key"`
+	Model          string `json:"model"`
+	Status         string `json:"status"`
+}
+
+func (p ModelProfile) Validate() error {
+	if strings.TrimSpace(p.Key) == "" || strings.TrimSpace(p.Name) == "" || strings.TrimSpace(p.IntegrationKey) == "" || strings.TrimSpace(p.Model) == "" {
+		return fmt.Errorf("model profile key, name, integration_key, and model are required")
+	}
+	if p.Status != StatusActive && p.Status != StatusDisabled {
+		return fmt.Errorf("model profile status must be %q or %q", StatusActive, StatusDisabled)
+	}
+	return nil
+}
+
+type ModelProfileLookup interface {
+	ModelProfile(context.Context, string) (ModelProfile, error)
 }
 
 // SecretManager encrypts one-time API input and decrypts it only immediately

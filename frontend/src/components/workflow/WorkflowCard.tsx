@@ -1,6 +1,6 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import type { CardData } from "../../lib/types";
-import { categoryAccent } from "../../lib/workflow";
+import { cardOutputPorts, categoryAccent } from "../../lib/workflow";
 import { BaseCardShell } from "./BaseCardShell";
 import styles from "./WorkflowCard.module.scss";
 
@@ -24,8 +24,8 @@ export function WorkflowCard({ data }: NodeProps) {
           <small>{port.contract}</small>
         </div>
       ))}
-      {card.outputs.map((port) => (
-        <div className={`${styles.port} ${styles.output}`} key={port.key}>
+      {cardOutputPorts(card).map((port) => (
+        <div className={`${styles.port} ${styles.output} ${port.key === "error" ? styles.error : ""}`} key={port.key}>
           <small>{port.contract}</small>
           <span>{port.label}</span>
           <Handle

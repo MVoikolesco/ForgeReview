@@ -2,6 +2,15 @@
 
 ## 2026-07-22
 
+- Added persisted reusable model profiles, safe list/create APIs, Studio profile
+  selection, and provider-resolution coverage. Provider connections now retain
+  encrypted credentials and transport settings independently from model choice;
+  existing workflow versions using an integration remain runnable. See
+  [[Architecture]] and [[Decision Log]].
+- Added generic per-card error policies, explicit typed error edges, sanitized
+  node-run error metadata, and scoped loop fallback handling. The Studio now
+  configures and validates error routing, displays conditional error ports, and
+  distinguishes error edges. See [[Architecture]] and [[Decision Log]].
 - Added bounded corrective retries from direct model output validation in the
   backend runner and model-card Inspector. Retries preserve root/loop-child
   scope, report sanitized attempt metadata, and retain the invalid route once

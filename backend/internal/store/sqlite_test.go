@@ -135,6 +135,27 @@ func TestIntegrationPersistsOnlyCiphertextAndMigratesLegacyReferences(t *testing
 	}
 }
 
+func TestModelProfileRequiresAnLLMConnection(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/profiles.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	config := json.RawMessage(`{"base_url":"https://models.example"}`)
+	item := encryptedStoreIntegration(t, integration.Integration{Key: "models", Name: "Models", Type: integration.TypeOpenAI, Config: config, Status: integration.StatusActive}, "secret")
+	if err = database.CreateIntegration(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	profile := integration.ModelProfile{Key: "reviewer", Name: "Reviewer", IntegrationKey: "models", Model: "qwen2.5-coder", Status: integration.StatusActive}
+	if err = database.CreateModelProfile(context.Background(), profile); err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := database.ModelProfiles(context.Background())
+	if err != nil || len(profiles) != 1 || profiles[0] != profile {
+		t.Fatalf("profiles = %#v, %v", profiles, err)
+	}
+}
+
 func TestOpenMigratesLegacyIntegrationReferencesWithoutRetainingThem(t *testing.T) {
 	path := "file:" + t.TempDir() + "/legacy-integrations.db"
 	legacy, err := sql.Open("sqlite", path)

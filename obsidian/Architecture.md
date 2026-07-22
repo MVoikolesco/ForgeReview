@@ -37,6 +37,14 @@ key, and child scope when present; duplicate completed or pending attempts do
 not post again. Attempts have `pending`, `completed`, and `retryable` states.
 See [[Decision Log]].
 
+LLM provider connections store only transport configuration and encrypted
+credentials. `model_profiles` stores a reusable model name plus the key of its
+OpenAI-compatible or Ollama connection. At execution, the runner resolves both
+active records and derives the provider request configuration in memory; neither
+profiles nor workflow definitions contain credentials. Legacy workflow versions
+using `config.integration` on a model card remain executable. See [[Decision Log]]
+and [[Feature Map]].
+
 The runner carries `root` or child scope keys on tokens and node reports. A
 `loop` consumes a list or `group.groups`, creates deterministic sequential child
 scopes (`<loop-key>:000001`), and keeps downstream `loop.item` tokens in that
@@ -69,3 +77,11 @@ cards use a shared card shell, and the
 connection flow uses a shared modal shell. Styling is colocated SCSS modules
 backed by `src/styles` tokens, themes, globals, and mixins. See [[Decision Log]]
 and [[Feature Map]].
+
+Every card except `error_control` has a conditional `error` output contract in
+the catalog. It is enabled only by `config.on_error: "route"`, which must have
+an explicit typed graph edge; it is therefore not rendered on ordinary cards.
+The runner emits a scope-preserving `ErrorToken` with only a stable code, node,
+and scope—not provider messages, bodies, prompts, or secrets. `error_control`
+accepts that token and can fail terminally, continue, or emit a configured
+fallback result. See [[Decision Log]] and [[Feature Map]].

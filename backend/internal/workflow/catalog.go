@@ -28,7 +28,7 @@ func DefaultCatalog() Catalog {
 	}
 	out := func(key, label, contract string) Port { return Port{Key: key, Label: label, Contract: contract} }
 	card := func(key, name, category, description string, inputs, outputs []Port) CardType {
-		return CardType{Key: key, Name: name, Category: category, Description: description, Inputs: inputs, Outputs: outputs}
+		return CardType{Key: key, Name: name, Category: category, Description: description, Inputs: inputs, Outputs: outputs, ErrorOutput: &Port{Key: "error", Label: "Erro", Contract: "error"}}
 	}
 	return NewCatalog(
 		card("trigger", "Trigger", "Entradas", "Inicia uma execução por evento, API, agenda ou ação manual.", nil, []Port{out("event", "Evento", "event")}),
@@ -50,6 +50,6 @@ func DefaultCatalog() Catalog {
 		card("publish", "Publicar no Gitea", "Saída", "Publica uma revisão formatada por uma integração Gitea ativa, com idempotência durável.", []Port{in("formatted_review", "Review formatada", "formatted_review", true)}, []Port{out("receipt", "Comprovante", "publication")}),
 		card("log", "Log", "Infraestrutura", "Registra dados sanitizados para observabilidade.", []Port{in("input", "Entrada", "any", false)}, []Port{out("output", "Saída", "any")}),
 		card("cache", "Cache", "Infraestrutura", "Lê ou grava dados efêmeros por uma chave configurada.", []Port{in("value", "Valor", "any", false)}, []Port{out("value", "Valor", "any")}),
-		card("error_control", "Controle de erro", "Infraestrutura", "Aplica política avançada de retry, fallback ou encerramento.", []Port{in("error", "Erro", "error", true)}, []Port{out("recovered", "Recuperado", "any"), out("failed", "Falha", "error")}),
+		CardType{Key: "error_control", Name: "Controle de erro", Category: "Infraestrutura", Description: "Recebe um erro roteado e encerra, continua ou produz um fallback.", Inputs: []Port{in("error", "Erro", "error", true)}, Outputs: []Port{out("recovered", "Resultado de fallback", "any")}},
 	)
 }

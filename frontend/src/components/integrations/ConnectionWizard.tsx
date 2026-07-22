@@ -11,7 +11,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useState } from "react";
-import { createIntegration } from "../../lib/api";
+import { createIntegration, createModelProfile } from "../../lib/api";
 import type { Integration } from "../../lib/types";
 import { ModalShell } from "../common/ModalShell";
 import styles from "./ConnectionWizard.module.scss";
@@ -86,8 +86,17 @@ export function ConnectionWizard({
         type,
         status: "active",
         secret,
-        config: { base_url: baseURL, ...(family === "llm" ? { model } : {}) },
+        config: { base_url: baseURL },
       });
+      if (family === "llm") {
+        await createModelProfile({
+          key: `${key}-profile`,
+          name: `${name} · ${model}`,
+          integration_key: integration.key,
+          model,
+          status: "active",
+        });
+      }
       onCreated(integration);
       setSecret("");
       onClose();
@@ -150,7 +159,7 @@ export function ConnectionWizard({
         description={
           family === "gitea"
             ? "Gitea fornece o contexto do pull request e recebe a publicação."
-            : "Modelos são reutilizáveis em qualquer card de IA."
+              : "A conexão protege o acesso; o modelo será salvo como perfil reutilizável."
         }
         onClose={onClose}
         footer={
@@ -314,8 +323,7 @@ export function ConnectionWizard({
                     }
                   />
                   <small>
-                    Esse modelo aparecerá como opção reutilizável nos cards de
-                    IA.
+                    Esse modelo será criado como um perfil reutilizável nos cards de IA.
                   </small>
                 </label>
               ) : (

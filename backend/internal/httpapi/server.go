@@ -78,6 +78,28 @@ func New(catalog workflow.Catalog, workflows *store.SQLite, adapterSets ...workf
 		}
 		c.JSON(http.StatusOK, summaries)
 	})
+	api.POST("/model-profiles", func(c *gin.Context) {
+		var profile integration.ModelProfile
+		decoder := json.NewDecoder(c.Request.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&profile); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := workflows.CreateModelProfile(c.Request.Context(), profile); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusCreated, profile)
+	})
+	api.GET("/model-profiles", func(c *gin.Context) {
+		profiles, err := workflows.ModelProfiles(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not list model profiles"})
+			return
+		}
+		c.JSON(http.StatusOK, profiles)
+	})
 	api.POST("/workflows", func(c *gin.Context) {
 		var definition workflow.Definition
 		if err := c.ShouldBindJSON(&definition); err != nil {

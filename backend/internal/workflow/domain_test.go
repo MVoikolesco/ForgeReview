@@ -47,3 +47,15 @@ func TestValidateBoundsModelCorrectiveRetryConfiguration(t *testing.T) {
 		t.Fatalf("retry delay validation error = %v", err)
 	}
 }
+
+func TestValidateRequiresExplicitTypedErrorRoute(t *testing.T) {
+	definition := Definition{Key: "errors", Name: "Errors", Nodes: []Node{{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"on_error": "route"}}}}
+	if err := Validate(definition, DefaultCatalog()); err == nil || err.Error() != `node "template" config.on_error "route" requires an explicit error edge` {
+		t.Fatalf("route validation error = %v", err)
+	}
+	definition.Nodes = append(definition.Nodes, Node{Key: "control", Type: "error_control", Name: "Control"})
+	definition.Edges = []Edge{{Key: "error", FromNode: "template", FromPort: "error", ToNode: "control", ToPort: "error"}}
+	if err := Validate(definition, DefaultCatalog()); err != nil {
+		t.Fatalf("explicit typed route should validate: %v", err)
+	}
+}

@@ -37,11 +37,22 @@ export function WorkflowCanvas({
   onConnect,
   onSelect,
 }: WorkflowCanvasProps) {
+  const visibleEdges = edges.map((edge) =>
+    edge.sourceHandle === "out-error"
+      ? {
+          ...edge,
+          animated: true,
+          label: "erro",
+          style: { stroke: "#e87b91", strokeDasharray: "5 4" },
+          labelStyle: { fill: "#e87b91", fontSize: 10 },
+        }
+      : edge,
+  );
   return (
     <section className={styles.canvas} aria-label="Canvas do workflow">
       <ReactFlow
         nodes={nodes}
-        edges={edges}
+        edges={visibleEdges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}

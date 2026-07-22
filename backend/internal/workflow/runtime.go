@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -16,6 +17,14 @@ type Token struct {
 	Contract string `json:"contract"`
 	ScopeKey string `json:"scope_key"`
 	Value    any    `json:"value"`
+}
+
+// ErrorToken intentionally carries only stable execution context. It never
+// includes provider bodies, prompts, credentials, or an underlying error text.
+type ErrorToken struct {
+	Code     string `json:"code"`
+	NodeKey  string `json:"node_key"`
+	ScopeKey string `json:"scope_key"`
 }
 
 type NodeRun struct {
@@ -45,15 +54,16 @@ type Execution struct {
 // Adapters are the explicit boundary for controlled external card execution.
 // A nil field leaves its card type unavailable.
 type Adapters struct {
-	Integrations integration.Lookup
-	Secrets      integration.SecretManager
-	Gitea        integration.GiteaPullRequestReader
-	GiteaWriter  integration.GiteaReviewWriter
-	OpenAI       integration.ChatClient
-	Ollama       integration.ChatClient
-	Publications PublicationLedger
-	Execution    ExecutionContext
-	Dispatcher   ExecutionDispatcher
+	Integrations  integration.Lookup
+	ModelProfiles integration.ModelProfileLookup
+	Secrets       integration.SecretManager
+	Gitea         integration.GiteaPullRequestReader
+	GiteaWriter   integration.GiteaReviewWriter
+	OpenAI        integration.ChatClient
+	Ollama        integration.ChatClient
+	Publications  PublicationLedger
+	Execution     ExecutionContext
+	Dispatcher    ExecutionDispatcher
 }
 
 // ExecutionContext identifies the durable execution currently being run.
@@ -265,9 +275,7 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 	}
 	nodeRun.DurationMS = time.Since(started).Milliseconds()
 	if err != nil {
-		nodeRun.Status, nodeRun.Error = "failed", err.Error()
-		r.report.Runs = append(r.report.Runs, nodeRun)
-		return err
+		return r.handleFailure(node, current, nodeRun, ready)
 	}
 	card, _ := r.catalog.Get(node.Type)
 	for _, port := range card.Outputs {
@@ -290,6 +298,49 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 	}
 	r.report.Runs = append(r.report.Runs, nodeRun)
 	return nil
+}
+
+func (r *scopedRunner) handleFailure(node Node, current nodeScope, nodeRun NodeRun, ready *[]nodeScope) error {
+	policy := "fail"
+	if node.Type != "error_control" {
+		policy = errorPolicyForNode(node)
+	}
+	if nodeRun.Metadata == nil {
+		nodeRun.Metadata = map[string]any{}
+	}
+	nodeRun.Metadata["error_policy"] = policy
+	nodeRun.Metadata["error_code"] = "execution_failed"
+	nodeRun.Metadata["error_scope"] = current.ScopeKey
+	nodeRun.Error = "execution failed"
+
+	switch policy {
+	case "continue":
+		nodeRun.Status = "failed"
+		nodeRun.Metadata["error_action"] = "continued"
+		r.report.Runs = append(r.report.Runs, nodeRun)
+		return nil
+	case "partial":
+		nodeRun.Status = "partial"
+		nodeRun.Metadata["error_action"] = "partial"
+		r.report.Runs = append(r.report.Runs, nodeRun)
+		return nil
+	case "route":
+		nodeRun.Status = "failed"
+		nodeRun.Metadata["error_action"] = "routed"
+		token := Token{NodeKey: node.Key, PortKey: "error", Contract: "error", ScopeKey: current.ScopeKey, Value: ErrorToken{Code: "execution_failed", NodeKey: node.Key, ScopeKey: current.ScopeKey}}
+		nodeRun.Outputs = append(nodeRun.Outputs, token)
+		for _, edge := range r.edges[node.Key] {
+			if edge.FromPort == "error" {
+				r.route(token, edge, current.ScopeKey, ready)
+			}
+		}
+		r.report.Runs = append(r.report.Runs, nodeRun)
+		return nil
+	default:
+		nodeRun.Status = "failed"
+		r.report.Runs = append(r.report.Runs, nodeRun)
+		return fmt.Errorf("card %q execution failed", node.Key)
+	}
 }
 
 const (
@@ -423,7 +474,11 @@ func (r *scopedRunner) runLoop(ctx context.Context, node Node, inputs map[string
 			current := ready[0]
 			ready = ready[1:]
 			if err = r.runNode(ctx, current, &ready); err != nil {
-				if settings.OnError != "partial" {
+				if settings.OnError == "route" {
+					r.routeLoopError(node, scopeKey, &ready)
+					continue
+				}
+				if settings.OnError != "partial" && settings.OnError != "continue" {
 					return nil, metadata, fmt.Errorf("loop card %q scope %q: %w", node.Key, scopeKey, err)
 				}
 				metadata["failed_iterations"] = metadataInt(metadata["failed_iterations"]) + 1
@@ -434,6 +489,15 @@ func (r *scopedRunner) runLoop(ctx context.Context, node Node, inputs map[string
 	}
 	metadata["completed_iterations"] = len(items) - metadataInt(metadata["failed_iterations"])
 	return map[string]any{"results": results}, metadata, nil
+}
+
+func (r *scopedRunner) routeLoopError(node Node, scopeKey string, ready *[]nodeScope) {
+	token := Token{NodeKey: node.Key, PortKey: "error", Contract: "error", ScopeKey: scopeKey, Value: ErrorToken{Code: "execution_failed", NodeKey: node.Key, ScopeKey: scopeKey}}
+	for _, edge := range r.edges[node.Key] {
+		if edge.FromPort == "error" {
+			r.route(token, edge, scopeKey, ready)
+		}
+	}
 }
 
 func metadataInt(value any) int {
@@ -467,11 +531,55 @@ func loopSettingsFor(node Node) (loopSettings, error) {
 	if value, exists := node.Config["on_error"]; exists {
 		var ok bool
 		onError, ok = value.(string)
-		if !ok || (onError != "fail" && onError != "partial") {
-			return loopSettings{}, fmt.Errorf("loop card %q config.on_error must be \"fail\" or \"partial\"", node.Key)
+		if !ok || !validErrorPolicy(onError) {
+			return loopSettings{}, fmt.Errorf("loop card %q config.on_error must be \"fail\", \"continue\", \"partial\", or \"route\"", node.Key)
 		}
 	}
 	return loopSettings{MaxIterations: maxIterations, Concurrency: concurrency, OnError: onError}, nil
+}
+
+func validErrorPolicy(value string) bool {
+	return value == "fail" || value == "continue" || value == "partial" || value == "route"
+}
+
+func errorPolicyFor(node Node) (string, error) {
+	policy := errorPolicyForNode(node)
+	if !validErrorPolicy(policy) {
+		return "", fmt.Errorf("node %q config.on_error must be \"fail\", \"continue\", \"partial\", or \"route\"", node.Key)
+	}
+	return policy, nil
+}
+
+func errorPolicyForNode(node Node) string {
+	if policy, ok := node.Config["on_error"].(string); ok && policy != "" {
+		return policy
+	}
+	return "fail"
+}
+
+type errorControlSettings struct {
+	Mode     string
+	Fallback any
+}
+
+func errorControlSettingsFor(node Node) (errorControlSettings, error) {
+	mode := "continue"
+	if value, exists := node.Config["on_error"]; exists {
+		configured, ok := value.(string)
+		if !ok || (configured != "fail" && configured != "continue" && configured != "fallback") {
+			return errorControlSettings{}, fmt.Errorf("error_control card %q config.on_error must be \"fail\", \"continue\", or \"fallback\"", node.Key)
+		}
+		mode = configured
+	}
+	settings := errorControlSettings{Mode: mode}
+	if mode == "fallback" {
+		value, exists := node.Config["fallback_result"]
+		if !exists {
+			return errorControlSettings{}, fmt.Errorf("error_control card %q requires config.fallback_result when config.on_error is \"fallback\"", node.Key)
+		}
+		settings.Fallback = value
+	}
+	return settings, nil
 }
 
 func loopItems(values []any) ([]any, error) {
@@ -564,6 +672,22 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		return map[string]any{"output": inputs}, nil
 	case "loop":
 		return nil, fmt.Errorf("loop card %q must be executed by the scoped runner", node.Key)
+	case "error_control":
+		settings, err := errorControlSettingsFor(node)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := firstForPort(inputs, "error").(ErrorToken); !ok {
+			return nil, fmt.Errorf("error_control card %q requires a typed error input", node.Key)
+		}
+		switch settings.Mode {
+		case "continue":
+			return map[string]any{}, nil
+		case "fallback":
+			return map[string]any{"recovered": settings.Fallback}, nil
+		default:
+			return nil, fmt.Errorf("error_control card %q terminated routed error", node.Key)
+		}
 	case "validate":
 		value, portKey := validateResponse(inputs["response"], inputs["files"], node.Config)
 		return map[string]any{portKey: value}, nil
@@ -627,7 +751,7 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 }
 
 func modelResponse(ctx context.Context, node Node, prompt string, adapters Adapters) (string, error) {
-	item, err := configuredIntegration(ctx, node, adapters, "model")
+	item, err := configuredModelIntegration(ctx, node, adapters)
 	if err != nil {
 		return "", err
 	}
@@ -652,6 +776,41 @@ func modelResponse(ctx context.Context, node Node, prompt string, adapters Adapt
 		return "", fmt.Errorf("model card %q: %w", node.Key, err)
 	}
 	return response, nil
+}
+
+func configuredModelIntegration(ctx context.Context, node Node, adapters Adapters) (integration.Integration, error) {
+	profileKey, _ := node.Config["model_profile"].(string)
+	if profileKey == "" {
+		return configuredIntegration(ctx, node, adapters, "model")
+	}
+	if adapters.ModelProfiles == nil {
+		return integration.Integration{}, fmt.Errorf("model card %q requires an injected model profile lookup", node.Key)
+	}
+	profile, err := adapters.ModelProfiles.ModelProfile(ctx, profileKey)
+	if err != nil {
+		return integration.Integration{}, fmt.Errorf("model card %q profile %q is not configured: %w", node.Key, profileKey, err)
+	}
+	if profile.Status != integration.StatusActive {
+		return integration.Integration{}, fmt.Errorf("model card %q profile %q is not active", node.Key, profileKey)
+	}
+	item, err := configuredIntegration(ctx, Node{Key: node.Key, Config: map[string]any{"integration": profile.IntegrationKey}}, adapters, "model")
+	if err != nil {
+		return integration.Integration{}, err
+	}
+	if item.Type != integration.TypeOpenAI && item.Type != integration.TypeOllama {
+		return integration.Integration{}, fmt.Errorf("model card %q profile %q requires an LLM connection", node.Key, profileKey)
+	}
+	config, err := item.ConfigValues()
+	if err != nil {
+		return integration.Integration{}, err
+	}
+	config["model"] = profile.Model
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return integration.Integration{}, err
+	}
+	item.Config = payload
+	return item, nil
 }
 
 func publishReview(ctx context.Context, node Node, inputs map[string][]any, adapters Adapters, scopeKey string) (map[string]any, error) {

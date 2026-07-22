@@ -72,6 +72,28 @@
     border-top: 1px solid #29313d;
 }
 
+.errorPolicy {
+    margin-top: 22px;
+    padding-top: 15px;
+    border-top: 1px solid #29313d;
+}
+
+.errorPolicy strong {
+    color: #8494a9;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .09em;
+}
+
+.valid,
+.invalid {
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.valid { color: #78d2a5; }
+.invalid { color: #e87b91; }
+
 .check {
     display: flex !important;
     align-items: center;

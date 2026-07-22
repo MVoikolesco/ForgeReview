@@ -24,6 +24,7 @@ import {
   getCards,
   getExecution,
   getIntegrations,
+  getModelProfiles,
   publishWorkflow,
   saveWorkflow,
 } from "../../lib/api";
@@ -32,9 +33,12 @@ import type {
   CardType,
   ExecutionReport,
   Integration,
+  ModelProfile,
 } from "../../lib/types";
 import {
   canConnect,
+  cardOutputPorts,
+  hasErrorRoute,
   localCards,
   reviewTemplate,
   starterEdges,
@@ -56,11 +60,14 @@ export function StudioWorkspace() {
   const [message, setMessage] = useState("Fluxo local pronto para validar.");
   const [busy, setBusy] = useState(false);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
   const [showConnections, setShowConnections] = useState(false);
 
   const loadIntegrations = async () => {
     try {
-      setIntegrations(await getIntegrations());
+      const [items, profiles] = await Promise.all([getIntegrations(), getModelProfiles()]);
+      setIntegrations(items);
+      setModelProfiles(profiles);
     } catch {
       setMessage("Não foi possível carregar as integrações.");
     }
@@ -73,8 +80,11 @@ export function StudioWorkspace() {
       );
   }, []);
   useEffect(() => {
-    void getIntegrations()
-      .then(setIntegrations)
+    void Promise.all([getIntegrations(), getModelProfiles()])
+      .then(([items, profiles]) => {
+        setIntegrations(items);
+        setModelProfiles(profiles);
+      })
       .catch(() => undefined);
   }, []);
 
@@ -87,6 +97,7 @@ export function StudioWorkspace() {
       category: card.category,
       inputs: card.inputs,
       outputs: card.outputs,
+      errorOutput: card.error_output,
       config: card.key === "template" ? { template: "Defina o prompt" } : {},
       status: "idle",
     };
@@ -122,7 +133,7 @@ export function StudioWorkspace() {
   const connect = (connection: Connection) => {
     const source = nodes.find((node) => node.id === connection.source);
     const target = nodes.find((node) => node.id === connection.target);
-    const sourcePort = source?.data.outputs.find(
+    const sourcePort = source && cardOutputPorts(source.data).find(
       (port) => `out-${port.key}` === connection.sourceHandle,
     );
     const targetPort = target?.data.inputs.find(
@@ -299,6 +310,8 @@ export function StudioWorkspace() {
       <CardInspector
         selected={selected}
         integrations={integrations}
+        modelProfiles={modelProfiles}
+        hasErrorRoute={hasErrorRoute(edges, selected.key)}
         onChange={patchSelected}
       />
       {showConnections && (
@@ -307,6 +320,7 @@ export function StudioWorkspace() {
           onClose={() => setShowConnections(false)}
           onCreated={(item) => {
             setIntegrations((all) => [...all, item]);
+            void loadIntegrations();
             setMessage(`Integração ${item.name} cadastrada.`);
           }}
         />

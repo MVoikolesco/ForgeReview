@@ -12,6 +12,7 @@ const statusLabel: Record<string, string> = {
   idle: "rascunho",
   running: "executando",
   completed: "concluído",
+  partial: "parcial",
   failed: "falhou",
 };
 

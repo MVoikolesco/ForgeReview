@@ -60,6 +60,29 @@ func TestIntegrationsNeverExposeSecretMaterial(t *testing.T) {
 	}
 }
 
+func TestModelProfilesUseExistingLLMConnection(t *testing.T) {
+	database, err := store.Open("file:" + t.TempDir() + "/profiles.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	secrets, err := integration.NewEncryptedSecrets("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := New(workflow.DefaultCatalog(), database, workflow.Adapters{Secrets: secrets})
+	connection := httptest.NewRecorder()
+	router.ServeHTTP(connection, httptest.NewRequest(http.MethodPost, "/api/integrations", bytes.NewBufferString(`{"key":"models","name":"Models","type":"openai","config":{"base_url":"https://models.example"},"status":"active","secret":"secret"}`)))
+	if connection.Code != http.StatusCreated {
+		t.Fatalf("connection status = %d: %s", connection.Code, connection.Body.String())
+	}
+	profile := httptest.NewRecorder()
+	router.ServeHTTP(profile, httptest.NewRequest(http.MethodPost, "/api/model-profiles", bytes.NewBufferString(`{"key":"reviewer","name":"Reviewer","integration_key":"models","model":"qwen2.5-coder","status":"active"}`)))
+	if profile.Code != http.StatusCreated || strings.Contains(profile.Body.String(), "secret") {
+		t.Fatalf("profile status = %d: %s", profile.Code, profile.Body.String())
+	}
+}
+
 func TestExecutionStartQueuesWhenDispatcherConfigured(t *testing.T) {
 	database, err := store.Open("file:" + t.TempDir() + "/queue.db")
 	if err != nil {

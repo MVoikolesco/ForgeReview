@@ -79,9 +79,10 @@ const initialData = (
   type: card.key,
   name: card.name,
   category: card.category,
-  inputs: card.inputs,
-  outputs: card.outputs,
-  config,
+    inputs: card.inputs,
+    outputs: card.outputs,
+    errorOutput: card.error_output,
+    config,
   status: "idle",
 });
 
@@ -148,6 +149,16 @@ export function canConnect(source?: Port, target?: Port) {
       source.contract === target.contract),
   );
 }
+
+export const hasErrorRoute = (edges: Edge[], nodeKey: string) =>
+  edges.some(
+    (edge) => edge.source === nodeKey && edge.sourceHandle === "out-error",
+  );
+
+export const cardOutputPorts = (card: CardData) =>
+  card.config.on_error === "route" && card.errorOutput
+    ? [...card.outputs, card.errorOutput]
+    : card.outputs;
 
 export const workflowVersionStatusLabel = (status: WorkflowVersionStatus) =>
   ({
@@ -217,7 +228,7 @@ export function reviewTemplate(
     id,
     type: "card",
     position: { x, y },
-    data: { ...initialData(cardFor(type), id, config), name },
+     data: { ...initialData(cardFor(type), id, config), name },
   });
   return {
     nodes: [

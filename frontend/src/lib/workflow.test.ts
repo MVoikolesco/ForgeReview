@@ -4,6 +4,7 @@ import { normalizeCard } from "./api";
 import {
   canConnect,
   canPublishVersion,
+  hasErrorRoute,
   reviewTemplate,
   workflowVersionStatusLabel,
 } from "./workflow";
@@ -54,6 +55,25 @@ test("typed connection blocks missing and incompatible ports", () => {
       { key: "in", label: "In", contract: "files", required: true },
     ),
     false,
+  );
+});
+
+test("error routes require the explicit error output edge", () => {
+  assert.equal(hasErrorRoute([], "template"), false);
+  assert.equal(
+    hasErrorRoute(
+      [
+        {
+          id: "template-control",
+          source: "template",
+          sourceHandle: "out-error",
+          target: "control",
+          targetHandle: "in-error",
+        },
+      ],
+      "template",
+    ),
+    true,
   );
 });
 

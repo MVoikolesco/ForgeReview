@@ -1,14 +1,14 @@
-import type { Integration } from "../../lib/types";
+import type { Integration, ModelProfile } from "../../lib/types";
 import styles from "./IntegrationList.module.scss";
 
-export function IntegrationList({ items }: { items: Integration[] }) {
+export function IntegrationList({
+  items,
+  profiles,
+}: {
+  items: Integration[];
+  profiles: ModelProfile[];
+}) {
   const groups = [
-    {
-      title: "Modelos reutilizáveis",
-      items: items.filter((item) => item.type !== "gitea"),
-      empty:
-        "Nenhum modelo cadastrado. Crie uma conexão de modelo para selecioná-la em cards de IA.",
-    },
     {
       title: "Conexões Gitea",
       items: items.filter((item) => item.type === "gitea"),
@@ -17,6 +17,21 @@ export function IntegrationList({ items }: { items: Integration[] }) {
   ];
   return (
     <div className={styles.list}>
+      <section>
+        <h2>Modelos reutilizáveis</h2>
+        {profiles.length ? (
+          profiles.map((profile) => (
+            <article key={profile.key}>
+              <i />
+              <strong>{profile.name}</strong>
+              <small>{profile.model}</small>
+              <em>{profile.status === "active" ? "Ativo" : "Desativado"}</em>
+            </article>
+          ))
+        ) : (
+          <p>Nenhum perfil cadastrado. Crie uma conexão de modelo para gerar o primeiro perfil.</p>
+        )}
+      </section>
       {groups.map((group) => (
         <section key={group.title}>
           <h2>{group.title}</h2>
@@ -26,18 +41,10 @@ export function IntegrationList({ items }: { items: Integration[] }) {
                 <i />
                 <strong>{item.name}</strong>
                 <small>
-                  {item.type === "gitea"
-                    ? item.config.base_url
-                    : `${item.type === "ollama" ? "Ollama" : "OpenAI-compatible"} · ${item.config.model}`}
+                  {item.config.base_url}
                 </small>
                 <em>
-                  {item.type === "gitea"
-                    ? item.secret_configured
-                      ? "Segredo configurado"
-                      : "Sem segredo"
-                    : item.status === "active"
-                      ? "Ativo"
-                      : "Desativado"}
+                  {item.secret_configured ? "Segredo configurado" : "Sem segredo"}
                 </em>
               </article>
             ))

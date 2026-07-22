@@ -201,9 +201,12 @@ connect Studio, Pipelines, and Integrations.
 
 The `Integrações` control opens the Studio connection modal. It lists safe
 integration summaries and creates Gitea, OpenAI-compatible or Ollama records
-through the integration API. Model connections are visibly grouped as reusable
-models. The form accepts a one-time password-masked Token/API key, says that the
-browser does not store it, and never displays it again.
+through the integration API. Each LLM registration also creates a reusable model
+profile, which stores only its key, display name, provider connection, model, and
+status. The profile has no secret or transport configuration; a model card stores
+`model_profile`, while existing stored cards using `integration` remain supported.
+The form accepts a one-time password-masked Token/API key, says that the browser
+does not store it, and never displays it again.
 
 The connection flow uses a three-step Studio wizard: choose the Gitea or LLM
 family, configure the URL and Token/API key, then select a model or review a

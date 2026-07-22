@@ -82,6 +82,44 @@ func (s *SQLite) Integration(ctx context.Context, key string) (integration.Integ
 	return item, nil
 }
 
+func (s *SQLite) CreateModelProfile(ctx context.Context, profile integration.ModelProfile) error {
+	if err := profile.Validate(); err != nil {
+		return err
+	}
+	item, err := s.Integration(ctx, profile.IntegrationKey)
+	if err != nil {
+		return fmt.Errorf("model profile integration %q is not configured", profile.IntegrationKey)
+	}
+	if item.Type != integration.TypeOpenAI && item.Type != integration.TypeOllama {
+		return fmt.Errorf("model profile integration %q must be an LLM connection", profile.IntegrationKey)
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO model_profiles(profile_key,name,integration_key,model,status) VALUES(?,?,?,?,?)`, profile.Key, profile.Name, profile.IntegrationKey, profile.Model, profile.Status)
+	return err
+}
+
+func (s *SQLite) ModelProfiles(ctx context.Context) ([]integration.ModelProfile, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT profile_key,name,integration_key,model,status FROM model_profiles ORDER BY profile_key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	profiles := []integration.ModelProfile{}
+	for rows.Next() {
+		var profile integration.ModelProfile
+		if err = rows.Scan(&profile.Key, &profile.Name, &profile.IntegrationKey, &profile.Model, &profile.Status); err != nil {
+			return nil, err
+		}
+		profiles = append(profiles, profile)
+	}
+	return profiles, rows.Err()
+}
+
+func (s *SQLite) ModelProfile(ctx context.Context, key string) (integration.ModelProfile, error) {
+	var profile integration.ModelProfile
+	err := s.db.QueryRowContext(ctx, `SELECT profile_key,name,integration_key,model,status FROM model_profiles WHERE profile_key=?`, key).Scan(&profile.Key, &profile.Name, &profile.IntegrationKey, &profile.Model, &profile.Status)
+	return profile, err
+}
+
 func (s *SQLite) Save(ctx context.Context, definition workflow.Definition) (int64, error) {
 	payload, err := json.Marshal(definition)
 	if err != nil {
@@ -453,6 +491,15 @@ CREATE TABLE IF NOT EXISTS integrations (
  secret_ciphertext TEXT NOT NULL,
  status TEXT NOT NULL CHECK(status IN ('active','disabled')),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS model_profiles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  profile_key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  integration_key TEXT NOT NULL REFERENCES integrations(integration_key),
+  model TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('active','disabled')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS workflow_executions (
  id INTEGER PRIMARY KEY AUTOINCREMENT,

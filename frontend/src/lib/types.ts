@@ -12,9 +12,10 @@ export type CardType = {
   description: string;
   inputs: Port[];
   outputs: Port[];
+  error_output?: Port;
 };
 
-export type CardStatus = "idle" | "running" | "completed" | "failed";
+export type CardStatus = "idle" | "running" | "completed" | "failed" | "partial";
 
 export type CardData = {
   key: string;
@@ -23,6 +24,7 @@ export type CardData = {
   category: string;
   inputs: Port[];
   outputs: Port[];
+  errorOutput?: Port;
   config: Record<string, unknown>;
   status: CardStatus;
 };
@@ -67,7 +69,7 @@ export type ExecutionReport = {
   status: string;
   runs: Array<{
     node_key: string;
-    status: "completed" | "failed";
+    status: "completed" | "failed" | "partial";
     error?: string;
   }>;
 };
@@ -83,4 +85,12 @@ export type Integration = {
 
 export type NewIntegration = Omit<Integration, "secret_configured"> & {
   secret: string;
+};
+
+export type ModelProfile = {
+  key: string;
+  name: string;
+  integration_key: string;
+  model: string;
+  status: "active" | "disabled";
 };
