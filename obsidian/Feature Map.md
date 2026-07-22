@@ -68,8 +68,13 @@
 - Saved-version editing: every Pipeline version has an `Abrir no Studio` entry
   point. `/studio?version=:id` loads its immutable definition, hydrates current
   catalog card data, positions, configuration, and typed edges, and retains the
-  original workflow identity so saves create a new draft rather than overwrite
-  it. Unsaved canvas changes are visibly marked and warn before browser exit.
+   original workflow identity so saves create a new draft rather than overwrite
+   it. Unsaved canvas changes are visibly marked and warn before browser exit.
+- Studio definition management: editors/admins can clone a graph into a distinct
+  workflow identity, import/export a `forgereview.workflow` v1 JSON envelope,
+  and review an accessible modal preview or validation error before replacing the
+  canvas. Import/export contain no browser-persisted state, secrets, or
+  ciphertext; viewers cannot modify, transfer, save, publish, or execute graphs.
 - Generic card error policy: cards support fail, continue, partial, or an
   explicit typed error route. The Studio exposes the policy and only shows the
   error handle while route is selected; error paths are distinct on the canvas.

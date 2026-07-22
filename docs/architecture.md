@@ -22,6 +22,15 @@ definition again and atomically promotes that draft while archiving the prior
 published version for the same workflow key. Only one published version can
 exist per workflow key.
 
+Studio can clone, import, and export definitions without a new API. Export uses
+the versioned `forgereview.workflow` v1 JSON envelope containing only a graph
+definition. Import validates the envelope, catalog availability, node/edge keys,
+typed ports, and credential-like configuration fields locally before replacing
+the canvas; draft saves repeat graph validation on the server and reject secret,
+ciphertext, password, token, or API-key fields. Clone obtains existing workflow
+keys, creates a distinct `-copy` identity/name, and only suffixes duplicate
+node or edge keys. These actions are available to editors and admins only.
+
 Startup calls the store's idempotent official-review seed. It creates and
 publishes `official-gitea-pr-review` version `1` only when no published version
 exists for that key; it never modifies user workflow keys or an existing

@@ -5,9 +5,11 @@ import styles from "./CardLibrary.module.scss";
 export function CardLibrary({
   cards,
   onAdd,
+  readOnly = false,
 }: {
   cards: CardType[];
   onAdd: (card: CardType) => void;
+  readOnly?: boolean;
 }) {
   const categories = [...new Set(cards.map((card) => card.category))];
   const icon = (category: string) =>
@@ -35,7 +37,7 @@ export function CardLibrary({
               <button
                 key={card.key}
                 title={card.description}
-                onClick={() => onAdd(card)}
+                onClick={() => onAdd(card)} disabled={readOnly}
               >
                 <i /> <span>{card.name}</span>
                 <Plus size={13} />

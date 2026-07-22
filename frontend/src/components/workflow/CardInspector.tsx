@@ -8,15 +8,17 @@ export function CardInspector({
   modelProfiles,
   hasErrorRoute,
   onChange,
+  readOnly = false,
 }: {
   selected: CardData;
   integrations: Integration[];
   modelProfiles: ModelProfile[];
   hasErrorRoute: boolean;
   onChange: (patch: Partial<CardData>) => void;
+  readOnly?: boolean;
 }) {
   const updateConfig = (key: string, value: unknown) =>
-    onChange({ config: { ...selected.config, [key]: value } });
+    !readOnly && onChange({ config: { ...selected.config, [key]: value } });
   const gitea = integrations.filter(
     (item) => item.type === "gitea" && item.status === "active",
   );

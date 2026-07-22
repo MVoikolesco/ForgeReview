@@ -12,6 +12,8 @@ import {
   BookOpen,
   Braces,
   CirclePlay,
+  Copy,
+  Download,
   Save,
   Settings2,
   ShieldCheck,
@@ -26,6 +28,7 @@ import {
   getExecution,
   getIntegrations,
   getModelProfiles,
+  getWorkflows,
   getWorkflowVersion,
   publishWorkflow,
   saveWorkflow,
@@ -51,6 +54,7 @@ import {
   toDefinition,
 } from "../../lib/workflow";
 import { ConnectionWizard } from "../integrations/ConnectionWizard";
+import { WorkflowTransferModal } from "./WorkflowTransferModal";
 import { CardInspector } from "../workflow/CardInspector";
 import { CardLibrary } from "../workflow/CardLibrary";
 import { WorkflowCanvas } from "../workflow/WorkflowCanvas";
@@ -76,6 +80,8 @@ export function StudioWorkspace() {
   const [metadata, setMetadata] = useState<WorkflowMetadata>(defaultWorkflowMetadata);
   const [openedVersionID, setOpenedVersionID] = useState<number>();
   const [dirty, setDirty] = useState(false);
+  const [transfer, setTransfer] = useState<"clone" | "import" | "export">();
+  const [workflowKeys, setWorkflowKeys] = useState<string[]>([]);
 
   const loadIntegrations = async () => {
     try {
@@ -306,7 +312,28 @@ export function StudioWorkspace() {
     setShowConnections(true);
     void loadIntegrations();
   };
+  const openTransfer = (mode: "clone" | "import" | "export") => {
+    if (mode !== "clone") return setTransfer(mode);
+    void getWorkflows()
+      .then((workflows) => {
+        setWorkflowKeys(workflows.map((workflow) => workflow.key));
+        setTransfer(mode);
+      })
+      .catch(() => setMessage("Não foi possível verificar os nomes existentes para criar a cópia."));
+  };
+  const applyTransferredDefinition = (definition: import("../../lib/types").WorkflowDefinition, nextMessage: string) => {
+    const hydrated = hydrateDefinition(definition, cards);
+    setNodes(hydrated.nodes);
+    setEdges(hydrated.edges);
+    setSelected(hydrated.nodes[0]?.data ?? starterNodes[0].data);
+    setMetadata({ key: definition.key, name: definition.name, description: definition.description });
+    setOpenedVersionID(undefined);
+    setDirty(true);
+    setMessage(nextMessage);
+    setTransfer(undefined);
+  };
   const trackNodeChanges = (...args: Parameters<typeof onNodesChange>) => {
+    if (!canEdit) return;
     if (
       args[0].some((change) =>
         ["add", "remove", "replace", "position"].includes(change.type),
@@ -316,6 +343,7 @@ export function StudioWorkspace() {
     onNodesChange(...args);
   };
   const trackEdgeChanges = (...args: Parameters<typeof onEdgesChange>) => {
+    if (!canEdit) return;
     if (
       args[0].some((change) =>
         ["add", "remove", "replace"].includes(change.type),
@@ -350,6 +378,9 @@ export function StudioWorkspace() {
           </button>
           <Link href="/pipelines">Pipelines</Link>
           <Link href="/integrations">Gerenciar integrações</Link>
+          <button disabled={!canEdit || busy} onClick={() => openTransfer("clone")}><Copy size={14} /> Clonar</button>
+          <button disabled={!canEdit || busy} onClick={() => openTransfer("import")}><Upload size={14} /> Importar</button>
+          <button disabled={!canEdit || busy} onClick={() => openTransfer("export")}><Download size={14} /> Exportar</button>
           <button
             disabled={busy || !canEdit}
             onClick={() =>
@@ -373,14 +404,14 @@ export function StudioWorkspace() {
           </button>
           <button
             className={styles.primary}
-            disabled={busy}
+            disabled={busy || !canEdit}
             onClick={() => void saveAndRun()}
           >
             <CirclePlay size={14} /> {busy ? "Executando" : "Salvar e executar"}
           </button>
         </div>
       </header>
-      <CardLibrary cards={cards} onAdd={addCard} />
+      <CardLibrary cards={cards} onAdd={addCard} readOnly={!canEdit} />
       <WorkflowCanvas
         nodes={nodes}
         edges={edges}
@@ -389,13 +420,15 @@ export function StudioWorkspace() {
         onEdgesChange={trackEdgeChanges}
         onConnect={connect}
         onSelect={setSelected}
+        readOnly={!canEdit}
       />
       <CardInspector
         selected={selected}
         integrations={integrations}
         modelProfiles={modelProfiles}
         hasErrorRoute={hasErrorRoute(edges, selected.key)}
-        onChange={patchSelected}
+        onChange={(patch) => canEdit && patchSelected(patch)}
+        readOnly={!canEdit}
       />
       {showConnections && (
         <ConnectionWizard
@@ -408,6 +441,7 @@ export function StudioWorkspace() {
           }}
         />
       )}
+      {transfer && <WorkflowTransferModal mode={transfer} definition={toDefinition(nodes, edges, metadata)} cards={cards} workflowKeys={workflowKeys} onClose={() => setTransfer(undefined)} onApply={applyTransferredDefinition} />}
     </main>
   );
 }

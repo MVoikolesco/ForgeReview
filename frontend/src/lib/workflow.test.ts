@@ -6,8 +6,15 @@ import {
   canPublishVersion,
   hasErrorRoute,
   hydrateDefinition,
+  localCards,
   reviewTemplate,
+  starterEdges,
+  starterNodes,
   toDefinition,
+  cloneWorkflowDefinition,
+  parseWorkflowExport,
+  validateWorkflowDefinition,
+  workflowExportEnvelope,
   workflowVersionStatusLabel,
 } from "./workflow";
 import { publishedOfficialVersion, reviewPipelineState } from "./dashboard";
@@ -93,6 +100,31 @@ test("saving an opened canvas preserves its workflow identity", () => {
       description: "Retained from the opened version.",
     },
   );
+});
+
+test("workflow export envelope validates safe graphs and rejects credential fields", () => {
+  const definition = toDefinition(starterNodes, starterEdges);
+  const parsed = parseWorkflowExport(JSON.stringify(workflowExportEnvelope(definition)), localCards);
+  assert.equal(parsed.envelope?.definition.key, "studio-check");
+  definition.nodes[0].config = { nested: { secret: "not-exportable" } };
+  assert.match(validateWorkflowDefinition(definition, localCards) || "", /segredo/);
+});
+
+test("cloning creates a new workflow identity and only disambiguates duplicate graph keys", () => {
+  const source = {
+    key: "review", name: "Review", description: "", nodes: [
+      { key: "node", type: "trigger", name: "One", config: {}, position: { x: 0, y: 0 } },
+      { key: "node", type: "trigger", name: "Two", config: {}, position: { x: 1, y: 1 } },
+    ], edges: [
+      { key: "edge", from_node: "node", from_port: "event", to_node: "node", to_port: "event" },
+      { key: "edge", from_node: "node", from_port: "event", to_node: "node", to_port: "event" },
+    ],
+  };
+  const clone = cloneWorkflowDefinition(source, ["review-copy"]);
+  assert.equal(clone.key, "review-copy-2");
+  assert.equal(clone.name, "Review (cópia)");
+  assert.deepEqual(clone.nodes.map((node) => node.key), ["node", "node-2"]);
+  assert.deepEqual(clone.edges.map((edge) => edge.key), ["edge", "edge-2"]);
 });
 
 test("catalog cards without ports normalize to empty lists", () => {

@@ -2,6 +2,13 @@
 
 ## 2026-07-22
 
+- Added Studio clone, import, and export management actions for editors/admins.
+  Export produces a safe versioned definition envelope; import offers local
+  schema/typed-graph feedback and a preview, while server-side draft validation
+  rejects unsafe credential fields and duplicate edge keys. Viewers are now
+  read-only across canvas editing and all draft/transfer/execution actions. See
+  [[Architecture]], [[Feature Map]], and [[Decision Log]].
+
 - Added local SQLite identity, bcrypt password hashing, first-admin bootstrap,
   signed revocable HttpOnly sessions, API authentication, and viewer/editor/admin
   authorization. Compose and `.env.example` now require bootstrap and session

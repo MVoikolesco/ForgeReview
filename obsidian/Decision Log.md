@@ -196,3 +196,15 @@ token persistence while remaining practical for a local self-hosted HTTP setup.
 Viewer access is read-only, editor access is limited to workflow drafts and
 execution, and integration/model/user management requires admin. See
 [[Architecture]] and [[Feature Map]].
+
+## 2026-07-22: Local, safe workflow-definition transfer
+
+Clone, import, and export remain Studio-local operations and reuse the existing
+append-only draft-save endpoint. Export uses an explicit v1 envelope rather
+than a raw database version; import validates its graph against the current card
+catalog before changing the canvas. The backend rejects credential-like config
+field names on every draft validation, so immutable workflow history cannot
+become a secret or ciphertext transport. Clone always receives a distinct
+workflow identity and only resolves duplicate node/edge keys where present.
+Editors and admins own these actions; viewers remain read-only. See
+[[Architecture]] and [[Feature Map]].

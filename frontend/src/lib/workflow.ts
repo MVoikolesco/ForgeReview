@@ -5,6 +5,7 @@ import type {
   Port,
   WorkflowDefinition,
   WorkflowMetadata,
+  WorkflowExportEnvelope,
   WorkflowVersionStatus,
 } from "./types";
 
@@ -234,6 +235,107 @@ export function toDefinition(
       })),
   };
 }
+
+const unsafeConfigKey = (key: string) =>
+  /(^|_)(secret|ciphertext|password|token|api_key)$/i.test(key);
+
+function hasUnsafeConfig(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasUnsafeConfig);
+  if (!value || typeof value !== "object") return false;
+  return Object.entries(value as Record<string, unknown>).some(
+    ([key, nested]) => unsafeConfigKey(key) || hasUnsafeConfig(nested),
+  );
+}
+
+export function validateWorkflowDefinition(
+  definition: WorkflowDefinition,
+  cards: CardType[],
+): string | undefined {
+  if (!definition.key.trim() || !definition.name.trim())
+    return "O workflow importado precisa ter chave e nome.";
+  const cardByType = new Map(cards.map((card) => [card.key, card]));
+  const nodeKeys = new Set<string>();
+  for (const node of definition.nodes) {
+    if (!node.key || !node.name || !cardByType.has(node.type))
+      return `O node "${node.key || "sem chave"}" é inválido ou usa um card indisponível.`;
+    if (nodeKeys.has(node.key)) return `A chave de node "${node.key}" está duplicada.`;
+    if (hasUnsafeConfig(node.config))
+      return `O node "${node.key}" contém segredo, token ou ciphertext e não pode ser importado.`;
+    nodeKeys.add(node.key);
+  }
+  const edgeKeys = new Set<string>();
+  for (const edge of definition.edges) {
+    const source = definition.nodes.find((node) => node.key === edge.from_node);
+    const target = definition.nodes.find((node) => node.key === edge.to_node);
+    const sourceCard = source && cardByType.get(source.type);
+    const targetCard = target && cardByType.get(target.type);
+    const sourcePorts = sourceCard && (sourceCard.error_output && source?.config.on_error === "route"
+      ? [...sourceCard.outputs, sourceCard.error_output]
+      : sourceCard.outputs);
+    const output = sourcePorts?.find((port) => port.key === edge.from_port);
+    const input = targetCard?.inputs.find((port) => port.key === edge.to_port);
+    if (!edge.key || !source || !target || !output || !input)
+      return `A conexão "${edge.key || "sem chave"}" referencia um node ou porta inválida.`;
+    if (edgeKeys.has(edge.key)) return `A chave de conexão "${edge.key}" está duplicada.`;
+    if (output.contract !== "any" && input.contract !== "any" && output.contract !== input.contract)
+      return `A conexão "${edge.key}" usa contratos incompatíveis.`;
+    edgeKeys.add(edge.key);
+  }
+  return undefined;
+}
+
+export function parseWorkflowExport(
+  text: string,
+  cards: CardType[],
+): { envelope?: WorkflowExportEnvelope; error?: string } {
+  try {
+    const candidate = JSON.parse(text) as WorkflowExportEnvelope;
+    if (candidate?.format !== "forgereview.workflow" || candidate.version !== 1 || !candidate.definition)
+      return { error: "O arquivo não usa o envelope ForgeReview Workflow v1." };
+    const error = validateWorkflowDefinition(candidate.definition, cards);
+    return error ? { error } : { envelope: candidate };
+  } catch {
+    return { error: "O arquivo selecionado não contém JSON válido." };
+  }
+}
+
+const uniqueKey = (base: string, used: Set<string>) => {
+  let candidate = base;
+  let index = 2;
+  while (used.has(candidate)) candidate = `${base}-${index++}`;
+  used.add(candidate);
+  return candidate;
+};
+
+export function cloneWorkflowDefinition(
+  definition: WorkflowDefinition,
+  workflowKeys: Iterable<string>,
+): WorkflowDefinition {
+  const keys = new Set(workflowKeys);
+  const workflowKey = uniqueKey(`${definition.key}-copy`, keys);
+  const nodeKeys = new Set<string>();
+  const nodes = definition.nodes.map((node) => ({ ...node, key: uniqueKey(node.key, nodeKeys), config: { ...node.config } }));
+  const remappedNodes = new Map(definition.nodes.map((node, index) => [node.key, nodes[index].key]));
+  const edgeKeys = new Set<string>();
+  return {
+    key: workflowKey,
+    name: `${definition.name} (cópia)`,
+    description: definition.description,
+    nodes,
+    edges: definition.edges.map((edge) => ({
+      ...edge,
+      key: uniqueKey(edge.key, edgeKeys),
+      from_node: remappedNodes.get(edge.from_node) ?? edge.from_node,
+      to_node: remappedNodes.get(edge.to_node) ?? edge.to_node,
+    })),
+  };
+}
+
+export const workflowExportEnvelope = (definition: WorkflowDefinition): WorkflowExportEnvelope => ({
+  format: "forgereview.workflow",
+  version: 1,
+  definition,
+});
 
 export function reviewTemplate(
   cards: CardType[],

@@ -26,6 +26,7 @@ type WorkflowCanvasProps = {
   onEdgesChange: OnEdgesChange;
   onConnect: (connection: Connection) => void;
   onSelect: (data: CardData) => void;
+  readOnly?: boolean;
 };
 
 export function WorkflowCanvas({
@@ -36,6 +37,7 @@ export function WorkflowCanvas({
   onEdgesChange,
   onConnect,
   onSelect,
+  readOnly = false,
 }: WorkflowCanvasProps) {
   const visibleEdges = edges.map((edge) =>
     edge.sourceHandle === "out-error"
@@ -58,6 +60,9 @@ export function WorkflowCanvas({
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onNodeClick={(_, node) => onSelect(node.data)}
+        nodesDraggable={!readOnly}
+        nodesConnectable={!readOnly}
+        edgesFocusable={!readOnly}
         fitView
       >
         <Background gap={18} size={1} />

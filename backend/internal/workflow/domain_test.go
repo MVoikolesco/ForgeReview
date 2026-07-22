@@ -14,6 +14,22 @@ func TestValidateAcceptsTypedGraph(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsSecretConfigurationAndDuplicateEdgeKeys(t *testing.T) {
+	definition := Definition{Key: "safe", Name: "Safe", Nodes: []Node{{Key: "trigger", Type: "trigger", Name: "Trigger", Config: map[string]any{"token": "must-not-persist"}}}}
+	if err := Validate(definition, DefaultCatalog()); err == nil {
+		t.Fatal("expected secret configuration rejection")
+	}
+	definition.Nodes[0].Config = map[string]any{}
+	definition.Nodes = append(definition.Nodes, Node{Key: "log", Type: "log", Name: "Log", Config: map[string]any{}})
+	definition.Edges = []Edge{
+		{Key: "same", FromNode: "trigger", FromPort: "event", ToNode: "log", ToPort: "input"},
+		{Key: "same", FromNode: "trigger", FromPort: "event", ToNode: "log", ToPort: "input"},
+	}
+	if err := Validate(definition, DefaultCatalog()); err == nil {
+		t.Fatal("expected duplicate edge rejection")
+	}
+}
+
 func TestValidateRejectsInvalidCardsAndContracts(t *testing.T) {
 	catalog := DefaultCatalog()
 	unknown := Definition{Key: "review", Name: "Review", Nodes: []Node{{Key: "unknown", Type: "script", Name: "Script"}}}

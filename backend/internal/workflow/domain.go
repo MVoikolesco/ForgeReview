@@ -1,6 +1,9 @@
 package workflow
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 const (
 	VersionStatusDraft     = "draft"
@@ -116,6 +119,9 @@ func Validate(definition Definition, catalog Catalog) error {
 		if _, ok := catalog.Get(node.Type); !ok {
 			return fmt.Errorf("node %q uses unknown card type %q", node.Key, node.Type)
 		}
+		if err := validateSafeConfig(node.Config); err != nil {
+			return fmt.Errorf("node %q contains unsafe configuration: %w", node.Key, err)
+		}
 		if node.Type == "error_control" {
 			if _, err := errorControlSettingsFor(node); err != nil {
 				return err
@@ -145,12 +151,17 @@ func Validate(definition Definition, catalog Catalog) error {
 		}
 		nodes[node.Key] = node
 	}
+	edges := map[string]struct{}{}
 	for _, edge := range definition.Edges {
 		from, fromOK := nodes[edge.FromNode]
 		to, toOK := nodes[edge.ToNode]
 		if edge.Key == "" || !fromOK || !toOK {
 			return fmt.Errorf("edge %q references an unknown node", edge.Key)
 		}
+		if _, exists := edges[edge.Key]; exists {
+			return fmt.Errorf("duplicate workflow edge %q", edge.Key)
+		}
+		edges[edge.Key] = struct{}{}
 		fromType, _ := catalog.Get(from.Type)
 		toType, _ := catalog.Get(to.Type)
 		output, outputOK := port(fromType.Outputs, edge.FromPort)
@@ -176,6 +187,32 @@ func Validate(definition Definition, catalog Catalog) error {
 			}
 			if !hasRoute {
 				return fmt.Errorf("node %q config.on_error \"route\" requires an explicit error edge", node.Key)
+			}
+		}
+	}
+	return nil
+}
+
+// validateSafeConfig prevents credentials and encrypted secret blobs from
+// entering immutable workflow history through a draft save.
+func validateSafeConfig(config map[string]any) error {
+	for key, value := range config {
+		lower := strings.ToLower(key)
+		if lower == "secret" || lower == "ciphertext" || lower == "password" || lower == "token" || lower == "api_key" || strings.HasSuffix(lower, "_secret") || strings.HasSuffix(lower, "_ciphertext") || strings.HasSuffix(lower, "_password") || strings.HasSuffix(lower, "_token") || strings.HasSuffix(lower, "_api_key") {
+			return fmt.Errorf("configuration field %q is not allowed", key)
+		}
+		if nested, ok := value.(map[string]any); ok {
+			if err := validateSafeConfig(nested); err != nil {
+				return err
+			}
+		}
+		if values, ok := value.([]any); ok {
+			for _, item := range values {
+				if nested, ok := item.(map[string]any); ok {
+					if err := validateSafeConfig(nested); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}

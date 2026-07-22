@@ -54,6 +54,12 @@ export type WorkflowMetadata = Pick<
   "key" | "name" | "description"
 >;
 
+export type WorkflowExportEnvelope = {
+  format: "forgereview.workflow";
+  version: 1;
+  definition: WorkflowDefinition;
+};
+
 export type WorkflowVersionStatus = "draft" | "published" | "archived";
 
 export type WorkflowVersionSummary = {

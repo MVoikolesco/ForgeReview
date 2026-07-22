@@ -34,6 +34,15 @@ Publishing validates the stored draft within a transaction, archives the prior
 published version for that key, and then promotes the draft. Stored definitions
 have no mutable HTTP endpoint. See [[Decision Log]] and [[Feature Map]].
 
+Studio-only clone/import/export uses the existing draft-save API. The v1
+`forgereview.workflow` envelope contains a definition only; the client validates
+its schema, catalog graph, typed ports, duplicate keys, and unsafe credential
+field names before applying it. `workflow.Validate` repeats graph validation on
+every save and rejects secret/ciphertext/password/token/API-key configuration
+fields, preventing them from entering immutable version history. Clone creates
+a distinct workflow key/name and only disambiguates duplicate graph keys. See
+[[Decision Log]] and [[Feature Map]].
+
 Server startup idempotently seeds `official-gitea-pr-review` as published
 version 1 when that key has no published version. Its immutable definition is
 the full scoped review graph and uses `model_profile`; its Gitea publish-card
