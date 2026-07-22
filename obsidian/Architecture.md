@@ -5,10 +5,14 @@ The new application separates `backend/` (Gin, SQLite and workflow domain) from
 definitions connect typed card ports. See `docs/architecture.md`.
 
 SQLite also owns local identity: users have bcrypt password hashes and a
-`viewer`, `editor`, or `admin` role. An empty database can bootstrap only
-`admin@localhost` from an environment password. Sessions use a short-lived
-HMAC-signed, HttpOnly/SameSite-Lax cookie plus a revocable SQLite nonce; no
-browser token persistence is used. See [[Decision Log]] and [[Feature Map]].
+`viewer`, `editor`, or `admin` role. An empty users table can bootstrap exactly
+the trimmed, lowercase email in `FORGEREVIEW_BOOTSTRAP_ADMIN_EMAIL` using
+`FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD`; Compose requires both values. Startup
+fails when either is absent on first run, while later environment changes are
+ignored once any user exists and cannot overwrite an account. Sessions use a
+short-lived HMAC-signed, HttpOnly/SameSite-Lax cookie plus a revocable SQLite
+nonce; no browser token persistence is used. See [[Decision Log]] and
+[[Feature Map]].
 
 SQLite also stores controlled integration records: key, name, provider type,
 safe transport configuration, AES-256-GCM ciphertext, and status. The master

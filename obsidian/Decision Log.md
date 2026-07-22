@@ -197,6 +197,18 @@ Viewer access is read-only, editor access is limited to workflow drafts and
 execution, and integration/model/user management requires admin. See
 [[Architecture]] and [[Feature Map]].
 
+## 2026-07-22: Explicit first-admin bootstrap without overwrite
+
+Compose requires `FORGEREVIEW_BOOTSTRAP_ADMIN_EMAIL` and
+`FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD`; when `users` is empty, ForgeReview
+creates the first admin with exactly the configured trimmed, lowercase email and
+a bcrypt password hash. It refuses an empty first-run configuration. Once any
+user exists, bootstrap returns without changing users, so environment edits can
+never silently replace an administrator. Lost-all-admin recovery is therefore a
+deliberate, backed-up local identity/session reset followed by a new bootstrap;
+there is no default credential or automatic reset. See [[Architecture]] and
+[[Feature Map]].
+
 ## 2026-07-22: Local, safe workflow-definition transfer
 
 Clone, import, and export remain Studio-local operations and reuse the existing

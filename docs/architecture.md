@@ -45,10 +45,23 @@ default. `GET /api/workflows` identifies the published version and
 ### Local identity, sessions, and roles
 
 ForgeReview uses SQLite `users` records with bcrypt password hashes and the
-`viewer`, `editor`, and `admin` roles. On an empty users table, startup creates
-only `admin@localhost` from `FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD`; the value is
-used to produce a bcrypt hash and is not persisted. Later restarts never reset
-or create that account.
+`viewer`, `editor`, and `admin` roles. Compose requires both
+`FORGEREVIEW_BOOTSTRAP_ADMIN_EMAIL` and
+`FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD`; use a trimmed, lowercase email address.
+On an empty users table, startup creates exactly that configured email as the
+first `admin`. The password is used to produce a bcrypt hash and is not
+persisted. Startup fails on an empty users table when either value is absent.
+
+Bootstrap is first-run-only. Once any row exists in `users`, startup does not
+create, rename, reset, or otherwise overwrite a user, even if either bootstrap
+environment value changes. This is intentional and means there is no hidden
+default administrator or password-reset path. For routine recovery, sign in as
+another administrator and create a replacement user through `POST /api/users`.
+If all administrator access is lost, an operator must first take a backup and
+perform a deliberate, documented local-database recovery (remove the user and
+session records only when a complete identity reset is intended), then restart
+with the chosen explicit bootstrap email and password. Existing workflows and
+integrations are not bootstrap credentials and must not be used as one.
 
 The browser receives an `HttpOnly`, `SameSite=Lax` session cookie. Its opaque
 session nonce is stored in SQLite, while its user ID, expiry, and nonce are
@@ -243,10 +256,11 @@ does not contain source files and uses `NODE_ENV=production`.
 
 Copy `.env.example` to `.env` for local Compose configuration and generate the
 required encryption key with `openssl rand -base64 32` and a separate session
-signing key with `openssl rand -base64 48`. Set a strong bootstrap administrator
-password before the first start. Compose passes these three setup values to the
-backend; no provider-specific integration credentials are environment
-configuration.
+signing key with `openssl rand -base64 48`. Before the first start, explicitly
+set the bootstrap administrator email and a strong password; Compose passes all
+four setup values to the backend. Never put a bootstrap password in source
+control or documentation. No provider-specific integration credentials are
+environment configuration.
 
 ## Studio lifecycle and validation flow
 

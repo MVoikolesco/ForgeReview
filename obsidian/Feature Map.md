@@ -2,11 +2,13 @@
 
 - POC: preserved under `POC/`.
 - Local identity and RBAC: login, logout, and current-user endpoints use
-  bcrypt-backed SQLite users and signed, revocable HttpOnly sessions. Viewers
-  read safe summaries, editors save/publish/run drafts, and admins manage
-  integrations, model profiles, and users (including the admin user list/create
-  API). The frontend gates login and hides
-  or disables role-ineligible navigation/actions.
+  bcrypt-backed SQLite users and signed, revocable HttpOnly sessions. Explicit
+  bootstrap email/password configuration creates only the first admin and never
+  modifies a populated users table. Viewers read safe summaries, editors
+  save/publish/run drafts, and admins manage integrations, model profiles, and
+  users (including the admin user list/create API). The responsive dark login
+  gate explains first-run configuration without displaying secrets and separates
+  invalid credentials from an unavailable backend.
 - Workflow catalog: initial backend foundation implemented.
 - Studio canvas: initial visual prototype implemented.
 - Studio validation: saves and executes a local card graph, then reflects node

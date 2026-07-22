@@ -89,8 +89,11 @@ docs/      Arquitetura, auditoria e este roadmap
 ### Integrações e segurança
 
 - Identidade local em SQLite: usuários têm hash bcrypt e os papéis `viewer`,
-  `editor` e `admin`. Somente a primeira inicialização, com tabela vazia, cria
-  `admin@localhost` a partir de `FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD`.
+  `editor` e `admin`. Compose exige
+  `FORGEREVIEW_BOOTSTRAP_ADMIN_EMAIL` e
+  `FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD`. Somente a primeira inicialização, com
+  tabela vazia, cria o admin com exatamente o e-mail configurado; não há
+  credencial padrão.
 - Sessões usam cookie `HttpOnly`/`SameSite=Lax`, nonce revogável no SQLite e
   payload assinado por `FORGEREVIEW_SESSION_SIGNING_KEY`; nenhum token é salvo
   no browser. Viewer é somente leitura, editor gerencia rascunhos e admin
@@ -131,6 +134,9 @@ docs/      Arquitetura, auditoria e este roadmap
   `allow_autonomous_rejection: false`.
 - Frontend estruturado em componentes reutilizáveis, base card shell, modal
   shell, tipos/API compartilhados e SCSS modular com tokens, temas e mixins.
+- Login responsivo no estilo escuro do dashboard/Studio, com orientação de
+  primeira inicialização sem mostrar senhas e feedback distinto para credenciais
+  inválidas e backend de autenticação indisponível.
 
 ## Contratos HTTP atuais
 
@@ -206,9 +212,13 @@ docs/      Arquitetura, auditoria e este roadmap
   pôde ser executada neste ambiente por erro de I/O no binário Docker.
 - A política de CORS atual permite somente `http://localhost:3010`; ambientes
   externos exigirão configuração explícita de origem.
-- A sessão local requer `FORGEREVIEW_SESSION_SIGNING_KEY` e uma senha de
-  bootstrap na primeira inicialização; a senha de bootstrap não redefine contas
-  existentes.
+- A sessão local requer `FORGEREVIEW_SESSION_SIGNING_KEY` e Compose exige os
+  valores explícitos `FORGEREVIEW_BOOTSTRAP_ADMIN_EMAIL` e
+  `FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD`. Eles só criam a primeira conta quando
+  `users` está vazia; mudanças posteriores não redefinem contas. A recuperação
+  de todo acesso administrativo exige backup e reset deliberado dos registros
+  locais de identidade/sessão, seguido de um novo bootstrap — não existe reset
+  automático nem credencial escondida.
 - Aprovação manual e reconciliação de uma publicação de review com resultado
   externo incerto ainda não são implementadas.
 

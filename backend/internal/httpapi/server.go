@@ -29,7 +29,7 @@ func New(catalog workflow.Catalog, workflows *store.SQLite, adapterSets ...workf
 		panic(err)
 	}
 	if !compatibilityMode {
-		if err = manager.Bootstrap(context.Background(), os.Getenv("FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD")); err != nil {
+		if err = manager.Bootstrap(context.Background(), os.Getenv("FORGEREVIEW_BOOTSTRAP_ADMIN_EMAIL"), os.Getenv("FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD")); err != nil {
 			panic(err)
 		}
 	}

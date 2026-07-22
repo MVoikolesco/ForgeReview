@@ -65,19 +65,28 @@ func New(store SessionStore, config Config) (*Manager, error) {
 	}
 	return &Manager{store: store, key: []byte(config.SigningKey), ttl: config.TTL, now: config.Now}, nil
 }
-func (m *Manager) Bootstrap(ctx context.Context, password string) error {
+// Bootstrap creates the first administrator only. Once any user exists, the
+// supplied configuration is deliberately ignored so a changed environment can
+// never replace an existing account.
+func (m *Manager) Bootstrap(ctx context.Context, email, password string) error {
 	count, err := m.store.UserCount(ctx)
 	if err != nil {
 		return err
 	}
-	if count != 0 || password == "" {
+	if count != 0 {
 		return nil
+	}
+	if email == "" || password == "" {
+		return errors.New("FORGEREVIEW_BOOTSTRAP_ADMIN_EMAIL and FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD are required when the users table is empty")
+	}
+	if strings.TrimSpace(email) != email || strings.ToLower(email) != email {
+		return errors.New("FORGEREVIEW_BOOTSTRAP_ADMIN_EMAIL must be a trimmed, lowercase email address")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
-	_, err = m.store.CreateUser(ctx, "admin@localhost", string(hash), RoleAdmin)
+	_, err = m.store.CreateUser(ctx, email, string(hash), RoleAdmin)
 	return err
 }
 func (m *Manager) CreateUser(ctx context.Context, email, password string, role Role) (User, error) {

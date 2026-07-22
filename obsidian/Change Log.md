@@ -2,6 +2,14 @@
 
 ## 2026-07-22
 
+- Replaced the implicit `admin@localhost` bootstrap with explicit configured
+  email and password values. Compose, `.env.example`, and architecture guidance
+  now require and explain first-run-only behavior, non-overwrite semantics, and
+  deliberate recovery. The login gate now uses the Studio dark visual language,
+  responsive accessible form controls, first-run guidance without secret values,
+  and focused unavailable-vs-invalid-auth feedback. See [[Architecture]],
+  [[Feature Map]], and [[Decision Log]].
+
 - Added Studio clone, import, and export management actions for editors/admins.
   Export produces a safe versioned definition envelope; import offers local
   schema/typed-graph feedback and a preview, while server-side draft validation

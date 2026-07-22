@@ -11,14 +11,24 @@ import type {
   WorkflowVersionSummary,
 } from "./types";
 
-export const apiURL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8088";
+export const apiURL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8088";
+
+export class APIError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message);
+    this.name = "APIError";
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiURL}${path}`, { credentials: "include", ...init });
+  let response: Response;
+  try {
+    response = await fetch(`${apiURL}${path}`, { credentials: "include", ...init });
+  } catch {
+    throw new APIError("Não foi possível alcançar o servidor ForgeReview.");
+  }
   const payload = (await response.json()) as T & { error?: string };
-  if (!response.ok)
-    throw new Error(payload.error || "Não foi possível concluir a operação.");
+  if (!response.ok) throw new APIError(payload.error || "Não foi possível concluir a operação.", response.status);
   return payload;
 }
 
