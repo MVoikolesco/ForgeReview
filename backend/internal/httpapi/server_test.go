@@ -127,6 +127,60 @@ func TestIntegrationDetailEditDisableAndHistoricalDeleteConflict(t *testing.T) {
 	}
 }
 
+func TestGiteaDiscoveryRequiresOrganizationBeforeScopedRepositories(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/user/orgs":
+			_, _ = writer.Write([]byte(`[{"username":"acme"}]`))
+		case "/api/v1/orgs/acme/repos":
+			_, _ = writer.Write([]byte(`[{"name":"api"}]`))
+		default:
+			if request.URL.Path == "/api/v1/user" {
+				_, _ = writer.Write([]byte(`{"login":"admin"}`))
+				return
+			}
+			http.NotFound(writer, request)
+		}
+	}))
+	defer provider.Close()
+	database, err := store.Open("file:" + t.TempDir() + "/scoped-discovery.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	secrets, err := integration.NewEncryptedSecrets("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := New(workflow.DefaultCatalog(), database, workflow.Adapters{Secrets: secrets})
+	candidate := `{"key":"candidate","name":"Candidate","type":"gitea","config":{"base_url":"` + provider.URL + `"},"status":"active","secret":"secret"}`
+	validate := httptest.NewRecorder()
+	router.ServeHTTP(validate, httptest.NewRequest(http.MethodPost, "/api/integrations/validate", bytes.NewBufferString(candidate)))
+	if validate.Code != http.StatusOK || !strings.Contains(validate.Body.String(), `"organizations":["acme"]`) {
+		t.Fatalf("validate = %d %s", validate.Code, validate.Body.String())
+	}
+	candidateRepositories := httptest.NewRecorder()
+	router.ServeHTTP(candidateRepositories, httptest.NewRequest(http.MethodPost, "/api/integrations/discover-repositories", bytes.NewBufferString(strings.TrimSuffix(candidate, "}")+`,"organization":"acme"}`)))
+	if candidateRepositories.Code != http.StatusOK || !strings.Contains(candidateRepositories.Body.String(), `"name":"api"`) {
+		t.Fatalf("candidate repositories = %d %s", candidateRepositories.Code, candidateRepositories.Body.String())
+	}
+	create := httptest.NewRecorder()
+	router.ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/api/integrations", bytes.NewBufferString(`{"key":"gitea","name":"Gitea","type":"gitea","config":{"base_url":"`+provider.URL+`"},"status":"active","secret":"secret"}`)))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s", create.Code, create.Body.String())
+	}
+	organizations := httptest.NewRecorder()
+	router.ServeHTTP(organizations, httptest.NewRequest(http.MethodGet, "/api/integrations/gitea/discover", nil))
+	if organizations.Code != http.StatusOK || !strings.Contains(organizations.Body.String(), `"organizations":["acme"]`) {
+		t.Fatalf("organizations = %d %s", organizations.Code, organizations.Body.String())
+	}
+	repositories := httptest.NewRecorder()
+	router.ServeHTTP(repositories, httptest.NewRequest(http.MethodGet, "/api/integrations/gitea/discover?organization=acme", nil))
+	if repositories.Code != http.StatusOK || !strings.Contains(repositories.Body.String(), `"owner":"acme"`) || !strings.Contains(repositories.Body.String(), `"name":"api"`) {
+		t.Fatalf("repositories = %d %s", repositories.Code, repositories.Body.String())
+	}
+}
+
 func TestExecutionStartQueuesWhenDispatcherConfigured(t *testing.T) {
 	database, err := store.Open("file:" + t.TempDir() + "/queue.db")
 	if err != nil {

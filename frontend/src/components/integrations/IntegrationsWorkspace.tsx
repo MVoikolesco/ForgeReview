@@ -16,6 +16,7 @@ export function IntegrationsWorkspace() {
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [showWizard, setShowWizard] = useState(false);
   const [message, setMessage] = useState("Carregando conexões...");
+  const [feedback, setFeedback] = useState("");
   const load = async () => {
     try {
       const [connections, modelProfiles] = await Promise.all([getIntegrations(), getModelProfiles()]);
@@ -59,7 +60,7 @@ export function IntegrationsWorkspace() {
             {message}
           </p>
         ) : (
-            <IntegrationList items={items} profiles={profiles} role={user?.role} onChanged={() => void load()} />
+            <>{feedback && <p className={styles.feedback} role="status">{feedback}</p>}<IntegrationList items={items} profiles={profiles} role={user?.role} onChanged={() => void load()} /></>
         )}
       </section>
       {showWizard && (
@@ -70,6 +71,7 @@ export function IntegrationsWorkspace() {
             setItems((all) => [...all, item]);
             void load();
             setMessage("");
+            setFeedback("Conexão criada e recursos selecionados.");
           }}
         />
       )}

@@ -88,11 +88,16 @@ Only admins may create, edit, disable, or delete connections and users.
   `secret_configured`. Ciphertext and credential values are never returned.
 - `POST /api/integrations/validate`: admin-only server-side validation of an
   unsaved connection. The provider call is bounded to ten seconds and returns
-  only sanitized success/failure; neither candidate nor secret is persisted.
-- `GET /api/integrations/:key/discover`: admin/editor-only discovery of Gitea
-  organization repositories or LLM models for an active connection. `PUT`
-  resource endpoints transactionally replace selections; LLM selections become
-  reusable profiles.
+  only sanitized success/failure plus safe Gitea organization names or discovered
+  LLM model names; neither candidate nor secret is persisted.
+- `POST /api/integrations/discover-repositories`: admin-only, unsaved Gitea
+  discovery for one selected organization. It revalidates the one-time candidate
+  and returns repositories only for that organization.
+- `GET /api/integrations/:key/discover`: admin/editor-only active-connection
+  discovery. A Gitea request without `organization` returns organization names;
+  `?organization=<name>` returns only that organization's repositories. LLM
+  requests return models. `PUT` resource endpoints transactionally replace
+  selections; LLM selections become reusable profiles.
 - `GET/PATCH /api/integrations/:key`, `POST /disable`, and `DELETE` provide
   safe detail and admin lifecycle actions. PATCH preserves ciphertext when
   `secret` is omitted; delete conflicts when workflow history references it.
@@ -292,16 +297,22 @@ links connect Studio, Pipelines, and Integrations.
 
 The `Integrações` control opens the Studio connection modal. It lists safe
 integration summaries and creates Gitea, OpenAI-compatible or Ollama records
-through the integration API. Each LLM registration also creates a reusable model
-profile, which stores only its key, display name, provider connection, model, and
-status. The profile has no secret or transport configuration; a model card stores
+through the integration API. After validation, Gitea requires an organization
+selection before it discovers and multi-selects only that organization's
+repositories. Ollama/OpenRouter instead show a searchable multi-select of
+discovered models; free-text model entry is not part of the normal setup path.
+The chosen models transactionally become reusable profiles, which store only key,
+display name, provider connection, model, and status. A model card stores
 `model_profile`, while existing stored cards using `integration` remain supported.
 The form accepts a one-time password-masked Token/API key, says that the browser
 does not store it, and never displays it again.
 
-The connection flow uses a three-step Studio wizard: choose the Gitea or LLM
-family, configure the URL and Token/API key, then select a model or review a
-Gitea connection. The only LLM choices exposed in the current UI are Ollama
+The connection flow uses a modal wizard: choose the Gitea or LLM family,
+configure and validate the URL and Token/API key, then select an organization and
+scoped Gitea repositories or discovered LLM models. Resource management reloads
+persisted selections into the same ModalShell flow. Details, edit, disable, and
+delete are also focus-managed modal flows rather than inline list forms. The only
+LLM choices exposed in the current UI are Ollama
 local, Ollama Cloud and OpenRouter. OpenRouter uses the controlled
 OpenAI-compatible adapter; both Ollama choices use the Ollama adapter. The
 OpenAI-compatible URL normalizer accepts a versioned base such as

@@ -42,9 +42,9 @@ func (a HTTPDiscoveryAdapter) Validate(ctx context.Context, item Integration, se
 	return fmt.Errorf("unsupported integration type")
 }
 
-func (a HTTPDiscoveryAdapter) Repositories(ctx context.Context, item Integration, secret string) ([]Repository, error) {
+func (a HTTPDiscoveryAdapter) Organizations(ctx context.Context, item Integration, secret string) ([]string, error) {
 	if item.Type != TypeGitea {
-		return nil, fmt.Errorf("repositories require Gitea")
+		return nil, fmt.Errorf("organizations require Gitea")
 	}
 	var orgs []struct {
 		UserName string `json:"username"`
@@ -53,7 +53,8 @@ func (a HTTPDiscoveryAdapter) Repositories(ctx context.Context, item Integration
 	if err := a.getJSON(ctx, strings.TrimRight(configBaseURL(item), "/")+"/api/v1/user/orgs", "token "+secret, &orgs); err != nil {
 		return nil, err
 	}
-	repositories := []Repository{}
+	organizations := []string{}
+	seen := map[string]bool{}
 	for _, org := range orgs {
 		owner := org.UserName
 		if owner == "" {
@@ -62,24 +63,39 @@ func (a HTTPDiscoveryAdapter) Repositories(ctx context.Context, item Integration
 		if owner == "" {
 			continue
 		}
-		var repos []struct {
-			Name  string `json:"name"`
-			Owner struct {
-				UserName string `json:"username"`
-			} `json:"owner"`
+		if !seen[owner] {
+			seen[owner] = true
+			organizations = append(organizations, owner)
 		}
-		if err := a.getJSON(ctx, fmt.Sprintf("%s/api/v1/orgs/%s/repos", strings.TrimRight(configBaseURL(item), "/"), url.PathEscape(owner)), "token "+secret, &repos); err != nil {
-			return nil, err
+	}
+	return organizations, nil
+}
+
+// Repositories discovers a single organization's repositories. The caller must
+// select the organization first; discovery never fans out across every org.
+func (a HTTPDiscoveryAdapter) Repositories(ctx context.Context, item Integration, secret, organization string) ([]Repository, error) {
+	if item.Type != TypeGitea || strings.TrimSpace(organization) == "" {
+		return nil, fmt.Errorf("repositories require a Gitea organization")
+	}
+	var repos []struct {
+		Name  string `json:"name"`
+		Owner struct {
+			UserName string `json:"username"`
+		} `json:"owner"`
+	}
+	if err := a.getJSON(ctx, fmt.Sprintf("%s/api/v1/orgs/%s/repos", strings.TrimRight(configBaseURL(item), "/"), url.PathEscape(organization)), "token "+secret, &repos); err != nil {
+		return nil, err
+	}
+	repositories := []Repository{}
+	for _, repo := range repos {
+		if repo.Name == "" {
+			continue
 		}
-		for _, repo := range repos {
-			if repo.Name != "" {
-				repoOwner := repo.Owner.UserName
-				if repoOwner == "" {
-					repoOwner = owner
-				}
-				repositories = append(repositories, Repository{IntegrationKey: item.Key, Owner: repoOwner, Name: repo.Name})
-			}
+		owner := repo.Owner.UserName
+		if owner == "" {
+			owner = organization
 		}
+		repositories = append(repositories, Repository{IntegrationKey: item.Key, Owner: owner, Name: repo.Name})
 	}
 	return repositories, nil
 }

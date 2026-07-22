@@ -140,7 +140,8 @@ func (r Repository) Validate() error {
 // only and must not retain supplied credentials.
 type DiscoveryAdapter interface {
 	Validate(context.Context, Integration, string) error
-	Repositories(context.Context, Integration, string) ([]Repository, error)
+	Organizations(context.Context, Integration, string) ([]string, error)
+	Repositories(context.Context, Integration, string, string) ([]Repository, error)
 	Models(context.Context, Integration, string) ([]string, error)
 }
 

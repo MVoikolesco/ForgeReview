@@ -188,7 +188,49 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "connection validation failed"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "validated"})
+		if item.Type == integration.TypeGitea {
+			organizations, err := discovery.Organizations(c.Request.Context(), item, request.Secret)
+			if err != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "organization discovery failed"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"status": "validated", "organizations": organizations})
+			return
+		}
+		models, err := discovery.Models(c.Request.Context(), item, request.Secret)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "model discovery failed"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "validated", "models": models})
+	})
+	api.POST("/integrations/discover-repositories", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+		var request struct {
+			Key          string          `json:"key"`
+			Name         string          `json:"name"`
+			Type         string          `json:"type"`
+			Config       json.RawMessage `json:"config"`
+			Secret       string          `json:"secret"`
+			Status       string          `json:"status"`
+			Organization string          `json:"organization"`
+		}
+		decoder := json.NewDecoder(c.Request.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid integration request"})
+			return
+		}
+		item := integration.Integration{Key: request.Key, Name: request.Name, Type: request.Type, Config: request.Config, SecretCiphertext: "provided", Status: request.Status}
+		if err := item.Validate(); err != nil || request.Organization == "" || discovery.Validate(c.Request.Context(), item, request.Secret) != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "connection validation failed"})
+			return
+		}
+		repositories, err := discovery.Repositories(c.Request.Context(), item, request.Secret, request.Organization)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "repository discovery failed"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"repositories": repositories})
 	})
 	api.GET("/integrations/:key", func(c *gin.Context) {
 		item, err := workflows.Integration(c.Request.Context(), c.Param("key"))
@@ -277,8 +319,22 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "connection is not available"})
 			return
 		}
+		if err := discovery.Validate(c.Request.Context(), item, secret); err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "connection validation failed"})
+			return
+		}
 		if item.Type == integration.TypeGitea {
-			repos, err := discovery.Repositories(c.Request.Context(), item, secret)
+			organization := c.Query("organization")
+			if organization == "" {
+				organizations, organizationErr := discovery.Organizations(c.Request.Context(), item, secret)
+				if organizationErr != nil {
+					c.JSON(http.StatusBadGateway, gin.H{"error": "resource discovery failed"})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"organizations": organizations})
+				return
+			}
+			repos, err := discovery.Repositories(c.Request.Context(), item, secret, organization)
 			if err != nil {
 				c.JSON(http.StatusBadGateway, gin.H{"error": "resource discovery failed"})
 				return

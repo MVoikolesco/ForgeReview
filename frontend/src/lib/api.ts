@@ -11,10 +11,14 @@ import type {
   WorkflowVersionSummary,
 } from "./types";
 
-export const apiURL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8088";
+export const apiURL =
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8088";
 
 export class APIError extends Error {
-  constructor(message: string, readonly status?: number) {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
     super(message);
     this.name = "APIError";
   }
@@ -23,13 +27,23 @@ export class APIError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${apiURL}${path}`, { credentials: "include", ...init });
+    response = await fetch(`${apiURL}${path}`, {
+      credentials: "include",
+      ...init,
+    });
   } catch {
     throw new APIError("Não foi possível alcançar o servidor ForgeReview.");
   }
-  const payload = (await response.json()) as T & { error?: string };
-  if (!response.ok) throw new APIError(payload.error || "Não foi possível concluir a operação.", response.status);
-  return payload;
+  const payload =
+    response.status === 204
+      ? undefined
+      : ((await response.json()) as T & { error?: string });
+  if (!response.ok)
+    throw new APIError(
+      payload?.error || "Não foi possível concluir a operação.",
+      response.status,
+    );
+  return payload as T;
 }
 
 export const normalizeCard = (card: CardType): CardType => ({
@@ -42,10 +56,20 @@ export const normalizeCard = (card: CardType): CardType => ({
 export const getCards = async () =>
   (await request<CardType[]>("/api/cards")).map(normalizeCard);
 export const getHealth = () => request<{ status: string }>("/health");
-export type CurrentUser = { id: number; email: string; role: "viewer" | "editor" | "admin" };
+export type CurrentUser = {
+  id: number;
+  email: string;
+  role: "viewer" | "editor" | "admin";
+};
 export const getCurrentUser = () => request<CurrentUser>("/api/auth/me");
-export const login = (email: string, password: string) => request<CurrentUser>("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
-export const logout = () => request<void>("/api/auth/logout", { method: "POST" });
+export const login = (email: string, password: string) =>
+  request<CurrentUser>("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+export const logout = () =>
+  request<void>("/api/auth/logout", { method: "POST" });
 export const getIntegrations = () =>
   request<Integration[]>("/api/integrations");
 export const createIntegration = (integration: NewIntegration) =>
@@ -55,15 +79,65 @@ export const createIntegration = (integration: NewIntegration) =>
     body: JSON.stringify(integration),
   });
 export const validateIntegration = (integration: NewIntegration) =>
-  request<{ status: string }>("/api/integrations/validate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(integration) });
-export const discoverResources = (key: string) => request<Discovery>(`/api/integrations/${encodeURIComponent(key)}/discover`);
-export const getResources = (key: string) => request<Discovery>(`/api/integrations/${encodeURIComponent(key)}/resources`);
-export const replaceRepositories = (key: string, repositories: Repository[]) => request<void>(`/api/integrations/${encodeURIComponent(key)}/repositories`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repositories }) });
-export const replaceModels = (key: string, models: string[]) => request<ModelProfile[]>(`/api/integrations/${encodeURIComponent(key)}/models`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ models }) });
-export const disableIntegration = (key: string) => request<void>(`/api/integrations/${encodeURIComponent(key)}/disable`, { method: "POST" });
-export const deleteIntegration = (key: string) => request<void>(`/api/integrations/${encodeURIComponent(key)}`, { method: "DELETE" });
-export const updateIntegration = (key: string, update: { name: string; config: { base_url: string }; status: "active" | "disabled"; secret?: string }) => request<Integration>(`/api/integrations/${encodeURIComponent(key)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update) });
-export const getModelProfiles = () => request<ModelProfile[]>("/api/model-profiles");
+  request<Discovery & { status: string }>("/api/integrations/validate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(integration),
+  });
+export const discoverCandidateRepositories = (
+  integration: NewIntegration,
+  organization: string,
+) =>
+  request<Discovery>("/api/integrations/discover-repositories", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...integration, organization }),
+  });
+export const discoverResources = (key: string, organization?: string) =>
+  request<Discovery>(
+    `/api/integrations/${encodeURIComponent(key)}/discover${organization ? `?organization=${encodeURIComponent(organization)}` : ""}`,
+  );
+export const getResources = (key: string) =>
+  request<Discovery>(`/api/integrations/${encodeURIComponent(key)}/resources`);
+export const replaceRepositories = (key: string, repositories: Repository[]) =>
+  request<void>(`/api/integrations/${encodeURIComponent(key)}/repositories`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repositories }),
+  });
+export const replaceModels = (key: string, models: string[]) =>
+  request<ModelProfile[]>(
+    `/api/integrations/${encodeURIComponent(key)}/models`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ models }),
+    },
+  );
+export const disableIntegration = (key: string) =>
+  request<void>(`/api/integrations/${encodeURIComponent(key)}/disable`, {
+    method: "POST",
+  });
+export const deleteIntegration = (key: string) =>
+  request<void>(`/api/integrations/${encodeURIComponent(key)}`, {
+    method: "DELETE",
+  });
+export const updateIntegration = (
+  key: string,
+  update: {
+    name: string;
+    config: { base_url: string };
+    status: "active" | "disabled";
+    secret?: string;
+  },
+) =>
+  request<Integration>(`/api/integrations/${encodeURIComponent(key)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+export const getModelProfiles = () =>
+  request<ModelProfile[]>("/api/model-profiles");
 export const createModelProfile = (profile: ModelProfile) =>
   request<ModelProfile>("/api/model-profiles", {
     method: "POST",
@@ -80,9 +154,12 @@ export const getWorkflows = () => request<WorkflowSummary[]>("/api/workflows");
 export const getWorkflowVersion = (versionID: number) =>
   request<WorkflowDefinition>(`/api/workflow-versions/${versionID}`);
 export const publishWorkflow = (versionID: number) =>
-  request<WorkflowVersionSummary>(`/api/workflow-versions/${versionID}/publish`, {
-    method: "POST",
-  });
+  request<WorkflowVersionSummary>(
+    `/api/workflow-versions/${versionID}/publish`,
+    {
+      method: "POST",
+    },
+  );
 export const executeWorkflow = (versionID: number) =>
   request<{
     execution_id?: number;

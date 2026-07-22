@@ -31,6 +31,13 @@ profiles. Admins own connection lifecycle; editors may manage selections and
 viewers are read-only. OpenAI-compatible URL construction preserves an existing
 `/v1` suffix for OpenRouter. See [[Decision Log]] and [[Feature Map]].
 
+Gitea discovery is organization-scoped: validation returns safe organization
+names, and a separate candidate or active-connection request returns repositories
+only after one organization is selected. Validation returns discovered
+Ollama/OpenRouter models, which are selected rather than entered as free text.
+All candidate calls remain server-side and one-time secrets never enter API
+responses or browser persistence. See [[Integrations Upgrade]].
+
 Workflow definitions are append-only saved versions. SQLite groups their safe
 metadata by workflow key for `GET /api/workflows`; each summary includes its
 numeric version, creation time, and `draft`, `published`, or `archived` status.

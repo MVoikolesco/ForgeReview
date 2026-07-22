@@ -15,8 +15,10 @@
   states from the execution report on the React Flow canvas.
 - Integration modal: submits a one-time password-masked Token/API key for Gitea
   and reusable model connections, with no browser storage or later display.
-- Connection wizard: guides Gitea, Ollama local/cloud and OpenRouter setup in
-  discrete steps consistent with the Studio visual language.
+- Connection wizard: validates Gitea, Ollama local/cloud and OpenRouter before
+  selection. Gitea selects an organization then only its repositories; LLM setup
+  offers searchable multi-select discovered models (no normal-path free text).
+  Persisted selections reload in resource-management ModalShell flows.
 - Card inspector: edits supported node configuration and selects active Gitea
   or reusable model connections. The review template projects the full initial
   review graph onto the canvas.
@@ -30,6 +32,9 @@
   official review readiness/safety, and recent PR-context execution summaries;
   `/studio` contains the workflow editor; `/integrations` provides the reusable
   connection wizard and connection/model list.
+- Integration lifecycle UX: connection details, edit, resource management,
+  disable, and delete are focus-managed ModalShell flows with busy, success, and
+  sanitized error feedback; modal and spinner transitions respect reduced motion.
 - Runner: executes local card graphs by typed inputs and persists node reports;
   active configured Gitea fetch and OpenAI-compatible/Ollama model cards run
   through injected adapters.

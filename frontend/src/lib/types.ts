@@ -15,7 +15,12 @@ export type CardType = {
   error_output?: Port;
 };
 
-export type CardStatus = "idle" | "running" | "completed" | "failed" | "partial";
+export type CardStatus =
+  | "idle"
+  | "running"
+  | "completed"
+  | "failed"
+  | "partial";
 
 export type CardData = {
   key: string;
@@ -106,8 +111,16 @@ export type ModelProfile = {
   status: "active" | "disabled";
 };
 
-export type Repository = { integration_key: string; owner: string; name: string };
-export type Discovery = { repositories?: Repository[]; models?: string[] };
+export type Repository = {
+  integration_key: string;
+  owner: string;
+  name: string;
+};
+export type Discovery = {
+  organizations?: string[];
+  repositories?: Repository[];
+  models?: string[];
+};
 
 export type ExecutionSummary = {
   execution_id: number;

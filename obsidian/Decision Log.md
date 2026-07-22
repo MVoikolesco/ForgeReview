@@ -240,3 +240,14 @@ preserves prior selection-ID state for repeated reports; derived error-edge
 props are memoized as well. This prevents a controlled hydration/update from
 continually triggering React state updates while retaining card and edge
 selection behavior. See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-22: Scoped integration resource discovery
+
+Gitea resource discovery separates organization listing from repository listing,
+and the repository adapter accepts exactly one selected organization rather than
+enumerating every organization. Unsaved candidate setup follows the same sequence
+after server-side validation; active resource management reloads persisted
+selection. LLM validation returns provider-discovered models and the normal UI
+only persists selected models as profiles, eliminating free-text model entry.
+This keeps credentials one-time and server-side while making the selection path
+explicit. See [[Architecture]] and [[Feature Map]].

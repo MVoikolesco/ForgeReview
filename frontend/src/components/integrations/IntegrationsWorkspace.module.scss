@@ -97,6 +97,16 @@
     font-size: 12px;
 }
 
+.feedback {
+    margin: 18px 0 -8px;
+    padding: 10px 12px;
+    border: 1px solid #315942;
+    border-radius: 6px;
+    color: #a7e4bd;
+    font-size: 12px;
+    background: #12251a;
+}
+
 @media (max-width: $breakpoint-mobile) {
     .content {
         padding-top: 28px;

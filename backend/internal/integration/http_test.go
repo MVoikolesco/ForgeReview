@@ -165,3 +165,32 @@ func TestDiscoveryUsesProviderContractsAndOpenRouterVersionedBase(t *testing.T) 
 		t.Fatalf("endpoint = %s", endpoint)
 	}
 }
+
+func TestGiteaDiscoveryListsOrganizationsThenScopesRepositories(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "token secret" {
+			t.Fatal("missing authorization")
+		}
+		switch request.URL.Path {
+		case "/api/v1/user/orgs":
+			_, _ = writer.Write([]byte(`[{"username":"acme"},{"username":"other"}]`))
+		case "/api/v1/orgs/acme/repos":
+			_, _ = writer.Write([]byte(`[{"name":"api","owner":{"username":"acme"}}]`))
+		case "/api/v1/orgs/other/repos":
+			t.Fatal("repository discovery must not enumerate unselected organizations")
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	adapter := HTTPDiscoveryAdapter{Client: server.Client()}
+	item := testIntegration(t, TypeGitea, server.URL)
+	organizations, err := adapter.Organizations(context.Background(), item, "secret")
+	if err != nil || len(organizations) != 2 || organizations[0] != "acme" {
+		t.Fatalf("organizations = %#v, %v", organizations, err)
+	}
+	repositories, err := adapter.Repositories(context.Background(), item, "secret", "acme")
+	if err != nil || len(repositories) != 1 || repositories[0] != (Repository{IntegrationKey: TypeGitea, Owner: "acme", Name: "api"}) {
+		t.Fatalf("repositories = %#v, %v", repositories, err)
+	}
+}

@@ -10,6 +10,7 @@
     padding: 24px;
     background: #05070bbd;
     backdrop-filter: blur(7px);
+    animation: fade-in 160ms ease-out;
 }
 
 .modal {
@@ -20,6 +21,7 @@
     border-color: #364151;
     border-radius: $radius-panel;
     box-shadow: 0 32px 90px #000b;
+    animation: modal-in 180ms ease-out;
 }
 
 .header {
@@ -71,6 +73,13 @@
     gap: 12px;
     padding: 14px 24px;
     border-top: 1px solid #29313d;
+}
+
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+    .backdrop, .modal { animation: none; }
 }
 
 @media (max-width: $breakpoint-mobile) {

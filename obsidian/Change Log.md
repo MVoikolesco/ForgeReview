@@ -2,6 +2,15 @@
 
 ## 2026-07-22
 
+- Overhauled integration setup and lifecycle UX. Gitea now validates, selects an
+  organization, and discovers only its repositories before multi-selection;
+  Ollama/OpenRouter validate into searchable discovered-model selection with no
+  normal-path free text. Resource persistence preselects existing choices.
+  Details, edit, resource management, disable, and delete now use ModalShell
+  flows with accessible feedback, busy indicators, and reduced-motion-safe
+  transitions. Added scoped provider and HTTP contract coverage. See
+  [[Architecture]], [[Feature Map]], and [[Decision Log]].
+
 - Fixed the Studio production render loop triggered by React Flow selection
   reporting during controlled graph hydration. Canvas callbacks and derived
   edges are memoized, and repeated selection IDs no longer schedule a state
