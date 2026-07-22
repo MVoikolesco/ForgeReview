@@ -49,6 +49,23 @@ export function CardInspector({
       />
     </label>
   );
+  const boundedNumberField = (
+    key: string,
+    label: string,
+    fallback: number,
+    max: number,
+  ) => (
+    <label>
+      {label}
+      <input
+        type="number"
+        min="0"
+        max={max}
+        value={configNumber(selected.config[key], fallback)}
+        onChange={(event) => updateConfig(key, event.target.valueAsNumber || 0)}
+      />
+    </label>
+  );
   return (
     <aside
       className={styles.inspector}
@@ -112,6 +129,13 @@ export function CardInspector({
           <>
             {connectionFields}
             {numberField("max_tokens", "Máximo de tokens", 2000)}
+            {boundedNumberField("retry_limit", "Tentativas de correção", 0, 3)}
+            {boundedNumberField("retry_delay_ms", "Espera entre tentativas (ms)", 0, 60000)}
+            <small>
+              Quando a saída for ligada diretamente a Validar e falhar no formato,
+              o modelo repete o prompt com uma instrução de correção. Zero desativa;
+              no máximo 3 tentativas e 60.000 ms de espera.
+            </small>
           </>
         )}
         {selected.type === "publish" && (

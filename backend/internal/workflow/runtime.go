@@ -255,8 +255,13 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 		} else {
 			outputs, nodeRun.Metadata, err = r.runLoop(ctx, node, inputs, &nodeRun)
 		}
+	} else if node.Type == "validate" {
+		outputs, nodeRun.Metadata, err = r.runValidate(ctx, node, current, inbox, inputs)
 	} else {
 		outputs, err = execute(ctx, node, inputs, r.input, r.adapters, current.ScopeKey)
+		if node.Type == "model" && err == nil {
+			nodeRun.Metadata = map[string]any{"attempt_count": 1, "provider_calls": []any{map[string]any{"attempt": 1, "status": "completed"}}}
+		}
 	}
 	nodeRun.DurationMS = time.Since(started).Milliseconds()
 	if err != nil {
@@ -285,6 +290,106 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 	}
 	r.report.Runs = append(r.report.Runs, nodeRun)
 	return nil
+}
+
+const (
+	maxModelRetryLimit = 3
+	maxModelRetryDelay = 60000
+)
+
+type modelSettings struct {
+	RetryLimit   int
+	RetryDelayMS int
+}
+
+func modelSettingsFor(node Node) (modelSettings, error) {
+	settings := modelSettings{}
+	if value, exists := node.Config["retry_limit"]; exists {
+		limit, ok := integer(value)
+		if !ok || limit < 0 || limit > maxModelRetryLimit {
+			return modelSettings{}, fmt.Errorf("model card %q config.retry_limit must be between 0 and %d", node.Key, maxModelRetryLimit)
+		}
+		settings.RetryLimit = limit
+	}
+	if value, exists := node.Config["retry_delay_ms"]; exists {
+		delay, ok := integer(value)
+		if !ok || delay < 0 || delay > maxModelRetryDelay {
+			return modelSettings{}, fmt.Errorf("model card %q config.retry_delay_ms must be between 0 and %d", node.Key, maxModelRetryDelay)
+		}
+		settings.RetryDelayMS = delay
+	}
+	return settings, nil
+}
+
+// runValidate performs bounded corrective calls only for the direct model ->
+// validate response edge in the same scope. It creates no graph back edge.
+func (r *scopedRunner) runValidate(ctx context.Context, node Node, current nodeScope, inbox map[string][]Token, inputs map[string][]any) (map[string]any, map[string]any, error) {
+	value, portKey := validateResponse(inputs["response"], inputs["files"], node.Config)
+	validationAttempts := []any{map[string]any{"attempt": 1, "status": portKey}}
+	providerCalls := []any{}
+	metadata := map[string]any{"attempt_count": 1, "validation_attempts": validationAttempts, "provider_calls": providerCalls}
+	if portKey == "valid" {
+		return map[string]any{portKey: value}, metadata, nil
+	}
+	model, prompt, settings, eligible := r.correctiveModel(current, inbox)
+	if !eligible || settings.RetryLimit == 0 {
+		return map[string]any{portKey: value}, metadata, nil
+	}
+	metadata["retry_limit"] = settings.RetryLimit
+	metadata["retry_delay_ms"] = settings.RetryDelayMS
+	for retry := 1; retry <= settings.RetryLimit; retry++ {
+		if settings.RetryDelayMS > 0 {
+			timer := time.NewTimer(time.Duration(settings.RetryDelayMS) * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, metadata, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		response, err := modelResponse(ctx, model, repairPrompt(prompt), r.adapters)
+		call := map[string]any{"attempt": retry + 1, "status": "completed"}
+		if err != nil {
+			call["status"] = "failed"
+			providerCalls = append(providerCalls, call)
+			metadata["provider_calls"] = providerCalls
+			return nil, metadata, err
+		}
+		providerCalls = append(providerCalls, call)
+		value, portKey = validateResponse([]any{response}, inputs["files"], node.Config)
+		validationAttempts = append(validationAttempts, map[string]any{"attempt": retry + 1, "status": portKey})
+		metadata["attempt_count"] = len(validationAttempts)
+		metadata["validation_attempts"] = validationAttempts
+		metadata["provider_calls"] = providerCalls
+		if portKey == "valid" {
+			return map[string]any{portKey: value}, metadata, nil
+		}
+	}
+	return map[string]any{portKey: value}, metadata, nil
+}
+
+func (r *scopedRunner) correctiveModel(current nodeScope, inbox map[string][]Token) (Node, string, modelSettings, bool) {
+	responses := inbox["response"]
+	if len(responses) != 1 || responses[0].ScopeKey != current.ScopeKey || responses[0].PortKey != "response" {
+		return Node{}, "", modelSettings{}, false
+	}
+	model, exists := r.nodes[responses[0].NodeKey]
+	if !exists || model.Type != "model" {
+		return Node{}, "", modelSettings{}, false
+	}
+	settings, err := modelSettingsFor(model)
+	if err != nil {
+		return Node{}, "", modelSettings{}, false
+	}
+	prompt, ok := firstForPort(values(r.inbox(nodeScope{NodeKey: model.Key, ScopeKey: current.ScopeKey})), "prompt").(string)
+	if !ok || prompt == "" {
+		return Node{}, "", modelSettings{}, false
+	}
+	return model, prompt, settings, true
+}
+
+func repairPrompt(prompt string) string {
+	return strings.TrimSpace(prompt) + "\n\nCorrection required: return only a JSON array of findings. Each finding must contain path, a positive line, comment, and severity low, medium, high, or critical. Do not include prose or markdown."
 }
 
 func (r *scopedRunner) runLoop(ctx context.Context, node Node, inputs map[string][]any, nodeRun *NodeRun) (map[string]any, map[string]any, error) {
@@ -507,38 +612,46 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		}
 		return map[string]any{"pull_request": pullRequest, "files": pullRequest.Files}, nil
 	case "model":
-		item, err := configuredIntegration(ctx, node, adapters, "model")
-		if err != nil {
-			return nil, err
-		}
-		var client integration.ChatClient
-		switch item.Type {
-		case integration.TypeOpenAI:
-			client = adapters.OpenAI
-		case integration.TypeOllama:
-			client = adapters.Ollama
-		default:
-			return nil, fmt.Errorf("model card %q integration %q must be type %q or %q", node.Key, item.Key, integration.TypeOpenAI, integration.TypeOllama)
-		}
-		if client == nil {
-			return nil, fmt.Errorf("model card %q requires an injected %s adapter", node.Key, item.Type)
-		}
-		secret, err := resolveSecret(item, adapters, "model", node.Key)
-		if err != nil {
-			return nil, err
-		}
 		prompt, ok := firstForPort(inputs, "prompt").(string)
 		if !ok || prompt == "" {
 			return nil, fmt.Errorf("model card %q requires a prompt input", node.Key)
 		}
-		response, err := client.Chat(ctx, item, secret, prompt)
+		response, err := modelResponse(ctx, node, prompt, adapters)
 		if err != nil {
-			return nil, fmt.Errorf("model card %q: %w", node.Key, err)
+			return nil, err
 		}
 		return map[string]any{"response": response}, nil
 	default:
 		return nil, fmt.Errorf("card type %q has no configured executor", node.Type)
 	}
+}
+
+func modelResponse(ctx context.Context, node Node, prompt string, adapters Adapters) (string, error) {
+	item, err := configuredIntegration(ctx, node, adapters, "model")
+	if err != nil {
+		return "", err
+	}
+	var client integration.ChatClient
+	switch item.Type {
+	case integration.TypeOpenAI:
+		client = adapters.OpenAI
+	case integration.TypeOllama:
+		client = adapters.Ollama
+	default:
+		return "", fmt.Errorf("model card %q integration %q must be type %q or %q", node.Key, item.Key, integration.TypeOpenAI, integration.TypeOllama)
+	}
+	if client == nil {
+		return "", fmt.Errorf("model card %q requires an injected %s adapter", node.Key, item.Type)
+	}
+	secret, err := resolveSecret(item, adapters, "model", node.Key)
+	if err != nil {
+		return "", err
+	}
+	response, err := client.Chat(ctx, item, secret, prompt)
+	if err != nil {
+		return "", fmt.Errorf("model card %q: %w", node.Key, err)
+	}
+	return response, nil
 }
 
 func publishReview(ctx context.Context, node Node, inputs map[string][]any, adapters Adapters, scopeKey string) (map[string]any, error) {

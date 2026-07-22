@@ -92,6 +92,11 @@ func Validate(definition Definition, catalog Catalog) error {
 				return err
 			}
 		}
+		if node.Type == "model" {
+			if _, err := modelSettingsFor(node); err != nil {
+				return err
+			}
+		}
 		nodes[node.Key] = node
 	}
 	for _, edge := range definition.Edges {

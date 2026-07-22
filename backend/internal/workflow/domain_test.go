@@ -36,3 +36,14 @@ func TestValidateRequiresASequentialLoopConfiguration(t *testing.T) {
 		t.Fatalf("loop validation error = %v", err)
 	}
 }
+
+func TestValidateBoundsModelCorrectiveRetryConfiguration(t *testing.T) {
+	definition := Definition{Key: "retry", Name: "Retry", Nodes: []Node{{Key: "model", Type: "model", Name: "Model", Config: map[string]any{"retry_limit": 4}}}}
+	if err := Validate(definition, DefaultCatalog()); err == nil || err.Error() != `model card "model" config.retry_limit must be between 0 and 3` {
+		t.Fatalf("retry limit validation error = %v", err)
+	}
+	definition.Nodes[0].Config = map[string]any{"retry_limit": 0, "retry_delay_ms": 60001}
+	if err := Validate(definition, DefaultCatalog()); err == nil || err.Error() != `model card "model" config.retry_delay_ms must be between 0 and 60000` {
+		t.Fatalf("retry delay validation error = %v", err)
+	}
+}

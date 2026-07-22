@@ -95,3 +95,14 @@ root `consolidate`; nested lists are flattened there before deterministic
 deduplication. The scoped-path calculation stops at a `loop.results` target, so
 `consolidate`, `format`, and `publish` are root-only and publication cannot be
 repeated for each group. See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-22: Direct model-validation corrective retry
+
+Corrective retry is runner behavior rather than a graph cycle. Only an invalid
+`validate.response` token directly produced by a model is eligible, and the
+runner uses that model's original prompt in the same scope with a fixed repair
+instruction. `retry_limit` defaults to zero and is capped at three; delay is
+capped at 60 seconds. Each retry is revalidated and cannot schedule another
+graph traversal, so an exhausted limit preserves `validate.invalid` routing.
+Attempt metadata contains counts and statuses only, avoiding new persistence of
+prompt, response, or secret plaintext. See [[Architecture]] and [[Feature Map]].

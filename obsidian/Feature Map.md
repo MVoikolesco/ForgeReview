@@ -21,6 +21,10 @@
 - Runner: executes local card graphs by typed inputs and persists node reports;
   active configured Gitea fetch and OpenAI-compatible/Ollama model cards run
   through injected adapters.
+- Corrective model retry: a directly connected `model -> validate` pair can
+  retry invalid model JSON in the same root or loop-child scope. The model card
+  exposes bounded retry limit/delay controls; reports retain attempt/status
+  metadata without adding plaintext prompt, response, or secret data.
 - Scoped loop runner: `group -> loop` can process each group through downstream
   cards in a separate deterministic scope, then emits terminal-card aggregates.
   The official review template scopes `template -> model -> validate ->

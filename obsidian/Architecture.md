@@ -47,6 +47,15 @@ finding-list aggregate in root `consolidate`, then runs `format` and `publish`
 once. SQLite persists each node-run scope key and loop execution metadata. See
 [[Decision Log]] and [[Feature Map]].
 
+When a direct `model.response -> validate.response` link produces an invalid
+finding list, validation may synchronously re-invoke that source model in the
+same scope. The bounded configuration belongs to the model (`retry_limit` 0–3,
+`retry_delay_ms` 0–60000); it uses the original prompt plus a static repair
+instruction and does not create a graph back edge. Model and validation node
+metadata records only attempt numbers and statuses, never repair prompts,
+responses, or credentials. Exhaustion emits the normal `validate.invalid`
+token. See [[Decision Log]] and [[Feature Map]].
+
 Execution input remains in SQLite. When configured, Redis transports execution
 IDs to a worker which atomically claims queued executions; status APIs continue
 to read SQLite. The in-process queue is an explicit local/test fallback only.

@@ -118,4 +118,10 @@ test("review template scopes group review through loop before one root publicati
     template.nodes.find((node) => node.id === "loop")?.data.config,
     { max_iterations: 20, concurrency: 1, on_error: "fail" },
   );
+  assert.deepEqual(template.nodes.find((node) => node.id === "model")?.data.config, {
+    integration: "",
+    max_tokens: 2000,
+    retry_limit: 0,
+    retry_delay_ms: 0,
+  });
 });

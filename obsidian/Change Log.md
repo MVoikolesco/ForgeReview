@@ -1,5 +1,12 @@
 # Change Log
 
+## 2026-07-22
+
+- Added bounded corrective retries from direct model output validation in the
+  backend runner and model-card Inspector. Retries preserve root/loop-child
+  scope, report sanitized attempt metadata, and retain the invalid route once
+  exhausted. See [[Architecture]] and [[Decision Log]].
+
 ## 2026-07-21
 
 - Moved the existing application to `POC/`.

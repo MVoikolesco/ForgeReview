@@ -249,6 +249,8 @@ export function reviewTemplate(
       node("model", "model", "Modelo de review", 1775, 125, {
         integration: "",
         max_tokens: 2000,
+        retry_limit: 0,
+        retry_delay_ms: 0,
       }),
       node("validate", "validate", "Validar resposta", 2070, 125, {
         validate_paths: true,

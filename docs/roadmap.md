@@ -1,6 +1,6 @@
 # ForgeReview Workflow Studio Roadmap
 
-Atualizado em 2026-07-21.
+Atualizado em 2026-07-22.
 
 ## Visão
 
@@ -57,6 +57,14 @@ docs/      Arquitetura, auditoria e este roadmap
   publicar uma única vez.
 - Respostas de modelo são validadas como lista JSON de achados; respostas
   inválidas seguem pela saída `validate.invalid`.
+- O `model` aceita `retry_limit` (padrão `0`, máximo `3`) e
+  `retry_delay_ms` (padrão `0`, máximo `60000`). Quando sua saída está ligada
+  diretamente a `validate.response`, uma resposta inválida pode ser corrigida
+  no mesmo escopo sem adicionar uma aresta de retorno: o runner reaplica o
+  prompt original com instrução estática de reparo e revalida até o limite. A
+  rota `validate.invalid` permanece após esgotamento. Metadados de node runs
+  registram contagens e estados de chamadas/validações, sem inserir prompts,
+  respostas ou segredos nesses metadados.
 
 ### Integrações e segurança
 
@@ -105,8 +113,6 @@ docs/      Arquitetura, auditoria e este roadmap
 
 ### 1. Completar a primeira pipeline de review
 
-- Adicionar retry corretivo no card de modelo quando `validate.invalid` for
-  recebido, com limite, backoff e tentativa auditada.
 - Completar políticas de erro por card: parar, ignorar, parcial, fallback e rota
   de erro.
 - Reimplementar a decisão final de review, comentários inline e publicação de

@@ -83,6 +83,88 @@ func TestRunRoutesInvalidModelResponseToValidateInvalid(t *testing.T) {
 	}
 }
 
+func TestRunCorrectsInvalidModelResponseBeforeValidateRouting(t *testing.T) {
+	definition := correctiveRetryDefinition(map[string]any{"integration": "model", "retry_limit": 1})
+	model := &sequentialModel{responses: []string{"not JSON", `[{"path":"a.go","line":1,"comment":"fixed","severity":"high"}]`}}
+	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, Adapters{Integrations: memoryIntegrations{"model": modelIntegration(t, "secret")}, Secrets: testSecrets(t), OpenAI: model})
+	if err != nil || model.calls != 2 {
+		t.Fatalf("corrective run = %#v, %v; calls=%d", report, err, model.calls)
+	}
+	if !hasOutput(report, "validate", "valid") || hasOutput(report, "validate", "invalid") {
+		t.Fatalf("corrective validation routing = %#v", report)
+	}
+	validate := nodeRunFor(t, report, "validate", rootScope)
+	if validate.Metadata["attempt_count"] != 2 || len(validate.Metadata["provider_calls"].([]any)) != 1 {
+		t.Fatalf("retry metadata = %#v", validate.Metadata)
+	}
+}
+
+func TestRunExhaustedCorrectiveRetryPreservesInvalidRoute(t *testing.T) {
+	definition := correctiveRetryDefinition(map[string]any{"integration": "model", "retry_limit": 1})
+	definition.Nodes = append(definition.Nodes, Node{Key: "invalid-log", Type: "log", Name: "Invalid log"})
+	definition.Edges = append(definition.Edges, Edge{Key: "invalid", FromNode: "validate", FromPort: "invalid", ToNode: "invalid-log", ToPort: "input"})
+	model := &sequentialModel{responses: []string{"not JSON", "still not JSON"}}
+	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, Adapters{Integrations: memoryIntegrations{"model": modelIntegration(t, "secret")}, Secrets: testSecrets(t), OpenAI: model})
+	if err != nil || model.calls != 2 || !hasOutput(report, "validate", "invalid") {
+		t.Fatalf("exhausted retry = %#v, %v; calls=%d", report, err, model.calls)
+	}
+	if _, ok := outputFor(t, report, "invalid-log", "output").(ValidationFailure); !ok {
+		t.Fatalf("invalid route was not preserved: %#v", report)
+	}
+}
+
+func TestRunCorrectiveRetriesRemainInEachLoopScope(t *testing.T) {
+	definition := Definition{Key: "scoped-retry", Name: "Scoped retry", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": []any{"one", "two"}}},
+		{Key: "loop", Type: "loop", Name: "Loop", Config: map[string]any{"max_iterations": 2}},
+		{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"template": "review"}},
+		{Key: "model", Type: "model", Name: "Model", Config: map[string]any{"integration": "model", "retry_limit": 1}},
+		{Key: "validate", Type: "validate", Name: "Validate"},
+	}, Edges: []Edge{
+		{Key: "items", FromNode: "start", FromPort: "event", ToNode: "loop", ToPort: "items"},
+		{Key: "context", FromNode: "loop", FromPort: "item", ToNode: "template", ToPort: "context"},
+		{Key: "prompt", FromNode: "template", FromPort: "prompt", ToNode: "model", ToPort: "prompt"},
+		{Key: "response", FromNode: "model", FromPort: "response", ToNode: "validate", ToPort: "response"},
+	}}
+	model := &sequentialModel{responses: []string{"bad first", `[]`, "bad second", `[]`}}
+	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, Adapters{Integrations: memoryIntegrations{"model": modelIntegration(t, "secret")}, Secrets: testSecrets(t), OpenAI: model})
+	if err != nil || model.calls != 4 {
+		t.Fatalf("scoped retries = %#v, %v; calls=%d", report, err, model.calls)
+	}
+	for _, scope := range []string{"loop:000001", "loop:000002"} {
+		validate := nodeRunFor(t, report, "validate", scope)
+		if validate.Metadata["attempt_count"] != 2 || !hasOutputInScope(report, "validate", scope, "valid") {
+			t.Fatalf("scope %s retry = %#v", scope, validate)
+		}
+	}
+}
+
+func correctiveRetryDefinition(modelConfig map[string]any) Definition {
+	return Definition{Key: "corrective", Name: "Corrective", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start"},
+		{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"template": "review original prompt"}},
+		{Key: "model", Type: "model", Name: "Model", Config: modelConfig},
+		{Key: "validate", Type: "validate", Name: "Validate"},
+	}, Edges: []Edge{
+		{Key: "context", FromNode: "start", FromPort: "event", ToNode: "template", ToPort: "context"},
+		{Key: "prompt", FromNode: "template", FromPort: "prompt", ToNode: "model", ToPort: "prompt"},
+		{Key: "response", FromNode: "model", FromPort: "response", ToNode: "validate", ToPort: "response"},
+	}}
+}
+
+func hasOutputInScope(report RunReport, nodeKey, scopeKey, portKey string) bool {
+	for _, run := range report.Runs {
+		if run.NodeKey == nodeKey && run.ScopeKey == scopeKey {
+			for _, output := range run.Outputs {
+				if output.PortKey == portKey {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func TestValidateResponseEnforcesFindingFieldsAndFetchedPaths(t *testing.T) {
 	files := []any{[]map[string]any{{"filename": "api/main.go"}}}
 	valid, port := validateResponse([]any{`[{"path":"api/main.go","line":1,"comment":"handle error","severity":"high"}]`}, files, map[string]any{"validate_paths": true})
