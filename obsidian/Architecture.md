@@ -151,3 +151,8 @@ removed cards before committing the local state. The frontend also derives a
 catalog-aware validation issue list before save/publish/run; it is advisory and
 the backend's `workflow.Validate` remains the final persistence authority. See
 [[Feature Map]] and [[Decision Log]].
+
+React Flow selection handlers and derived error-edge props are memoized. The
+selection handler ignores identical ID reports before setting Studio state, so a
+controlled canvas hydration or graph update cannot re-register a listener and
+create a render/update loop. See [[Decision Log]].

@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   executeWorkflow,
   getCards,
@@ -51,6 +51,7 @@ import {
   localCards,
   removeSelectedElements,
   reviewTemplate,
+  selectionHasChanged,
   starterEdges,
   starterNodes,
   toDefinition,
@@ -197,7 +198,7 @@ export function StudioWorkspace() {
       "Template de review carregado. Configure Gitea, modelo e dados do PR nos cards selecionados.",
     );
   };
-  const connect = (connection: Connection) => {
+  const connect = useCallback((connection: Connection) => {
     const source = nodes.find((node) => node.id === connection.source);
     const target = nodes.find((node) => node.id === connection.target);
     const sourcePort = source && cardOutputPorts(source.data).find(
@@ -214,7 +215,7 @@ export function StudioWorkspace() {
     }
     setEdges((all) => addEdge({ ...connection, animated: true }, all));
     setDirty(true);
-  };
+  }, [nodes, setEdges]);
   const patchSelected = (patch: Partial<CardData>) => {
     setSelected((current) => ({ ...current, ...patch }));
     setNodes((all) =>
@@ -357,7 +358,7 @@ export function StudioWorkspace() {
     setMessage(nextMessage);
     setTransfer(undefined);
   };
-  const trackNodeChanges = (...args: Parameters<typeof onNodesChange>) => {
+  const trackNodeChanges = useCallback((...args: Parameters<typeof onNodesChange>) => {
     if (!canEdit) return;
     if (
       args[0].some((change) =>
@@ -366,8 +367,8 @@ export function StudioWorkspace() {
     )
       setDirty(true);
     onNodesChange(...args);
-  };
-  const trackEdgeChanges = (...args: Parameters<typeof onEdgesChange>) => {
+  }, [canEdit, onNodesChange]);
+  const trackEdgeChanges = useCallback((...args: Parameters<typeof onEdgesChange>) => {
     if (!canEdit) return;
     if (
       args[0].some((change) =>
@@ -376,15 +377,30 @@ export function StudioWorkspace() {
     )
       setDirty(true);
     onEdgesChange(...args);
-  };
-  const requestRemoval = () => {
+  }, [canEdit, onEdgesChange]);
+  const requestRemoval = useCallback(() => {
     if (!canEdit) return;
     if (!selectedNodeIDs.length && !selectedEdgeIDs.length) {
       setMessage("Selecione um ou mais cards ou conexões para remover.");
       return;
     }
     setConfirmRemoval(true);
-  };
+  }, [canEdit, selectedEdgeIDs.length, selectedNodeIDs.length]);
+  const handleSelectionChange = useCallback((selectedNodes: Node<CardData>[], selectedEdges: Edge[]) => {
+    const nextNodeIDs = selectedNodes.map((node) => node.id);
+    const nextEdgeIDs = selectedEdges.map((edge) => edge.id);
+    setSelectedNodeIDs((current) =>
+      selectionHasChanged(current, nextNodeIDs) ? nextNodeIDs : current,
+    );
+    setSelectedEdgeIDs((current) =>
+      selectionHasChanged(current, nextEdgeIDs) ? nextEdgeIDs : current,
+    );
+    if (selectedNodes[0]) {
+      setSelected((current) =>
+        current.key === selectedNodes[0].data.key ? current : selectedNodes[0].data,
+      );
+    }
+  }, []);
   const removeSelection = () => {
     const removed = removeSelectedElements(nodes, edges, selectedNodeIDs, selectedEdgeIDs);
     setNodes(removed.nodes);
@@ -479,11 +495,7 @@ export function StudioWorkspace() {
         onEdgesChange={trackEdgeChanges}
         onConnect={connect}
         onSelect={setSelected}
-        onSelectionChange={(selectedNodes, selectedEdges) => {
-          setSelectedNodeIDs(selectedNodes.map((node) => node.id));
-          setSelectedEdgeIDs(selectedEdges.map((edge) => edge.id));
-          if (selectedNodes[0]) setSelected(selectedNodes[0].data);
-        }}
+        onSelectionChange={handleSelectionChange}
         onRequestDelete={requestRemoval}
         validationIssues={validationIssues}
         onSelectValidationIssue={selectValidationIssue}

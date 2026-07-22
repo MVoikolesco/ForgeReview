@@ -2,6 +2,12 @@
 
 ## 2026-07-22
 
+- Fixed the Studio production render loop triggered by React Flow selection
+  reporting during controlled graph hydration. Canvas callbacks and derived
+  edges are memoized, and repeated selection IDs no longer schedule a state
+  update. Added regression coverage for repeated selection reports. See
+  [[Architecture]] and [[Decision Log]].
+
 - Added confirmed Studio removal for selected cards and connections, including
   Delete/Backspace handling, incident-edge cleanup, and viewer read-only
   protection. Added local actionable validation before save, publish, and run

@@ -9,6 +9,7 @@ import {
   localCards,
   reviewTemplate,
   removeSelectedElements,
+  selectionHasChanged,
   starterEdges,
   starterNodes,
   toDefinition,
@@ -220,6 +221,12 @@ test("removing selected cards also removes their connected edges without touchin
   assert.deepEqual(result.nodes.map((node) => node.id), ["trigger", "condition", "log"]);
   assert.deepEqual(result.edges.map((edge) => edge.id), []);
   assert.equal(result.removedEdges, 3);
+});
+
+test("repeated React Flow selection reports do not require another Studio state update", () => {
+  assert.equal(selectionHasChanged(["transform"], ["transform"]), false);
+  assert.equal(selectionHasChanged(["transform"], ["condition"]), true);
+  assert.equal(selectionHasChanged(["transform"], ["transform", "condition"]), true);
 });
 
 test("workflow version lifecycle exposes publishable drafts only", () => {

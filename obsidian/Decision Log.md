@@ -231,3 +231,12 @@ and execution only for failures the current graph can determine, and links an
 issue back to its card where possible. The API remains the authority because it
 validates the persisted definition against current server rules. See
 [[Architecture]] and [[Feature Map]].
+
+## 2026-07-22: Stable controlled-canvas selection callbacks
+
+React Flow invokes `onSelectionChange` from an effect whose dependencies include
+the callback. The Studio therefore keeps its selection callback stable and
+preserves prior selection-ID state for repeated reports; derived error-edge
+props are memoized as well. This prevents a controlled hydration/update from
+continually triggering React state updates while retaining card and edge
+selection behavior. See [[Architecture]] and [[Feature Map]].

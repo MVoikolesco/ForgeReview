@@ -14,6 +14,7 @@ import {
 import type { WorkflowValidationIssue } from "../../lib/workflow";
 import "@xyflow/react/dist/style.css";
 import type { CardData } from "../../lib/types";
+import { useCallback, useMemo } from "react";
 import styles from "./WorkflowCanvas.module.scss";
 import { WorkflowCard } from "./WorkflowCard";
 
@@ -48,16 +49,24 @@ export function WorkflowCanvas({
   onSelectValidationIssue,
   readOnly = false,
 }: WorkflowCanvasProps) {
-  const visibleEdges = edges.map((edge) =>
-    edge.sourceHandle === "out-error"
-      ? {
-          ...edge,
-          animated: true,
-          label: "erro",
-          style: { stroke: "#e87b91", strokeDasharray: "5 4" },
-          labelStyle: { fill: "#e87b91", fontSize: 10 },
-        }
-      : edge,
+  const visibleEdges = useMemo(
+    () => edges.map((edge) =>
+      edge.sourceHandle === "out-error"
+        ? {
+            ...edge,
+            animated: true,
+            label: "erro",
+            style: { stroke: "#e87b91", strokeDasharray: "5 4" },
+            labelStyle: { fill: "#e87b91", fontSize: 10 },
+          }
+        : edge,
+    ),
+    [edges],
+  );
+  const handleSelectionChange = useCallback(
+    ({ nodes: selectedNodes, edges: selectedEdges }: { nodes: Node[]; edges: Edge[] }) =>
+      onSelectionChange(selectedNodes as Node<CardData>[], selectedEdges),
+    [onSelectionChange],
   );
   return (
     <section
@@ -79,9 +88,7 @@ export function WorkflowCanvas({
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onNodeClick={(_, node) => onSelect(node.data)}
-        onSelectionChange={({ nodes: selectedNodes, edges: selectedEdges }) =>
-          onSelectionChange(selectedNodes as Node<CardData>[], selectedEdges)
-        }
+        onSelectionChange={handleSelectionChange}
         nodesDraggable={!readOnly}
         nodesConnectable={!readOnly}
         deleteKeyCode={null}

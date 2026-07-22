@@ -373,6 +373,17 @@ export function removeSelectedElements(
   };
 }
 
+/**
+ * React Flow can report the current selection after a controlled graph update.
+ * Avoid turning an identical report into another React state update.
+ */
+export const selectionHasChanged = (
+  current: readonly string[],
+  next: readonly string[],
+) =>
+  current.length !== next.length ||
+  current.some((id, index) => id !== next[index]);
+
 export function parseWorkflowExport(
   text: string,
   cards: CardType[],
