@@ -48,6 +48,12 @@ docs/      Arquitetura, auditoria e este roadmap
 - Estados de execução persistidos: fila, execução, conclusão e falha.
 - Ciclo de vida de versão: rascunho, publicação atômica e arquivamento da
   versão publicada anterior.
+- Na inicialização, o backend garante a pipeline oficial publicada
+  `official-gitea-pr-review` (versão inicial `1`) com o grafo completo de
+  review. O seed é idempotente: se já houver uma versão publicada para essa
+  chave, não cria versão nem altera workflows do usuário. Descubra-a por
+  `GET /api/workflows` e carregue a versão retornada por
+  `GET /api/workflow-versions/:id`.
 
 ### Cards com execução atual
 
@@ -106,6 +112,9 @@ docs/      Arquitetura, auditoria e este roadmap
 - Wizard de conexões em etapas para Gitea, Ollama local, Ollama Cloud e
   OpenRouter.
 - Rotas: `/studio`, `/pipelines` e `/integrations`.
+- O template e a pipeline seed usam `model_profile` para a conexão de modelo;
+  a publicação Gitea inicia com `medium_severity_event: "COMMENT"` e
+  `allow_autonomous_rejection: false`.
 - Frontend estruturado em componentes reutilizáveis, base card shell, modal
   shell, tipos/API compartilhados e SCSS modular com tokens, temas e mixins.
 
@@ -126,11 +135,7 @@ docs/      Arquitetura, auditoria e este roadmap
 
 ## Próximas etapas
 
-### 1. Completar a primeira pipeline de review
-
-- Criar pipeline seed oficial versionada para o fluxo de review.
-
-### 2. Concluir gerenciamento visual
+### 1. Concluir gerenciamento visual
 
 - Permitir abrir uma versão existente no Studio para visualização/edição de um
   novo rascunho.
@@ -141,7 +146,7 @@ docs/      Arquitetura, auditoria e este roadmap
   os cards hoje suportados pelo inspector.
 - Adicionar minimapa, busca de cards e atalhos de teclado consistentes.
 
-### 3. Área de integrações e modelos
+### 2. Área de integrações e modelos
 
 - Teste de conexão para Gitea, Ollama e OpenRouter.
 - Atualização, desativação e remoção segura de integrações.
@@ -149,7 +154,7 @@ docs/      Arquitetura, auditoria e este roadmap
 - Parâmetros por card de modelo: temperatura, top-p, tokens, timeout,
   keep-alive, fallback e limites de custo.
 
-### 4. Execução durável e observabilidade
+### 3. Execução durável e observabilidade
 
 - SSE ou WebSocket para atualizar execução no canvas sem polling.
 - Cancelamento, reprocessamento de card/grupo e retomada segura.
@@ -158,7 +163,7 @@ docs/      Arquitetura, auditoria e este roadmap
 - Dead-letter queue, retries de transporte e métricas de worker/fila.
 - Política de retenção, mascaramento e expiração para payloads sensíveis.
 
-### 5. Administração e segurança
+### 4. Administração e segurança
 
 - Autenticação e autorização por domínio administrativo.
 - Gestão de segredos com armazenamento cifrado ou secret manager, substituindo
@@ -167,7 +172,7 @@ docs/      Arquitetura, auditoria e este roadmap
 - Assinatura/verificação de webhooks Gitea e idempotência de eventos de entrada.
 - Auditoria de alterações de pipeline, integração e publicação.
 
-### 6. Expansão de cards
+### 5. Expansão de cards
 
 - Transformações declarativas e variáveis com namespaces controlados.
 - Subpipelines (`workflow`) com interfaces de entrada/saída publicadas.

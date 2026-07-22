@@ -85,6 +85,47 @@ func TestPublishRejectsInvalidDraftWithoutArchivingPublishedVersion(t *testing.T
 	}
 }
 
+func TestEnsureOfficialReviewWorkflowSeedsOnceWithoutChangingUserWorkflows(t *testing.T) {
+	path := "file:" + t.TempDir() + "/official-review.db"
+	database, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	userID, err := database.Save(context.Background(), versionedDefinition("User review"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Publish(context.Background(), userID, workflow.DefaultCatalog()); err != nil {
+		t.Fatal(err)
+	}
+
+	first, seeded, err := database.EnsureOfficialReviewWorkflow(context.Background(), workflow.DefaultCatalog())
+	if err != nil || !seeded || first.Version != workflow.OfficialReviewWorkflowVersion || first.Status != workflow.VersionStatusPublished {
+		t.Fatalf("first official seed = %#v, %t, %v", first, seeded, err)
+	}
+	if err = database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	second, seeded, err := database.EnsureOfficialReviewWorkflow(context.Background(), workflow.DefaultCatalog())
+	if err != nil || seeded || second != first {
+		t.Fatalf("second official seed = %#v, %t, %v", second, seeded, err)
+	}
+
+	items, err := database.ListDefinitions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].Key != workflow.OfficialReviewWorkflowKey || len(items[0].Versions) != 1 || items[0].Versions[0] != first || items[1].Key != "review" || items[1].Versions[0].Status != workflow.VersionStatusPublished {
+		t.Fatalf("workflow summaries = %#v", items)
+	}
+}
+
 func versionedDefinition(name string) workflow.Definition {
 	return workflow.Definition{Key: "review", Name: name, Nodes: []workflow.Node{{Key: "start", Type: "trigger", Name: "Start"}}}
 }

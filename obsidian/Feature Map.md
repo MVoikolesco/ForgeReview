@@ -46,6 +46,11 @@
 - Workflow version lifecycle: saves remain new drafts; workflow lists expose
   version number, creation time, and draft/published/archived state. Publishing
   a valid draft atomically archives its workflow's previous published version.
+- Official review pipeline: startup seeds and publishes the complete
+  `official-gitea-pr-review` graph as initial version 1 only when no published
+  version exists for that key. It uses model profiles and safe native-Gitea
+  publication defaults; users discover it in `GET /api/workflows` and load its
+  version definition through `GET /api/workflow-versions/:id`.
 - Pipeline lifecycle UI: `/pipelines` shows grouped versions with distinct
   rascunho/publicada/arquivada states and permits publication only from a draft.
   Studio has separate draft-save and publish controls; publishing saves the

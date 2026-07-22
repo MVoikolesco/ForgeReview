@@ -2,6 +2,11 @@
 
 ## 2026-07-22
 
+- Added an idempotent startup seed for the published full-review workflow
+  `official-gitea-pr-review` (initial version 1). It preserves all user
+  workflows and existing official publications, uses model-profile conventions,
+  and defaults the native Gitea publish card to no autonomous rejection. See
+  [[Architecture]] and [[Decision Log]].
 - Changed controlled Gitea publication from an issue comment to a native PR
   review with a final event and inline comments. Formatted reviews now include
   deterministic event/status summaries and observations; safe event defaults and

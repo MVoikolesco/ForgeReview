@@ -74,3 +74,23 @@ func TestValidateRequiresExplicitTypedErrorRoute(t *testing.T) {
 		t.Fatalf("explicit typed route should validate: %v", err)
 	}
 }
+
+func TestOfficialReviewDefinitionIsAValidFullGraphWithSafePublicationDefaults(t *testing.T) {
+	definition := OfficialReviewDefinition()
+	if definition.Key != OfficialReviewWorkflowKey || len(definition.Nodes) != 12 || len(definition.Edges) != 12 {
+		t.Fatalf("official definition shape = %#v", definition)
+	}
+	if err := Validate(definition, DefaultCatalog()); err != nil {
+		t.Fatalf("official definition validation = %v", err)
+	}
+	configs := map[string]map[string]any{}
+	for _, node := range definition.Nodes {
+		configs[node.Key] = node.Config
+	}
+	if configs["model"]["model_profile"] != "" || configs["model"]["retry_limit"] != 0 || configs["model"]["retry_delay_ms"] != 0 {
+		t.Fatalf("model defaults = %#v", configs["model"])
+	}
+	if configs["publish"]["allow_autonomous_rejection"] != false || configs["publish"]["medium_severity_event"] != "COMMENT" {
+		t.Fatalf("publish defaults = %#v", configs["publish"])
+	}
+}

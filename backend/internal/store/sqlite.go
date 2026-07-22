@@ -149,6 +149,57 @@ func (s *SQLite) Save(ctx context.Context, definition workflow.Definition) (int6
 	return id, nil
 }
 
+// EnsureOfficialReviewWorkflow creates and publishes the seeded official review
+// pipeline only when its key has no published version. User workflows and
+// historical official drafts are intentionally left untouched.
+func (s *SQLite) EnsureOfficialReviewWorkflow(ctx context.Context, catalog workflow.Catalog) (workflow.VersionSummary, bool, error) {
+	definition := workflow.OfficialReviewDefinition()
+	if err := workflow.Validate(definition, catalog); err != nil {
+		return workflow.VersionSummary{}, false, fmt.Errorf("validate official review workflow: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return workflow.VersionSummary{}, false, err
+	}
+	defer tx.Rollback()
+
+	var existing workflow.VersionSummary
+	err = tx.QueryRowContext(ctx, `SELECT id,version,status,created_at FROM workflow_versions WHERE workflow_key=? AND status=?`, definition.Key, workflow.VersionStatusPublished).Scan(&existing.ID, &existing.Version, &existing.Status, &existing.CreatedAt)
+	if err == nil {
+		if err = tx.Commit(); err != nil {
+			return workflow.VersionSummary{}, false, err
+		}
+		return existing, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return workflow.VersionSummary{}, false, err
+	}
+
+	payload, err := json.Marshal(definition)
+	if err != nil {
+		return workflow.VersionSummary{}, false, err
+	}
+	var latestVersion int
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM workflow_versions WHERE workflow_key=?`, definition.Key).Scan(&latestVersion); err != nil {
+		return workflow.VersionSummary{}, false, err
+	}
+	result, err := tx.ExecContext(ctx, `INSERT INTO workflow_versions(workflow_key,version,name,description,status,definition_json) VALUES(?,?,?,?,?,?)`, definition.Key, latestVersion+1, definition.Name, definition.Description, workflow.VersionStatusPublished, string(payload))
+	if err != nil {
+		return workflow.VersionSummary{}, false, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return workflow.VersionSummary{}, false, err
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT id,version,status,created_at FROM workflow_versions WHERE id=?`, id).Scan(&existing.ID, &existing.Version, &existing.Status, &existing.CreatedAt); err != nil {
+		return workflow.VersionSummary{}, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return workflow.VersionSummary{}, false, err
+	}
+	return existing, true, nil
+}
+
 func (s *SQLite) Load(ctx context.Context, id int64) (workflow.Definition, error) {
 	var payload string
 	err := s.db.QueryRowContext(ctx, `SELECT definition_json FROM workflow_versions WHERE id=?`, id).Scan(&payload)

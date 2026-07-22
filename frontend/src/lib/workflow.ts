@@ -236,10 +236,8 @@ export function reviewTemplate(
       node("fetch", "fetch", "Buscar dados do PR", 315, 280, {
         owner: "",
         repo: "",
-         pull_request: 0,
-         integration: "",
-         medium_severity_event: "COMMENT",
-         allow_autonomous_rejection: false,
+        pull_request: 0,
+        integration: "",
        }),
       node("filter", "filter", "Filtrar arquivos", 610, 125, {
         include_extensions: [".go", ".ts", ".tsx", ".php"],
@@ -260,7 +258,7 @@ export function reviewTemplate(
           "Analise este grupo de arquivos e responda somente uma lista JSON de achados.",
       }),
       node("model", "model", "Modelo de review", 1775, 125, {
-        integration: "",
+        model_profile: "",
         max_tokens: 2000,
         retry_limit: 0,
         retry_delay_ms: 0,
@@ -278,6 +276,8 @@ export function reviewTemplate(
         repo: "",
         pull_request: 0,
         integration: "",
+        medium_severity_event: "COMMENT",
+        allow_autonomous_rejection: false,
       }),
     ],
     edges: [

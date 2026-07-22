@@ -139,9 +139,17 @@ test("review template scopes group review through loop before one root publicati
     { max_iterations: 20, concurrency: 1, on_error: "fail" },
   );
   assert.deepEqual(template.nodes.find((node) => node.id === "model")?.data.config, {
-    integration: "",
+    model_profile: "",
     max_tokens: 2000,
     retry_limit: 0,
     retry_delay_ms: 0,
+  });
+  assert.deepEqual(template.nodes.find((node) => node.id === "publish")?.data.config, {
+    owner: "",
+    repo: "",
+    pull_request: 0,
+    integration: "",
+    medium_severity_event: "COMMENT",
+    allow_autonomous_rejection: false,
   });
 });

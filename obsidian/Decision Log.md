@@ -150,3 +150,16 @@ escalate through `medium_severity_event`. The system never automates approval.
 Existing execution-bound idempotency remains the sole duplicate-post control;
 manual approval and reconciliation after uncertain provider outcomes are pending.
 See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-22: Idempotent official review-pipeline seed
+
+The server ensures a published `official-gitea-pr-review` workflow at startup,
+instead of requiring a manual first publication. The store checks for a
+published version under that dedicated key and otherwise creates the full review
+graph as the next version and publishes it in one transaction. This leaves user
+workflow keys, official drafts, and an existing published official version
+untouched across restarts. The seed follows current model-profile configuration
+and explicitly defaults its native Gitea publication to `COMMENT` without
+autonomous rejection. Discovery remains on the existing workflow-list and
+version-load APIs rather than adding a Studio-only path. See [[Architecture]]
+and [[Feature Map]].

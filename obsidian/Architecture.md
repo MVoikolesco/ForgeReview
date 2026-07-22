@@ -20,6 +20,14 @@ Publishing validates the stored draft within a transaction, archives the prior
 published version for that key, and then promotes the draft. Stored definitions
 have no mutable HTTP endpoint. See [[Decision Log]] and [[Feature Map]].
 
+Server startup idempotently seeds `official-gitea-pr-review` as published
+version 1 when that key has no published version. Its immutable definition is
+the full scoped review graph and uses `model_profile`; its Gitea publish-card
+defaults retain `allow_autonomous_rejection: false` and `COMMENT` for medium
+severity. Existing official versions and all user keys remain unchanged. The
+published version is discoverable through `GET /api/workflows` and loadable at
+`GET /api/workflow-versions/:id`. See [[Decision Log]] and [[Feature Map]].
+
 Docker Compose exposes the new frontend on port 3010 and backend on port 8088;
 SQLite and Redis use named volumes.
 

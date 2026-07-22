@@ -22,6 +22,15 @@ definition again and atomically promotes that draft while archiving the prior
 published version for the same workflow key. Only one published version can
 exist per workflow key.
 
+Startup calls the store's idempotent official-review seed. It creates and
+publishes `official-gitea-pr-review` version `1` only when no published version
+exists for that key; it never modifies user workflow keys or an existing
+official version. The definition is the full scoped review graph and uses the
+same `model_profile` convention as the Studio. Its Gitea `publish` card keeps
+`allow_autonomous_rejection: false` and `medium_severity_event: "COMMENT"` by
+default. `GET /api/workflows` identifies the published version and
+`GET /api/workflow-versions/:id` returns its immutable graph.
+
 ## Current API
 
 - `GET /health`: backend health.

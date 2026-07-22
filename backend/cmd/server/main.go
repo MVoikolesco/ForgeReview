@@ -30,6 +30,9 @@ func main() {
 		log.Fatal(err)
 	}
 	defer workflows.Close()
+	if _, _, err = workflows.EnsureOfficialReviewWorkflow(context.Background(), workflow.DefaultCatalog()); err != nil {
+		log.Fatal(err)
+	}
 	adapters := workflow.Adapters{
 		Integrations:  workflows,
 		ModelProfiles: workflows,
