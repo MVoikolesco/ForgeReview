@@ -45,6 +45,16 @@
     white-space: nowrap;
 }
 
+.topbar .valid,
+.topbar .invalid {
+    font-size: 11px;
+    font-style: normal;
+    white-space: nowrap;
+}
+
+.topbar .valid { color: #86dcb2; }
+.topbar .invalid { color: #f0a6b3; }
+
 .topbar>div {
     display: flex;
     gap: 8px;
@@ -76,6 +86,12 @@
     background: #173b2a;
 }
 
+.removeConfirm {
+    border-color: #a64f61 !important;
+    color: #ffe2e7 !important;
+    background: #55202c !important;
+}
+
 @media (max-width: $breakpoint-tablet) {
     .studio {
         grid-template-columns: 210px 1fr;
@@ -94,6 +110,8 @@
 
     .topbar>span,
     .topbar .unsaved,
+    .topbar .valid,
+    .topbar .invalid,
     .topbar a {
         display: none;
     }

@@ -8,12 +8,14 @@ import {
   hydrateDefinition,
   localCards,
   reviewTemplate,
+  removeSelectedElements,
   starterEdges,
   starterNodes,
   toDefinition,
   cloneWorkflowDefinition,
   parseWorkflowExport,
   validateWorkflowDefinition,
+  validateStudioWorkflow,
   workflowExportEnvelope,
   workflowVersionStatusLabel,
 } from "./workflow";
@@ -193,6 +195,31 @@ test("error routes require the explicit error output edge", () => {
     ),
     true,
   );
+});
+
+test("local Studio validation reports actionable identity, graph, configuration, and error-route failures", () => {
+  const issues = validateStudioWorkflow({
+    key: "", name: "", description: "", nodes: [
+      { key: "template", type: "template", name: "Template", config: { on_error: "route" }, position: { x: 0, y: 0 } },
+      { key: "model", type: "model", name: "Model", config: {}, position: { x: 1, y: 0 } },
+    ], edges: [],
+  }, [
+    { key: "template", name: "Template", category: "Test", description: "", inputs: [], outputs: [], error_output: { key: "error", label: "Erro", contract: "error", required: false } },
+    { key: "model", name: "Model", category: "Test", description: "", inputs: [{ key: "prompt", label: "Prompt", contract: "prompt", required: true }], outputs: [] },
+  ]);
+  assert.deepEqual(issues.map((issue) => issue.nodeKey), [undefined, "template", "model", "template", "model"]);
+  assert.match(issues.map((issue) => issue.message).join("\n"), /chave e o nome/);
+  assert.match(issues.map((issue) => issue.message).join("\n"), /template/);
+  assert.match(issues.map((issue) => issue.message).join("\n"), /perfil de modelo/);
+  assert.match(issues.map((issue) => issue.message).join("\n"), /rota de erro/);
+  assert.match(issues.map((issue) => issue.message).join("\n"), /entrada obrigatória/);
+});
+
+test("removing selected cards also removes their connected edges without touching other graph elements", () => {
+  const result = removeSelectedElements(starterNodes, starterEdges, ["transform"], ["condition-log"]);
+  assert.deepEqual(result.nodes.map((node) => node.id), ["trigger", "condition", "log"]);
+  assert.deepEqual(result.edges.map((edge) => edge.id), []);
+  assert.equal(result.removedEdges, 3);
 });
 
 test("workflow version lifecycle exposes publishable drafts only", () => {

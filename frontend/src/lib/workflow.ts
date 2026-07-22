@@ -251,17 +251,74 @@ export function validateWorkflowDefinition(
   definition: WorkflowDefinition,
   cards: CardType[],
 ): string | undefined {
+  return validateStudioWorkflow(definition, cards)[0]?.message;
+}
+
+export type WorkflowValidationIssue = {
+  nodeKey?: string;
+  message: string;
+};
+
+const nonEmptyText = (value: unknown) =>
+  typeof value === "string" && value.trim().length > 0;
+const positiveInteger = (value: unknown) =>
+  typeof value === "number" && Number.isInteger(value) && value > 0;
+
+/**
+ * Mirrors graph and configuration failures that the client can know from the
+ * current catalog. The backend still validates every persisted definition.
+ */
+export function validateStudioWorkflow(
+  definition: WorkflowDefinition,
+  cards: CardType[],
+): WorkflowValidationIssue[] {
+  const issues: WorkflowValidationIssue[] = [];
   if (!definition.key.trim() || !definition.name.trim())
-    return "O workflow importado precisa ter chave e nome.";
+    issues.push({ message: "Informe a chave e o nome do workflow." });
+  if (definition.nodes.length === 0)
+    issues.push({ message: "Adicione ao menos um card ao workflow." });
   const cardByType = new Map(cards.map((card) => [card.key, card]));
   const nodeKeys = new Set<string>();
   for (const node of definition.nodes) {
     if (!node.key || !node.name || !cardByType.has(node.type))
-      return `O node "${node.key || "sem chave"}" é inválido ou usa um card indisponível.`;
-    if (nodeKeys.has(node.key)) return `A chave de node "${node.key}" está duplicada.`;
+      issues.push({ nodeKey: node.key, message: `O card "${node.key || "sem chave"}" é inválido ou usa um tipo indisponível.` });
+    if (nodeKeys.has(node.key)) issues.push({ nodeKey: node.key, message: `A chave do card "${node.key}" está duplicada.` });
     if (hasUnsafeConfig(node.config))
-      return `O node "${node.key}" contém segredo, token ou ciphertext e não pode ser importado.`;
+      issues.push({ nodeKey: node.key, message: `O card "${node.key}" contém segredo, token ou ciphertext e não pode ser salvo.` });
     nodeKeys.add(node.key);
+    const policy = configText(node.config.on_error) || (node.type === "error_control" ? "continue" : "fail");
+    if (node.type === "error_control") {
+      if (!["fail", "continue", "fallback"].includes(policy))
+        issues.push({ nodeKey: node.key, message: `O card "${node.name}" usa uma política de erro inválida.` });
+      if (policy === "fallback" && !nonEmptyText(node.config.fallback_result))
+        issues.push({ nodeKey: node.key, message: `Defina o resultado de fallback do card "${node.name}".` });
+    } else if (!["fail", "continue", "partial", "route"].includes(policy)) {
+      issues.push({ nodeKey: node.key, message: `O card "${node.name}" usa uma política de erro inválida.` });
+    }
+    if (node.type === "template" && !nonEmptyText(node.config.template))
+      issues.push({ nodeKey: node.key, message: `Defina o template do card "${node.name}".` });
+    if (node.type === "model") {
+      if (!nonEmptyText(node.config.model_profile) && !nonEmptyText(node.config.integration))
+        issues.push({ nodeKey: node.key, message: `Selecione um perfil de modelo para "${node.name}".` });
+      for (const [key, max] of [["retry_limit", 3], ["retry_delay_ms", 60000]] as const) {
+        const value = node.config[key];
+        if (value !== undefined && (!Number.isInteger(value) || (value as number) < 0 || (value as number) > max))
+          issues.push({ nodeKey: node.key, message: `"${node.name}" precisa de ${key} entre 0 e ${max}.` });
+      }
+    }
+    if (["fetch", "publish"].includes(node.type) &&
+      (!nonEmptyText(node.config.integration) || !nonEmptyText(node.config.owner) || !nonEmptyText(node.config.repo) || !positiveInteger(node.config.pull_request)))
+      issues.push({ nodeKey: node.key, message: `Configure conexão, organização, repositório e número positivo do PR em "${node.name}".` });
+    if (node.type === "loop" && (!positiveInteger(node.config.max_iterations) || (node.config.concurrency !== undefined && node.config.concurrency !== 1)))
+      issues.push({ nodeKey: node.key, message: `"${node.name}" requer máximo de iterações positivo e concorrência 1.` });
+    if (node.type === "group" && (!positiveInteger(node.config.max_files) || !positiveInteger(node.config.max_characters)))
+      issues.push({ nodeKey: node.key, message: `"${node.name}" requer limites positivos de arquivos e caracteres.` });
+    if (node.type === "cache") {
+      const mode = configText(node.config.mode);
+      if (!nonEmptyText(node.config.key) || !["read", "write", "delete"].includes(mode) ||
+        (mode === "write" && (!positiveInteger(node.config.ttl_seconds) || (node.config.ttl_seconds as number) > 86400)))
+        issues.push({ nodeKey: node.key, message: `"${node.name}" requer chave, operação válida e TTL de 1 a 86400 para gravação.` });
+    }
   }
   const edgeKeys = new Set<string>();
   for (const edge of definition.edges) {
@@ -274,14 +331,46 @@ export function validateWorkflowDefinition(
       : sourceCard.outputs);
     const output = sourcePorts?.find((port) => port.key === edge.from_port);
     const input = targetCard?.inputs.find((port) => port.key === edge.to_port);
-    if (!edge.key || !source || !target || !output || !input)
-      return `A conexão "${edge.key || "sem chave"}" referencia um node ou porta inválida.`;
-    if (edgeKeys.has(edge.key)) return `A chave de conexão "${edge.key}" está duplicada.`;
+    if (!edge.key || !source || !target || !output || !input) {
+      issues.push({ message: `A conexão "${edge.key || "sem chave"}" referencia um card ou porta inválida.` });
+      continue;
+    }
+    if (edgeKeys.has(edge.key)) issues.push({ message: `A chave da conexão "${edge.key}" está duplicada.` });
     if (output.contract !== "any" && input.contract !== "any" && output.contract !== input.contract)
-      return `A conexão "${edge.key}" usa contratos incompatíveis.`;
+      issues.push({ message: `A conexão "${edge.key}" usa contratos incompatíveis.` });
     edgeKeys.add(edge.key);
   }
-  return undefined;
+  for (const node of definition.nodes) {
+    const card = cardByType.get(node.type);
+    if (!card) continue;
+    for (const input of card.inputs.filter((port) => port.required)) {
+      if (!definition.edges.some((edge) => edge.to_node === node.key && edge.to_port === input.key))
+        issues.push({ nodeKey: node.key, message: `Conecte a entrada obrigatória "${input.label}" do card "${node.name}".` });
+    }
+    if (node.type !== "error_control" && configText(node.config.on_error) === "route" &&
+      !definition.edges.some((edge) => edge.from_node === node.key && edge.from_port === "error"))
+      issues.push({ nodeKey: node.key, message: `Conecte a rota de erro do card "${node.name}".` });
+  }
+  return issues;
+}
+
+export function removeSelectedElements(
+  nodes: Node<CardData>[],
+  edges: Edge[],
+  nodeIDs: Iterable<string>,
+  edgeIDs: Iterable<string>,
+) {
+  const selectedNodes = new Set(nodeIDs);
+  const selectedEdges = new Set(edgeIDs);
+  const remainingNodes = nodes.filter((node) => !selectedNodes.has(node.id));
+  const removedEdges = edges.filter((edge) =>
+    selectedEdges.has(edge.id) || selectedNodes.has(edge.source) || selectedNodes.has(edge.target),
+  );
+  return {
+    nodes: remainingNodes,
+    edges: edges.filter((edge) => !removedEdges.includes(edge)),
+    removedEdges: removedEdges.length,
+  };
 }
 
 export function parseWorkflowExport(

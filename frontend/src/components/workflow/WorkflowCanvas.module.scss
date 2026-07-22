@@ -25,3 +25,36 @@
     font-size: 11px;
     background: #12161ddd;
 }
+
+.validation {
+    position: absolute;
+    z-index: 5;
+    top: 16px;
+    right: 16px;
+    width: min(390px, calc(100% - 32px));
+    padding: 12px;
+    border: 1px solid #9b5362;
+    border-radius: 7px;
+    color: #ffd9df;
+    font-size: 12px;
+    background: #25151bdd;
+}
+
+.validation ul {
+    max-height: 220px;
+    margin: 8px 0 0;
+    padding-left: 18px;
+    overflow: auto;
+}
+
+.validation li + li { margin-top: 5px; }
+
+.validation button {
+    padding: 0;
+    border: 0;
+    color: inherit;
+    text-align: left;
+    text-decoration: underline;
+    background: transparent;
+    cursor: pointer;
+}

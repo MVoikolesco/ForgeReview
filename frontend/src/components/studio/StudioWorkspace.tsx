@@ -17,11 +17,12 @@ import {
   Save,
   Settings2,
   ShieldCheck,
+  Trash2,
   Upload,
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   executeWorkflow,
   getCards,
@@ -48,11 +49,15 @@ import {
   hasErrorRoute,
   hydrateDefinition,
   localCards,
+  removeSelectedElements,
   reviewTemplate,
   starterEdges,
   starterNodes,
   toDefinition,
+  validateStudioWorkflow,
+  type WorkflowValidationIssue,
 } from "../../lib/workflow";
+import { ModalShell } from "../common/ModalShell";
 import { ConnectionWizard } from "../integrations/ConnectionWizard";
 import { WorkflowTransferModal } from "./WorkflowTransferModal";
 import { CardInspector } from "../workflow/CardInspector";
@@ -80,8 +85,16 @@ export function StudioWorkspace() {
   const [metadata, setMetadata] = useState<WorkflowMetadata>(defaultWorkflowMetadata);
   const [openedVersionID, setOpenedVersionID] = useState<number>();
   const [dirty, setDirty] = useState(false);
-  const [transfer, setTransfer] = useState<"clone" | "import" | "export">();
-  const [workflowKeys, setWorkflowKeys] = useState<string[]>([]);
+   const [transfer, setTransfer] = useState<"clone" | "import" | "export">();
+   const [workflowKeys, setWorkflowKeys] = useState<string[]>([]);
+   const [selectedNodeIDs, setSelectedNodeIDs] = useState<string[]>([]);
+   const [selectedEdgeIDs, setSelectedEdgeIDs] = useState<string[]>([]);
+   const [confirmRemoval, setConfirmRemoval] = useState(false);
+   const definition = useMemo(() => toDefinition(nodes, edges, metadata), [nodes, edges, metadata]);
+   const validationIssues = useMemo(
+     () => validateStudioWorkflow(definition, cards),
+     [definition, cards],
+   );
 
   const loadIntegrations = async () => {
     try {
@@ -226,10 +239,14 @@ export function StudioWorkspace() {
       })),
     );
   const saveDraft = async () => {
+    if (validationIssues.length) {
+      setMessage("Corrija os ajustes indicados antes de salvar o rascunho.");
+      return;
+    }
     setBusy(true);
     setMessage("Salvando rascunho do workflow...");
     try {
-      const saved = await saveWorkflow(toDefinition(nodes, edges, metadata));
+      const saved = await saveWorkflow(definition);
       setDirty(false);
       setMessage(
         `Novo rascunho salvo como versão ${saved.version_id}${openedVersionID ? ` a partir da versão ${openedVersionID}` : ""}.`,
@@ -243,10 +260,14 @@ export function StudioWorkspace() {
     }
   };
   const publishCurrent = async () => {
+    if (validationIssues.length) {
+      setMessage("Corrija os ajustes indicados antes de publicar.");
+      return;
+    }
     setBusy(true);
     setMessage("Salvando rascunho para publicação...");
     try {
-      const saved = await saveWorkflow(toDefinition(nodes, edges, metadata));
+      const saved = await saveWorkflow(definition);
       setDirty(false);
       setMessage("Validando e publicando a versão salva...");
       const published = await publishWorkflow(saved.version_id);
@@ -262,10 +283,14 @@ export function StudioWorkspace() {
     }
   };
   const saveAndRun = async () => {
+    if (validationIssues.length) {
+      setMessage("Corrija os ajustes indicados antes de executar.");
+      return;
+    }
     setBusy(true);
     setMessage("Salvando versão do workflow...");
     try {
-      const saved = await saveWorkflow(toDefinition(nodes, edges, metadata));
+      const saved = await saveWorkflow(definition);
       setDirty(false);
       setMessage("Executando versão salva...");
       setNodes((all) =>
@@ -352,6 +377,36 @@ export function StudioWorkspace() {
       setDirty(true);
     onEdgesChange(...args);
   };
+  const requestRemoval = () => {
+    if (!canEdit) return;
+    if (!selectedNodeIDs.length && !selectedEdgeIDs.length) {
+      setMessage("Selecione um ou mais cards ou conexões para remover.");
+      return;
+    }
+    setConfirmRemoval(true);
+  };
+  const removeSelection = () => {
+    const removed = removeSelectedElements(nodes, edges, selectedNodeIDs, selectedEdgeIDs);
+    setNodes(removed.nodes);
+    setEdges(removed.edges);
+    setSelected(removed.nodes[0]?.data ?? starterNodes[0].data);
+    setSelectedNodeIDs([]);
+    setSelectedEdgeIDs([]);
+    setConfirmRemoval(false);
+    setDirty(true);
+    setMessage(`${selectedNodeIDs.length} card(s) e ${removed.removedEdges} conexão(ões) removidos.`);
+  };
+  const selectValidationIssue = (issue: WorkflowValidationIssue) => {
+    const node = issue.nodeKey && nodes.find((item) => item.id === issue.nodeKey);
+    if (node) {
+      setSelected(node.data);
+      setSelectedNodeIDs([node.id]);
+      setSelectedEdgeIDs([]);
+      setMessage(`Ajuste destacado: ${issue.message}`);
+    } else {
+      setMessage(issue.message);
+    }
+  };
   useEffect(() => {
     if (!dirty) return;
     const warnBeforeExit = (event: BeforeUnloadEvent) => {
@@ -367,8 +422,11 @@ export function StudioWorkspace() {
         <strong>
           <Braces size={20} /> ForgeReview <small>WORKFLOW STUDIO</small>
         </strong>
-        <span>{openedVersionID ? `Versão salva ${openedVersionID}` : "Fluxo de verificação"}</span>
-        {dirty && <em className={styles.unsaved}>Alterações não salvas</em>}
+         <span>{openedVersionID ? `Versão salva ${openedVersionID}` : "Fluxo de verificação"}</span>
+         {dirty && <em className={styles.unsaved}>Alterações não salvas</em>}
+         <em className={validationIssues.length ? styles.invalid : styles.valid}>
+           {validationIssues.length ? `${validationIssues.length} ajuste(s) pendente(s)` : "Validação local pronta"}
+         </em>
         <div>
           <button disabled={!canEdit} onClick={loadReviewTemplate}>
             <BookOpen size={14} /> Template review
@@ -381,14 +439,15 @@ export function StudioWorkspace() {
           <button disabled={!canEdit || busy} onClick={() => openTransfer("clone")}><Copy size={14} /> Clonar</button>
           <button disabled={!canEdit || busy} onClick={() => openTransfer("import")}><Upload size={14} /> Importar</button>
           <button disabled={!canEdit || busy} onClick={() => openTransfer("export")}><Download size={14} /> Exportar</button>
-          <button
-            disabled={busy || !canEdit}
-            onClick={() =>
-              setMessage("As conexões visíveis usam contratos compatíveis.")
-            }
-          >
-            <ShieldCheck size={14} /> Validar
-          </button>
+           <button
+             disabled={busy || !canEdit}
+             onClick={() => setMessage(validationIssues.length ? "Há ajustes locais pendentes no workflow." : "Validação local concluída. O backend confirmará ao salvar.")}
+           >
+             <ShieldCheck size={14} /> Validar{validationIssues.length ? ` (${validationIssues.length})` : ""}
+           </button>
+           <button disabled={busy || !canEdit} onClick={requestRemoval}>
+             <Trash2 size={14} /> Remover seleção
+           </button>
           <button
             disabled={busy || !canEdit}
             onClick={() => void saveDraft()}
@@ -420,6 +479,14 @@ export function StudioWorkspace() {
         onEdgesChange={trackEdgeChanges}
         onConnect={connect}
         onSelect={setSelected}
+        onSelectionChange={(selectedNodes, selectedEdges) => {
+          setSelectedNodeIDs(selectedNodes.map((node) => node.id));
+          setSelectedEdgeIDs(selectedEdges.map((edge) => edge.id));
+          if (selectedNodes[0]) setSelected(selectedNodes[0].data);
+        }}
+        onRequestDelete={requestRemoval}
+        validationIssues={validationIssues}
+        onSelectValidationIssue={selectValidationIssue}
         readOnly={!canEdit}
       />
       <CardInspector
@@ -441,7 +508,18 @@ export function StudioWorkspace() {
           }}
         />
       )}
-      {transfer && <WorkflowTransferModal mode={transfer} definition={toDefinition(nodes, edges, metadata)} cards={cards} workflowKeys={workflowKeys} onClose={() => setTransfer(undefined)} onApply={applyTransferredDefinition} />}
+      {transfer && <WorkflowTransferModal mode={transfer} definition={definition} cards={cards} workflowKeys={workflowKeys} onClose={() => setTransfer(undefined)} onApply={applyTransferredDefinition} />}
+      {confirmRemoval && (
+        <ModalShell
+          title="Remover seleção?"
+          eyebrow="AÇÃO DESTRUTIVA"
+          description={`${selectedNodeIDs.length} card(s) e ${selectedEdgeIDs.length} conexão(ões) estão selecionados. Cards removidos também removem todas as conexões ligadas.`}
+          onClose={() => setConfirmRemoval(false)}
+          footer={<><button type="button" onClick={() => setConfirmRemoval(false)}>Cancelar</button><button type="button" className={styles.removeConfirm} onClick={removeSelection}>Remover</button></>}
+        >
+          <p>Revise a seleção no canvas. Esta ação só acontece depois desta confirmação e marca o workflow como não salvo.</p>
+        </ModalShell>
+      )}
     </main>
   );
 }

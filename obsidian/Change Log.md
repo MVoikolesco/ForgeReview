@@ -2,6 +2,12 @@
 
 ## 2026-07-22
 
+- Added confirmed Studio removal for selected cards and connections, including
+  Delete/Backspace handling, incident-edge cleanup, and viewer read-only
+  protection. Added local actionable validation before save, publish, and run
+  for catalog-known graph/configuration failures while preserving backend
+  authority. See [[Architecture]], [[Feature Map]], and [[Decision Log]].
+
 - Replaced the implicit `admin@localhost` bootstrap with explicit configured
   email and password values. Compose, `.env.example`, and architecture guidance
   now require and explain first-run-only behavior, non-overwrite semantics, and

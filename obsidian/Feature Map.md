@@ -82,6 +82,13 @@
   error handle while route is selected; error paths are distinct on the canvas.
   `error_control` handles routed typed errors as terminal fail, continue, or a
    fallback output, including inside loop child scopes.
+- Studio graph management: editors/admins can select cards and edges and use
+  the Studio removal control or Delete/Backspace to open an accessible
+  confirmation dialog; deleting cards also deletes their connected edges.
+  Viewers can inspect/select the canvas but cannot alter it. Before save,
+  publish, or execution, Studio displays local validation status and lists locally knowable identity, graph,
+  configuration, route, port, and contract issues and focuses the related card
+  when possible; backend validation remains authoritative.
 - Reusable model profiles: integrations retain provider transport and encrypted
   credentials; profiles select the model and reference an active LLM connection.
   Model cards select profiles, and the runner resolves the profile in memory

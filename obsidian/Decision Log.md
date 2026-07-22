@@ -220,3 +220,14 @@ become a secret or ciphertext transport. Clone always receives a distinct
 workflow identity and only resolves duplicate node/edge keys where present.
 Editors and admins own these actions; viewers remain read-only. See
 [[Architecture]] and [[Feature Map]].
+
+## 2026-07-22: Confirmed Studio graph removal with advisory local validation
+
+The Studio intercepts React Flow's usual Delete/Backspace behavior and uses an
+in-app, focus-managed confirmation dialog instead of `window.confirm`. Removing
+a selected card filters all incident edges in the same state update; viewers
+cannot invoke this path. A catalog-aware client issue list blocks save, publish,
+and execution only for failures the current graph can determine, and links an
+issue back to its card where possible. The API remains the authority because it
+validates the persisted definition against current server rules. See
+[[Architecture]] and [[Feature Map]].

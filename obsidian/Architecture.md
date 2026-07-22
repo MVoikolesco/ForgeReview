@@ -142,4 +142,12 @@ an explicit typed graph edge; it is therefore not rendered on ordinary cards.
 The runner emits a scope-preserving `ErrorToken` with only a stable code, node,
 and scope—not provider messages, bodies, prompts, or secrets. `error_control`
 accepts that token and can fail terminally, continue, or emit a configured
-fallback result. See [[Decision Log]] and [[Feature Map]].
+ fallback result. See [[Decision Log]] and [[Feature Map]].
+
+Studio uses controlled React Flow state for selection and removal: native
+delete keys are disabled, while Delete/Backspace request an accessible modal
+confirmation for the selected cards/edges. Removal filters incident edges with
+removed cards before committing the local state. The frontend also derives a
+catalog-aware validation issue list before save/publish/run; it is advisory and
+the backend's `workflow.Validate` remains the final persistence authority. See
+[[Feature Map]] and [[Decision Log]].

@@ -137,6 +137,15 @@ docs/      Arquitetura, auditoria e este roadmap
 - Login responsivo no estilo escuro do dashboard/Studio, com orientação de
   primeira inicialização sem mostrar senhas e feedback distinto para credenciais
   inválidas e backend de autenticação indisponível.
+- Editor e admin podem selecionar cards e conexões no React Flow e removê-los
+  por botão ou `Delete`/`Backspace`. A remoção sempre abre uma confirmação
+  acessível do Studio (sem confirmação do navegador); remover um card remove
+  também suas conexões. Viewer pode inspecionar/selecionar, mas não alterar ou
+  remover o grafo.
+- Antes de salvar, publicar ou executar, o Studio apresenta uma lista acionável
+  de validação local para identidade, grafo vazio, portas/contratos, entradas
+  obrigatórias, configurações obrigatórias dos cards conhecidos e rotas de erro.
+  A API continua sendo a autoridade final para validação e persistência.
 
 ## Contratos HTTP atuais
 
@@ -161,8 +170,6 @@ docs/      Arquitetura, auditoria e este roadmap
 - Permitir abrir uma versão existente no Studio para visualização/edição de um
   novo rascunho.
 - Adicionar clonagem, importação e exportação de definições.
-- Implementar exclusão de cards/conexões, confirmação de ações e validação
-  visual completa antes do save.
 - Permitir editar todas as configurações declaradas pelo catálogo, não apenas
   os cards hoje suportados pelo inspector.
 - Adicionar minimapa, busca de cards e atalhos de teclado consistentes.
