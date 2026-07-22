@@ -15,9 +15,10 @@
 - Integrations: create and list Gitea, OpenAI-compatible and Ollama connection
   records using AES-256-GCM ciphertext in SQLite; APIs expose only safe
   `secret_configured` state.
-- Frontend routes: `/studio` contains the workflow editor; `/integrations`
-  provides the reusable connection wizard and connection/model list; `/`
-  redirects to the Studio.
+- Frontend routes: `/` is the operational dashboard with safe connection health,
+  official review readiness/safety, and recent PR-context execution summaries;
+  `/studio` contains the workflow editor; `/integrations` provides the reusable
+  connection wizard and connection/model list.
 - Runner: executes local card graphs by typed inputs and persists node reports;
   active configured Gitea fetch and OpenAI-compatible/Ollama model cards run
   through injected adapters.
@@ -55,6 +56,11 @@
   rascunho/publicada/arquivada states and permits publication only from a draft.
   Studio has separate draft-save and publish controls; publishing saves the
   visible canvas before calling the version publish endpoint.
+- Saved-version editing: every Pipeline version has an `Abrir no Studio` entry
+  point. `/studio?version=:id` loads its immutable definition, hydrates current
+  catalog card data, positions, configuration, and typed edges, and retains the
+  original workflow identity so saves create a new draft rather than overwrite
+  it. Unsaved canvas changes are visibly marked and warn before browser exit.
 - Generic card error policy: cards support fail, continue, partial, or an
   explicit typed error route. The Studio exposes the policy and only shows the
   error handle while route is selected; error paths are distinct on the canvas.
@@ -67,3 +73,6 @@
 - Cache card: reads, JSON-writes with a required 1–86,400 second TTL, or deletes
   Redis values through an explicit runner adapter. Cache misses emit a nil value;
   deletes emit no output. Its Inspector provides key, mode, and write-TTL fields.
+- Safe execution summaries: `GET /api/executions?limit=10` exposes bounded
+  status/timestamp/workflow metadata and configured PR owner/repo/number only;
+  it excludes node data, errors, execution inputs, and secret material.

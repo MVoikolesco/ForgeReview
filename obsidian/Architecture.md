@@ -91,8 +91,16 @@ wired only after Redis is reachable; absent Redis leaves cache cards unavailable
 rather than falling back to process memory. A write waits for its `value` input;
 read and delete modes start without one. See [[Decision Log]].
 
-The frontend routes are intentionally thin: `/` redirects to `/studio`, while
-`/studio`, `/pipelines`, and `/integrations` compose dedicated client workspaces.
+The frontend routes are intentionally thin: `/` composes the operational
+dashboard, while `/studio`, `/pipelines`, and `/integrations` compose dedicated
+client workspaces. The dashboard requests health, safe connection summaries,
+workflow lifecycle data, model profiles, and bounded execution summaries in
+parallel. It loads the official published definition only to derive displayed
+node labels, readiness, and conservative publish-policy state; it does not show
+definition configuration or credentials. `GET /api/executions?limit=10` returns
+only execution status/times, workflow identity/version, and matching configured
+fetch/publish PR coordinates. The `limit` is validated from 1 through 100. It excludes execution input, nodes, errors,
+integration configuration, and secrets.
 Studio state and API calls live in reusable frontend components and `src/lib/`;
 the Pipelines workspace reads grouped safe workflow summaries and owns list
 publication feedback without replacing the current lifecycle list. React Flow

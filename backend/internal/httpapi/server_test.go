@@ -140,6 +140,48 @@ func TestWorkflowPublishLifecycleAndListContract(t *testing.T) {
 	}
 }
 
+func TestExecutionListProvidesOnlySafeSummaryAndValidatesLimit(t *testing.T) {
+	database, err := store.Open("file:" + t.TempDir() + "/execution-list.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	definition := workflow.Definition{Key: "review", Name: "Review", Nodes: []workflow.Node{
+		{Key: "start", Type: "trigger", Name: "Start"},
+		{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea-secret-key", "owner": "acme", "repo": "api", "pull_request": 42}},
+		{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"integration": "gitea-secret-key", "owner": "acme", "repo": "api", "pull_request": 42}},
+	}}
+	versionID, err := database.Save(context.Background(), definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.CreateExecution(context.Background(), versionID, map[string]any{"token": "must-not-leak"}); err != nil {
+		t.Fatal(err)
+	}
+	router := New(workflow.DefaultCatalog(), database)
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/executions?limit=1", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("list status = %d: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"owner":"acme"`) || !strings.Contains(response.Body.String(), `"pull_request":42`) {
+		t.Fatalf("missing review context: %s", response.Body.String())
+	}
+	for _, forbidden := range []string{"token", "must-not-leak", "gitea-secret-key", "nodes", "error"} {
+		if strings.Contains(response.Body.String(), forbidden) {
+			t.Fatalf("execution summary exposed %q: %s", forbidden, response.Body.String())
+		}
+	}
+	for _, path := range []string{"/api/executions?limit=0", "/api/executions?limit=101", "/api/executions?limit=invalid"} {
+		invalid := httptest.NewRecorder()
+		router.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, path, nil))
+		if invalid.Code != http.StatusBadRequest {
+			t.Fatalf("%s status = %d: %s", path, invalid.Code, invalid.Body.String())
+		}
+	}
+}
+
 func createWorkflow(t *testing.T, router http.Handler, body string) int64 {
 	t.Helper()
 	response := httptest.NewRecorder()

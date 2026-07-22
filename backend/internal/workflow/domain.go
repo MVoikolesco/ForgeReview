@@ -75,6 +75,32 @@ type DefinitionSummary struct {
 	Versions    []VersionSummary `json:"versions"`
 }
 
+// ExecutionSummary is the deliberately limited execution view used by the
+// management dashboard. It never includes execution input, node data, errors,
+// or workflow configuration.
+type ExecutionSummary struct {
+	ID         int64                   `json:"execution_id"`
+	Status     string                  `json:"status"`
+	StartedAt  string                  `json:"started_at"`
+	FinishedAt string                  `json:"finished_at,omitempty"`
+	Workflow   ExecutionWorkflow       `json:"workflow"`
+	Review     *ExecutionReviewContext `json:"review,omitempty"`
+}
+
+type ExecutionWorkflow struct {
+	Key     string `json:"key"`
+	Name    string `json:"name"`
+	Version int    `json:"version"`
+}
+
+// ExecutionReviewContext contains only the PR coordinates configured on the
+// stored fetch/publish cards. It intentionally has no integration reference.
+type ExecutionReviewContext struct {
+	Owner       string `json:"owner"`
+	Repo        string `json:"repo"`
+	PullRequest int    `json:"pull_request"`
+}
+
 func Validate(definition Definition, catalog Catalog) error {
 	if definition.Key == "" || definition.Name == "" {
 		return fmt.Errorf("workflow key and name are required")

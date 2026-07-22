@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	"forgereview/backend/internal/auth"
 	"forgereview/backend/internal/integration"
 	"forgereview/backend/internal/workflow"
 
@@ -43,6 +45,44 @@ func Open(path string) (*SQLite, error) {
 }
 
 func (s *SQLite) Close() error { return s.db.Close() }
+
+func (s *SQLite) UserCount(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count)
+	return count, err
+}
+func (s *SQLite) CreateUser(ctx context.Context, email, hash string, role auth.Role) (auth.User, error) {
+	result, err := s.db.ExecContext(ctx, `INSERT INTO users(email,password_hash,role) VALUES(?,?,?)`, email, hash, role)
+	if err != nil {
+		return auth.User{}, err
+	}
+	id, err := result.LastInsertId()
+	return auth.User{ID: id, Email: email, Role: role}, err
+}
+func (s *SQLite) UserByEmail(ctx context.Context, email string) (auth.User, string, error) {
+	var user auth.User
+	var hash string
+	err := s.db.QueryRowContext(ctx, `SELECT id,email,password_hash,role FROM users WHERE email=?`, email).Scan(&user.ID, &user.Email, &hash, &user.Role)
+	return user, hash, err
+}
+func (s *SQLite) UserByID(ctx context.Context, id int64) (auth.User, error) {
+	var user auth.User
+	err := s.db.QueryRowContext(ctx, `SELECT id,email,role FROM users WHERE id=?`, id).Scan(&user.ID, &user.Email, &user.Role)
+	return user, err
+}
+func (s *SQLite) CreateSession(ctx context.Context, nonce string, userID int64, expires time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions(session_nonce,user_id,expires_at) VALUES(?,?,?)`, nonce, userID, expires.UTC().Format(time.RFC3339))
+	return err
+}
+func (s *SQLite) DeleteSession(ctx context.Context, nonce string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE session_nonce=?`, nonce)
+	return err
+}
+func (s *SQLite) SessionValid(ctx context.Context, nonce string, userID int64, now time.Time) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE session_nonce=? AND user_id=? AND expires_at>?`, nonce, userID, now.UTC().Format(time.RFC3339)).Scan(&count)
+	return count == 1, err
+}
 
 func (s *SQLite) CreateIntegration(ctx context.Context, item integration.Integration) error {
 	if err := item.Validate(); err != nil {
@@ -519,6 +559,86 @@ func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.RunReport, e
 	return report, rows.Err()
 }
 
+// ExecutionSummaries returns a bounded, dashboard-safe view of recent runs.
+// It deliberately avoids execution input, node-run metadata, errors, and all
+// integration configuration. PR coordinates are derived only from the stored
+// immutable workflow version's fetch/publish card configuration.
+func (s *SQLite) ExecutionSummaries(ctx context.Context, limit int) ([]workflow.ExecutionSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT e.id,e.status,e.started_at,COALESCE(e.finished_at,''),v.workflow_key,v.name,v.version,v.definition_json
+		FROM workflow_executions e JOIN workflow_versions v ON v.id=e.workflow_version_id
+		ORDER BY e.started_at DESC,e.id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []workflow.ExecutionSummary{}
+	for rows.Next() {
+		var item workflow.ExecutionSummary
+		var definitionJSON string
+		if err = rows.Scan(&item.ID, &item.Status, &item.StartedAt, &item.FinishedAt, &item.Workflow.Key, &item.Workflow.Name, &item.Workflow.Version, &definitionJSON); err != nil {
+			return nil, err
+		}
+		var definition workflow.Definition
+		if err = json.Unmarshal([]byte(definitionJSON), &definition); err != nil {
+			return nil, fmt.Errorf("decode execution workflow %d: %w", item.ID, err)
+		}
+		item.Review = reviewContext(definition)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func reviewContext(definition workflow.Definition) *workflow.ExecutionReviewContext {
+	var context *workflow.ExecutionReviewContext
+	for _, node := range definition.Nodes {
+		if node.Type != "fetch" && node.Type != "publish" {
+			continue
+		}
+		candidate, ok := configuredReviewContext(node.Config)
+		if !ok {
+			continue
+		}
+		if context == nil {
+			context = candidate
+			continue
+		}
+		if *context != *candidate {
+			return nil
+		}
+	}
+	return context
+}
+
+func configuredReviewContext(config map[string]any) (*workflow.ExecutionReviewContext, bool) {
+	owner, ownerOK := config["owner"].(string)
+	repo, repoOK := config["repo"].(string)
+	if !ownerOK || !repoOK || owner == "" || repo == "" {
+		return nil, false
+	}
+	var pullRequest int
+	switch value := config["pull_request"].(type) {
+	case float64:
+		pullRequest = int(value)
+		if value != float64(pullRequest) {
+			return nil, false
+		}
+	case int:
+		pullRequest = value
+	case int64:
+		pullRequest = int(value)
+		if int64(pullRequest) != value {
+			return nil, false
+		}
+	default:
+		return nil, false
+	}
+	if pullRequest < 1 {
+		return nil, false
+	}
+	return &workflow.ExecutionReviewContext{Owner: owner, Repo: repo, PullRequest: pullRequest}, true
+}
+
 const schema = `
 PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS workflow_versions (
@@ -584,6 +704,19 @@ CREATE TABLE IF NOT EXISTS publication_attempts (
  error_message TEXT NOT NULL DEFAULT '',
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS users (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ email TEXT NOT NULL UNIQUE,
+ password_hash TEXT NOT NULL,
+ role TEXT NOT NULL CHECK(role IN ('viewer','editor','admin')),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS sessions (
+ session_nonce TEXT PRIMARY KEY,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ expires_at TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 `
 

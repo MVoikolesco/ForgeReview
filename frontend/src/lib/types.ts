@@ -49,6 +49,11 @@ export type WorkflowDefinition = {
   }>;
 };
 
+export type WorkflowMetadata = Pick<
+  WorkflowDefinition,
+  "key" | "name" | "description"
+>;
+
 export type WorkflowVersionStatus = "draft" | "published" | "archived";
 
 export type WorkflowVersionSummary = {
@@ -93,4 +98,13 @@ export type ModelProfile = {
   integration_key: string;
   model: string;
   status: "active" | "disabled";
+};
+
+export type ExecutionSummary = {
+  execution_id: number;
+  status: "queued" | "running" | "completed" | "failed" | string;
+  started_at: string;
+  finished_at?: string;
+  workflow: { key: string; name: string; version: number };
+  review?: { owner: string; repo: string; pull_request: number };
 };

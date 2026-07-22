@@ -2,6 +2,17 @@
 
 ## 2026-07-22
 
+- Added the root operational dashboard and the bounded safe execution-summary
+  API. The dashboard presents backend/connection health, the published official
+  review pipeline's readiness and conservative policy, and recent safe PR
+  execution context without displaying definitions, inputs, node data, errors,
+  or credentials. See [[Architecture]], [[Feature Map]], and [[Decision Log]].
+- Added the Pipeline-to-Studio saved-version flow. Versions now open through
+  `GET /api/workflow-versions/:id`; Studio hydrates cards, graph configuration,
+  and edge handles, preserves workflow identity when saving a new draft, and
+  visibly protects unsaved edits. The query-aware Studio route is rendered
+  behind a Suspense boundary for production prerendering. See [[Architecture]]
+  and [[Feature Map]].
 - Added an idempotent startup seed for the published full-review workflow
   `official-gitea-pr-review` (initial version 1). It preserves all user
   workflows and existing official publications, uses model-profile conventions,

@@ -48,6 +48,9 @@ docs/      Arquitetura, auditoria e este roadmap
 - Estados de execução persistidos: fila, execução, conclusão e falha.
 - Ciclo de vida de versão: rascunho, publicação atômica e arquivamento da
   versão publicada anterior.
+- No ciclo visual, cada versão listada em Pipelines pode ser aberta no Studio.
+  O Studio hidrata o grafo imutável pelo endpoint de versão e toda alteração é
+  salva como um novo rascunho da mesma pipeline.
 - Na inicialização, o backend garante a pipeline oficial publicada
   `official-gitea-pr-review` (versão inicial `1`) com o grafo completo de
   review. O seed é idempotente: se já houver uma versão publicada para essa
@@ -112,6 +115,9 @@ docs/      Arquitetura, auditoria e este roadmap
 - Wizard de conexões em etapas para Gitea, Ollama local, Ollama Cloud e
   OpenRouter.
 - Rotas: `/studio`, `/pipelines` e `/integrations`.
+- Dashboard operacional em `/`: saúde do backend, cartões seguros de conexão,
+  definição publicada da pipeline oficial e execuções recentes, sem exibir
+  payloads, erros de nós ou segredos.
 - O template e a pipeline seed usam `model_profile` para a conexão de modelo;
   a publicação Gitea inicia com `medium_severity_event: "COMMENT"` e
   `allow_autonomous_rejection: false`.
@@ -132,6 +138,7 @@ docs/      Arquitetura, auditoria e este roadmap
 - `POST /api/workflow-versions/:id/publish`
 - `POST /api/workflow-versions/:id/executions`
 - `GET /api/executions/:id`
+- `GET /api/executions?limit=10` (resumos seguros; `limit` entre 1 e 100)
 
 ## Próximas etapas
 
@@ -166,6 +173,8 @@ docs/      Arquitetura, auditoria e este roadmap
 ### 4. Administração e segurança
 
 - Autenticação e autorização por domínio administrativo.
+- Decisão de RBAC com papéis viewer/editor/admin para o painel e áreas de
+  gestão; planejada, ainda não implementada.
 - Gestão de segredos com armazenamento cifrado ou secret manager, substituindo
    o armazenamento local AES-GCM quando houver operação remota, incluindo
    rotação de chave e re-cifragem.

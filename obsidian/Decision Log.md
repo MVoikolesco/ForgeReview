@@ -76,6 +76,17 @@ state visible while feedback is shown, without implying a failed or unconfirmed
 publication succeeded.
 See [[Architecture]] and [[Feature Map]].
 
+## 2026-07-22: Open immutable versions as new Studio drafts
+
+Pipeline versions link to Studio by version ID, where the frontend loads the
+immutable definition and rebuilds its visual graph from the current card
+catalog. The loaded definition's key, name, and description are retained for
+all save paths, so editing an existing version always appends a draft to the
+same workflow rather than silently creating or mutating another version.
+Catalog gaps stop hydration instead of rendering a partial graph. The Studio
+identifies the source version and marks unsaved changes, including a browser-exit
+warning. See [[Architecture]] and [[Feature Map]].
+
 ## 2026-07-21: Sequential scoped loop execution
 
 Loops use deterministic child scopes based on the ordered input index rather
@@ -163,3 +174,20 @@ and explicitly defaults its native Gitea publication to `COMMENT` without
 autonomous rejection. Discovery remains on the existing workflow-list and
 version-load APIs rather than adding a Studio-only path. See [[Architecture]]
 and [[Feature Map]].
+
+## 2026-07-22: Dashboard-safe operational summaries
+
+The root route is an operational dashboard rather than a redirect. Its execution
+feed reads a bounded endpoint that joins execution lifecycle metadata to its
+stored workflow version and derives PR coordinates only from consistent fetch and
+publish configuration. The response deliberately excludes workflow definitions,
+node runs, execution input, errors, integration settings, and credentials. The
+dashboard derives official-pipeline readiness and conservative publication state
+from the published definition plus safe connection/profile summaries. See
+[[Architecture]] and [[Feature Map]].
+
+## Planned: Viewer/editor/admin RBAC
+
+Viewer, editor, and admin roles are planned for dashboard and management access.
+Authentication and authorization are not implemented in this increment, so no
+route currently enforces these roles.

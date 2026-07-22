@@ -18,6 +18,7 @@ import {
   Upload,
 } from "lucide-react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   executeWorkflow,
@@ -25,6 +26,7 @@ import {
   getExecution,
   getIntegrations,
   getModelProfiles,
+  getWorkflowVersion,
   publishWorkflow,
   saveWorkflow,
 } from "../../lib/api";
@@ -34,11 +36,14 @@ import type {
   ExecutionReport,
   Integration,
   ModelProfile,
+  WorkflowMetadata,
 } from "../../lib/types";
 import {
   canConnect,
   cardOutputPorts,
+  defaultWorkflowMetadata,
   hasErrorRoute,
+  hydrateDefinition,
   localCards,
   reviewTemplate,
   starterEdges,
@@ -52,6 +57,9 @@ import { WorkflowCanvas } from "../workflow/WorkflowCanvas";
 import styles from "./StudioWorkspace.module.scss";
 
 export function StudioWorkspace() {
+  const searchParams = useSearchParams();
+  const versionParam = searchParams.get("version");
+  const versionID = versionParam && /^\d+$/.test(versionParam) ? Number(versionParam) : undefined;
   const [nodes, setNodes, onNodesChange] =
     useNodesState<Node<CardData>>(starterNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(starterEdges);
@@ -62,6 +70,9 @@ export function StudioWorkspace() {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
   const [showConnections, setShowConnections] = useState(false);
+  const [metadata, setMetadata] = useState<WorkflowMetadata>(defaultWorkflowMetadata);
+  const [openedVersionID, setOpenedVersionID] = useState<number>();
+  const [dirty, setDirty] = useState(false);
 
   const loadIntegrations = async () => {
     try {
@@ -73,12 +84,44 @@ export function StudioWorkspace() {
     }
   };
   useEffect(() => {
-    void getCards()
-      .then(setCards)
-      .catch(() =>
-        setMessage("Backend indisponível. Biblioteca local exibida."),
-      );
-  }, []);
+    if (!versionID) {
+      if (versionParam) setMessage("A versão solicitada é inválida.");
+      void getCards()
+        .then(setCards)
+        .catch(() =>
+          setMessage("Backend indisponível. Biblioteca local exibida."),
+        );
+      return;
+    }
+    setBusy(true);
+    setMessage(`Abrindo versão salva ${versionID}...`);
+    void Promise.all([getCards(), getWorkflowVersion(versionID)])
+      .then(([catalog, definition]) => {
+        const hydrated = hydrateDefinition(definition, catalog);
+        setCards(catalog);
+        setNodes(hydrated.nodes);
+        setEdges(hydrated.edges);
+        setSelected(hydrated.nodes[0]?.data ?? starterNodes[0].data);
+        setMetadata({
+          key: definition.key,
+          name: definition.name,
+          description: definition.description,
+        });
+        setOpenedVersionID(versionID);
+        setDirty(false);
+        setMessage(
+          `Versão salva ${versionID} aberta. Alterações serão salvas como um novo rascunho; a versão original permanece imutável.`,
+        );
+      })
+      .catch((error) =>
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : "Não foi possível abrir a versão salva.",
+        ),
+      )
+      .finally(() => setBusy(false));
+  }, [versionID, versionParam, setEdges, setNodes]);
   useEffect(() => {
     void Promise.all([getIntegrations(), getModelProfiles()])
       .then(([items, profiles]) => {
@@ -114,6 +157,7 @@ export function StudioWorkspace() {
       },
     ]);
     setSelected(data);
+    setDirty(true);
   };
   const loadReviewTemplate = () => {
     const template = reviewTemplate(cards);
@@ -126,6 +170,7 @@ export function StudioWorkspace() {
     setNodes(template.nodes);
     setEdges(template.edges);
     setSelected(template.nodes[0].data);
+    setDirty(true);
     setMessage(
       "Template de review carregado. Configure Gitea, modelo e dados do PR nos cards selecionados.",
     );
@@ -146,6 +191,7 @@ export function StudioWorkspace() {
       return;
     }
     setEdges((all) => addEdge({ ...connection, animated: true }, all));
+    setDirty(true);
   };
   const patchSelected = (patch: Partial<CardData>) => {
     setSelected((current) => ({ ...current, ...patch }));
@@ -156,6 +202,7 @@ export function StudioWorkspace() {
           : node,
       ),
     );
+    setDirty(true);
   };
   const applyReport = (report: ExecutionReport) =>
     setNodes((all) =>
@@ -173,8 +220,11 @@ export function StudioWorkspace() {
     setBusy(true);
     setMessage("Salvando rascunho do workflow...");
     try {
-      const saved = await saveWorkflow(toDefinition(nodes, edges));
-      setMessage(`Rascunho salvo como versão ${saved.version_id}.`);
+      const saved = await saveWorkflow(toDefinition(nodes, edges, metadata));
+      setDirty(false);
+      setMessage(
+        `Novo rascunho salvo como versão ${saved.version_id}${openedVersionID ? ` a partir da versão ${openedVersionID}` : ""}.`,
+      );
     } catch (error) {
       setMessage(
         error instanceof Error ? error.message : "Não foi possível salvar o rascunho.",
@@ -187,7 +237,8 @@ export function StudioWorkspace() {
     setBusy(true);
     setMessage("Salvando rascunho para publicação...");
     try {
-      const saved = await saveWorkflow(toDefinition(nodes, edges));
+      const saved = await saveWorkflow(toDefinition(nodes, edges, metadata));
+      setDirty(false);
       setMessage("Validando e publicando a versão salva...");
       const published = await publishWorkflow(saved.version_id);
       setMessage(`Versão ${published.version} publicada.`);
@@ -205,7 +256,8 @@ export function StudioWorkspace() {
     setBusy(true);
     setMessage("Salvando versão do workflow...");
     try {
-      const saved = await saveWorkflow(toDefinition(nodes, edges));
+      const saved = await saveWorkflow(toDefinition(nodes, edges, metadata));
+      setDirty(false);
       setMessage("Executando versão salva...");
       setNodes((all) =>
         all.map((node) => ({
@@ -251,13 +303,41 @@ export function StudioWorkspace() {
     setShowConnections(true);
     void loadIntegrations();
   };
+  const trackNodeChanges = (...args: Parameters<typeof onNodesChange>) => {
+    if (
+      args[0].some((change) =>
+        ["add", "remove", "replace", "position"].includes(change.type),
+      )
+    )
+      setDirty(true);
+    onNodesChange(...args);
+  };
+  const trackEdgeChanges = (...args: Parameters<typeof onEdgesChange>) => {
+    if (
+      args[0].some((change) =>
+        ["add", "remove", "replace"].includes(change.type),
+      )
+    )
+      setDirty(true);
+    onEdgesChange(...args);
+  };
+  useEffect(() => {
+    if (!dirty) return;
+    const warnBeforeExit = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeExit);
+    return () => window.removeEventListener("beforeunload", warnBeforeExit);
+  }, [dirty]);
   return (
     <main className={styles.studio}>
       <header className={styles.topbar}>
         <strong>
           <Braces size={20} /> ForgeReview <small>WORKFLOW STUDIO</small>
         </strong>
-        <span>Fluxo de verificação</span>
+        <span>{openedVersionID ? `Versão salva ${openedVersionID}` : "Fluxo de verificação"}</span>
+        {dirty && <em className={styles.unsaved}>Alterações não salvas</em>}
         <div>
           <button onClick={loadReviewTemplate}>
             <BookOpen size={14} /> Template review
@@ -279,7 +359,7 @@ export function StudioWorkspace() {
             disabled={busy}
             onClick={() => void saveDraft()}
           >
-            <Save size={14} /> Salvar rascunho
+            <Save size={14} /> Salvar novo rascunho
           </button>
           <button
             className={styles.publish}
@@ -302,8 +382,8 @@ export function StudioWorkspace() {
         nodes={nodes}
         edges={edges}
         message={message}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
+        onNodesChange={trackNodeChanges}
+        onEdgesChange={trackEdgeChanges}
         onConnect={connect}
         onSelect={setSelected}
       />

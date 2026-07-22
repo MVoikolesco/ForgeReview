@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { DashboardWorkspace } from "../components/dashboard/DashboardWorkspace";
 
 export default function Home() {
-  redirect("/studio");
+  return <DashboardWorkspace />;
 }

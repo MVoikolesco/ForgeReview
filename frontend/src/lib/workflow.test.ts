@@ -5,9 +5,95 @@ import {
   canConnect,
   canPublishVersion,
   hasErrorRoute,
+  hydrateDefinition,
   reviewTemplate,
+  toDefinition,
   workflowVersionStatusLabel,
 } from "./workflow";
+import { publishedOfficialVersion, reviewPipelineState } from "./dashboard";
+
+test("saved definitions hydrate canvas cards, edges, and configuration", () => {
+  const hydrated = hydrateDefinition(
+    {
+      key: "saved-review",
+      name: "Saved review",
+      description: "",
+      nodes: [
+        {
+          key: "saved-trigger",
+          type: "trigger",
+          name: "Ignored persisted label",
+          config: { source: "manual" },
+          position: { x: 42, y: 84 },
+        },
+      ],
+      edges: [
+        {
+          key: "saved-edge",
+          from_node: "saved-trigger",
+          from_port: "event",
+          to_node: "saved-trigger",
+          to_port: "event",
+        },
+      ],
+    },
+    [
+      {
+        key: "trigger",
+        name: "Trigger manual",
+        category: "Entradas",
+        description: "",
+        inputs: [],
+        outputs: [],
+      },
+    ],
+  );
+
+  assert.deepEqual(hydrated.nodes[0], {
+    id: "saved-trigger",
+    type: "card",
+    position: { x: 42, y: 84 },
+    data: {
+      key: "saved-trigger",
+      type: "trigger",
+      name: "Ignored persisted label",
+      category: "Entradas",
+      inputs: [],
+      outputs: [],
+      errorOutput: undefined,
+      config: { source: "manual" },
+      status: "idle",
+    },
+  });
+  assert.deepEqual(hydrated.edges[0], {
+    id: "saved-edge",
+    source: "saved-trigger",
+    sourceHandle: "out-event",
+    target: "saved-trigger",
+    targetHandle: "in-event",
+    animated: true,
+  });
+});
+
+test("saving an opened canvas preserves its workflow identity", () => {
+  const definition = toDefinition([], [], {
+    key: "saved-review",
+    name: "Saved review",
+    description: "Retained from the opened version.",
+  });
+  assert.deepEqual(
+    {
+      key: definition.key,
+      name: definition.name,
+      description: definition.description,
+    },
+    {
+      key: "saved-review",
+      name: "Saved review",
+      description: "Retained from the opened version.",
+    },
+  );
+});
 
 test("catalog cards without ports normalize to empty lists", () => {
   const card = normalizeCard({
@@ -152,4 +238,21 @@ test("review template scopes group review through loop before one root publicati
     medium_severity_event: "COMMENT",
     allow_autonomous_rejection: false,
   });
+});
+
+test("dashboard derives official review readiness and conservative publication safety", () => {
+  const definition = {
+    key: "official-gitea-pr-review", name: "Official", description: "", edges: [], nodes: [
+      { key: "fetch", type: "fetch", name: "Fetch", config: { integration: "gitea", owner: "acme", repo: "api", pull_request: 9 }, position: { x: 0, y: 0 } },
+      { key: "model", type: "model", name: "Model", config: { model_profile: "reviewer" }, position: { x: 0, y: 0 } },
+      { key: "publish", type: "publish", name: "Publish", config: { integration: "gitea", owner: "acme", repo: "api", pull_request: 9, allow_autonomous_rejection: false, medium_severity_event: "COMMENT" }, position: { x: 0, y: 0 } },
+    ],
+  };
+  const state = reviewPipelineState(definition, [
+    { key: "gitea", name: "Gitea", type: "gitea", config: { base_url: "https://gitea.example" }, secret_configured: true, status: "active" },
+    { key: "models", name: "Models", type: "openai", config: { base_url: "https://models.example" }, secret_configured: true, status: "active" },
+  ], [{ key: "reviewer", name: "Reviewer", integration_key: "models", model: "review", status: "active" }]);
+  assert.equal(state.readiness, "Pronta para revisão");
+  assert.equal(state.safe, true);
+  assert.equal(publishedOfficialVersion([{ key: "official-gitea-pr-review", name: "Official", description: "", versions: [{ version_id: 1, version: 1, status: "published", created_at: "" }] }])?.version_id, 1);
 });

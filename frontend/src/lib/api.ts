@@ -1,5 +1,6 @@
 import type {
   CardType,
+  ExecutionSummary,
   Integration,
   ModelProfile,
   NewIntegration,
@@ -28,6 +29,7 @@ export const normalizeCard = (card: CardType): CardType => ({
 
 export const getCards = async () =>
   (await request<CardType[]>("/api/cards")).map(normalizeCard);
+export const getHealth = () => request<{ status: string }>("/health");
 export const getIntegrations = () =>
   request<Integration[]>("/api/integrations");
 export const createIntegration = (integration: NewIntegration) =>
@@ -50,6 +52,8 @@ export const saveWorkflow = (definition: WorkflowDefinition) =>
     body: JSON.stringify(definition),
   });
 export const getWorkflows = () => request<WorkflowSummary[]>("/api/workflows");
+export const getWorkflowVersion = (versionID: number) =>
+  request<WorkflowDefinition>(`/api/workflow-versions/${versionID}`);
 export const publishWorkflow = (versionID: number) =>
   request<WorkflowVersionSummary>(`/api/workflow-versions/${versionID}/publish`, {
     method: "POST",
@@ -67,3 +71,5 @@ export const executeWorkflow = (versionID: number) =>
   });
 export const getExecution = (executionID: number) =>
   request<import("./types").ExecutionReport>(`/api/executions/${executionID}`);
+export const getExecutions = (limit = 10) =>
+  request<ExecutionSummary[]>(`/api/executions?limit=${limit}`);

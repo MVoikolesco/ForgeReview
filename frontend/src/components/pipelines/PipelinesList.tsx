@@ -54,10 +54,13 @@ export function PipelinesList({
                     {formattedDate(version.created_at)}
                   </time>
                 </div>
-                <span className={styles[version.status]}>
-                  {workflowVersionStatusLabel(version.status)}
-                </span>
-                {canPublishVersion(version.status) && (
+                 <span className={styles[version.status]}>
+                   {workflowVersionStatusLabel(version.status)}
+                 </span>
+                 <Link href={`/studio?version=${version.version_id}`}>
+                   <Pencil size={13} /> Abrir no Studio
+                 </Link>
+                 {canPublishVersion(version.status) && (
                   <button
                     disabled={publishingID === version.version_id}
                     onClick={() => onPublish(version.version_id)}
@@ -75,3 +78,5 @@ export function PipelinesList({
     </div>
   );
 }
+import { Pencil } from "lucide-react";
+import Link from "next/link";

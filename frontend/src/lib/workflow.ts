@@ -4,6 +4,7 @@ import type {
   CardType,
   Port,
   WorkflowDefinition,
+  WorkflowMetadata,
   WorkflowVersionStatus,
 } from "./types";
 
@@ -170,14 +171,51 @@ export const workflowVersionStatusLabel = (status: WorkflowVersionStatus) =>
 export const canPublishVersion = (status: WorkflowVersionStatus) =>
   status === "draft";
 
+export const defaultWorkflowMetadata: WorkflowMetadata = {
+  key: "studio-check",
+  name: "Fluxo de verificação do Studio",
+  description: "Pipeline local para validar cards, portas e estados.",
+};
+
+export function hydrateDefinition(
+  definition: WorkflowDefinition,
+  cards: CardType[],
+): { nodes: Node<CardData>[]; edges: Edge[] } {
+  const cardsByKey = new Map(cards.map((card) => [card.key, card]));
+  const missing = definition.nodes.find((node) => !cardsByKey.has(node.type));
+  if (missing)
+    throw new Error(
+      `O catálogo não contém o card "${missing.type}" necessário para abrir esta versão.`,
+    );
+
+  return {
+    nodes: definition.nodes.map((node) => {
+      const card = cardsByKey.get(node.type)!;
+      return {
+        id: node.key,
+        type: "card",
+        position: node.position,
+        data: { ...initialData(card, node.key, node.config || {}), name: node.name },
+      };
+    }),
+    edges: definition.edges.map((edge) => ({
+      id: edge.key,
+      source: edge.from_node,
+      sourceHandle: `out-${edge.from_port}`,
+      target: edge.to_node,
+      targetHandle: `in-${edge.to_port}`,
+      animated: true,
+    })),
+  };
+}
+
 export function toDefinition(
   nodes: Node<CardData>[],
   edges: Edge[],
+  metadata: WorkflowMetadata = defaultWorkflowMetadata,
 ): WorkflowDefinition {
   return {
-    key: "studio-check",
-    name: "Fluxo de verificação do Studio",
-    description: "Pipeline local para validar cards, portas e estados.",
+    ...metadata,
     nodes: nodes.map(({ id, data, position }) => ({
       key: id,
       type: data.type,

@@ -57,7 +57,7 @@
 
 .list li {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 95px 90px;
+    grid-template-columns: minmax(0, 1fr) 95px 124px 90px;
     align-items: center;
     gap: 12px;
     min-height: 59px;
@@ -109,13 +109,19 @@
     background: #20252c;
 }
 
-.list button {
+.list button,
+.list a {
     @include control;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
     padding: 7px 9px;
     border-color: #4e9f78;
     color: #e2f6e9;
     font-size: 11px;
     background: #173b2a;
+    text-decoration: none;
 }
 
 .empty {
@@ -134,7 +140,8 @@
         grid-template-columns: 1fr auto;
     }
 
-    .list li button {
+    .list li button,
+    .list li a {
         grid-column: 1 / -1;
         width: 100%;
     }

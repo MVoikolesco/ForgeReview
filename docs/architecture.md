@@ -55,6 +55,11 @@ default. `GET /api/workflows` identifies the published version and
   `202 Accepted` with `{execution_id,status:"queued"}`.
 - `GET /api/executions/:id`: load persisted node states, input references and
   output tokens.
+- `GET /api/executions?limit=10`: return at most 1–100 dashboard-safe execution
+  summaries (default 10). Each summary has execution status/timestamps, workflow
+  identity/version, and PR coordinates only when matching fetch/publish cards in
+  the stored version configure them. It never returns execution input, nodes,
+  errors, integration configuration, or secrets.
 
 ## Execution Foundation
 
@@ -209,11 +214,22 @@ the local verification flow and paints each card as draft, running, completed or
 failed from the persisted execution report. With Redis dispatch enabled, the
 Studio polls the execution endpoint until the worker completes it.
 
-`/pipelines` lists the grouped workflow summaries from `GET /api/workflows`.
+`/` is the operational dashboard. It loads backend health, safe connections,
+workflow summaries, model profiles, and safe execution summaries in parallel,
+then loads the published official definition when available. It presents only
+published graph labels and conservative publish-policy/readiness indicators;
+it never renders stored configuration or credentials. `/pipelines` lists the grouped workflow summaries from `GET /api/workflows`.
 It displays all draft, published, and archived versions and exposes publication
 only for draft versions; after a successful response it reloads the lifecycle
-list so the archived and published states are current. Header navigation links
-connect Studio, Pipelines, and Integrations.
+list so the archived and published states are current. Each listed version has
+an `Abrir no Studio` link to `/studio?version=:id`. Studio loads that immutable
+definition through `GET /api/workflow-versions/:id`, reconstructs React Flow
+cards from the current catalog (including persisted names, configuration,
+positions, and typed edge handles), and retains its workflow identity for later
+saves. An opened version is explicitly identified as immutable: every save,
+publish, or run saves a new draft, never updates the source version. The Studio
+marks edited canvases as unsaved and warns on browser exit. Header navigation
+links connect Studio, Pipelines, and Integrations.
 
 The `Integrações` control opens the Studio connection modal. It lists safe
 integration summaries and creates Gitea, OpenAI-compatible or Ollama records

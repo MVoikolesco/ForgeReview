@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 
+	"forgereview/backend/internal/auth"
 	"forgereview/backend/internal/dispatch"
 	"forgereview/backend/internal/httpapi"
 	"forgereview/backend/internal/integration"
@@ -30,6 +31,13 @@ func main() {
 		log.Fatal(err)
 	}
 	defer workflows.Close()
+	sessions, err := auth.New(workflows, auth.Config{SigningKey: os.Getenv("FORGEREVIEW_SESSION_SIGNING_KEY")})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err = sessions.Bootstrap(context.Background(), os.Getenv("FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD")); err != nil {
+		log.Fatal(err)
+	}
 	if _, _, err = workflows.EnsureOfficialReviewWorkflow(context.Background(), workflow.DefaultCatalog()); err != nil {
 		log.Fatal(err)
 	}
@@ -73,7 +81,7 @@ func main() {
 			}
 		}()
 	}
-	if err = httpapi.New(workflow.DefaultCatalog(), workflows, adapters).Run(address); err != nil {
+	if err = httpapi.NewWithAuth(workflow.DefaultCatalog(), workflows, sessions, adapters).Run(address); err != nil {
 		log.Fatal(err)
 	}
 }
