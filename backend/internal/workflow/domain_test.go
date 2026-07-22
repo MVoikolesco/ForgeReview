@@ -48,6 +48,21 @@ func TestValidateBoundsModelCorrectiveRetryConfiguration(t *testing.T) {
 	}
 }
 
+func TestValidateRequiresCacheConfiguration(t *testing.T) {
+	definition := Definition{Key: "cache", Name: "Cache", Nodes: []Node{{Key: "cache", Type: "cache", Name: "Cache", Config: map[string]any{"key": "review:42", "mode": "write", "ttl_seconds": 60}}}}
+	if err := Validate(definition, DefaultCatalog()); err != nil {
+		t.Fatalf("valid cache configuration: %v", err)
+	}
+	definition.Nodes[0].Config = map[string]any{"key": "review:42", "mode": "invalid"}
+	if err := Validate(definition, DefaultCatalog()); err == nil || err.Error() != `cache card "cache" config.mode must be "read", "write", or "delete"` {
+		t.Fatalf("cache mode validation error = %v", err)
+	}
+	definition.Nodes[0].Config = map[string]any{"key": "review:42", "mode": "write", "ttl_seconds": 0}
+	if err := Validate(definition, DefaultCatalog()); err == nil || err.Error() != `cache card "cache" config.ttl_seconds must be between 1 and 86400 for write mode` {
+		t.Fatalf("cache TTL validation error = %v", err)
+	}
+}
+
 func TestValidateRequiresExplicitTypedErrorRoute(t *testing.T) {
 	definition := Definition{Key: "errors", Name: "Errors", Nodes: []Node{{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"on_error": "route"}}}}
 	if err := Validate(definition, DefaultCatalog()); err == nil || err.Error() != `node "template" config.on_error "route" requires an explicit error edge` {

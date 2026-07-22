@@ -244,6 +244,62 @@ export function CardInspector({
             </p>
           </>
         )}
+        {selected.type === "cache" && (
+          <>
+            <label>
+              Chave do cache
+              <input
+                value={configText(selected.config.key)}
+                onChange={(event) =>
+                  onChange({
+                    config: {
+                      ...selected.config,
+                      key: event.target.value,
+                      mode: configText(selected.config.mode) || "read",
+                    },
+                  })
+                }
+                placeholder="review:pr:42"
+              />
+            </label>
+            <label>
+              Operação
+              <select
+                value={configText(selected.config.mode) || "read"}
+                onChange={(event) => {
+                  const mode = event.target.value;
+                  onChange({
+                    config: {
+                      ...selected.config,
+                      mode,
+                      ...(mode === "write" && selected.config.ttl_seconds === undefined
+                        ? { ttl_seconds: 3600 }
+                        : {}),
+                    },
+                  });
+                }}
+              >
+                <option value="read">Ler</option>
+                <option value="write">Gravar</option>
+                <option value="delete">Excluir</option>
+              </select>
+            </label>
+            {(configText(selected.config.mode) || "read") === "write" && (
+              <label>
+                TTL (segundos)
+                <input
+                  type="number"
+                  min="1"
+                  max="86400"
+                  value={configNumber(selected.config.ttl_seconds, 3600)}
+                  onChange={(event) =>
+                    updateConfig("ttl_seconds", event.target.valueAsNumber || 1)
+                  }
+                />
+              </label>
+            )}
+          </>
+        )}
         {selected.type === "error_control" && (
           <>
             <label>
@@ -315,6 +371,7 @@ export function CardInspector({
           "filter",
           "group",
           "loop",
+          "cache",
           "condition",
           "validate",
           "response_filter",

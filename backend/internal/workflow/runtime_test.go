@@ -7,12 +7,40 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"forgereview/backend/internal/integration"
 )
 
 type memoryIntegrations map[string]integration.Integration
 type memoryModelProfiles map[string]integration.ModelProfile
+
+type memoryCache struct {
+	values  map[string][]byte
+	ttls    map[string]time.Duration
+	deleted []string
+}
+
+func (c *memoryCache) Get(_ context.Context, key string) ([]byte, bool, error) {
+	value, found := c.values[key]
+	return value, found, nil
+}
+
+func (c *memoryCache) Set(_ context.Context, key string, value []byte, ttl time.Duration) error {
+	if c.values == nil {
+		c.values = map[string][]byte{}
+		c.ttls = map[string]time.Duration{}
+	}
+	c.values[key] = value
+	c.ttls[key] = ttl
+	return nil
+}
+
+func (c *memoryCache) Delete(_ context.Context, key string) error {
+	delete(c.values, key)
+	c.deleted = append(c.deleted, key)
+	return nil
+}
 
 const workflowTestEncryptionKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
@@ -359,5 +387,78 @@ func TestRunFetchRequiresConfiguredIntegration(t *testing.T) {
 	_, err := Run(context.Background(), definition, DefaultCatalog(), nil)
 	if err == nil || err.Error() != `card "fetch" execution failed` {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCacheCardReadsWritesAndDeletesJSONValues(t *testing.T) {
+	cache := &memoryCache{}
+	write := Node{Key: "cache", Type: "cache", Name: "Cache", Config: map[string]any{"key": "review:42", "mode": "write", "ttl_seconds": 90}}
+	outputs, err := executeCache(context.Background(), write, map[string][]any{"value": {map[string]any{"review": "ready"}}}, Adapters{Cache: cache})
+	if err != nil || outputs["value"].(map[string]any)["review"] != "ready" {
+		t.Fatalf("write output = %#v, %v", outputs, err)
+	}
+	if string(cache.values["review:42"]) != `{"review":"ready"}` || cache.ttls["review:42"] != 90*time.Second {
+		t.Fatalf("cache write = %q with TTL %s", cache.values["review:42"], cache.ttls["review:42"])
+	}
+
+	read := write
+	read.Config = map[string]any{"key": "review:42", "mode": "read"}
+	outputs, err = executeCache(context.Background(), read, nil, Adapters{Cache: cache})
+	if err != nil || outputs["value"].(map[string]any)["review"] != "ready" {
+		t.Fatalf("read output = %#v, %v", outputs, err)
+	}
+	read.Config["key"] = "missing"
+	outputs, err = executeCache(context.Background(), read, nil, Adapters{Cache: cache})
+	if err != nil || outputs["value"] != nil {
+		t.Fatalf("cache miss = %#v, %v", outputs, err)
+	}
+
+	deleteNode := write
+	deleteNode.Config = map[string]any{"key": "review:42", "mode": "delete"}
+	outputs, err = executeCache(context.Background(), deleteNode, nil, Adapters{Cache: cache})
+	if err != nil || len(outputs) != 0 || len(cache.deleted) != 1 || cache.deleted[0] != "review:42" {
+		t.Fatalf("delete output = %#v, deleted = %#v, err = %v", outputs, cache.deleted, err)
+	}
+}
+
+func TestRunCacheWriteWaitsForValue(t *testing.T) {
+	cache := &memoryCache{}
+	definition := Definition{Key: "cache-write", Name: "Cache write", Nodes: []Node{
+		{Key: "trigger", Type: "trigger", Name: "Trigger", Config: map[string]any{"event": map[string]any{"review": "ready"}}},
+		{Key: "cache", Type: "cache", Name: "Cache", Config: map[string]any{"key": "review:42", "mode": "write", "ttl_seconds": 90}},
+	}, Edges: []Edge{{Key: "value", FromNode: "trigger", FromPort: "event", ToNode: "cache", ToPort: "value"}}}
+	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, Adapters{Cache: cache})
+	if err != nil || len(report.Runs) != 2 || string(cache.values["review:42"]) != `{"review":"ready"}` {
+		t.Fatalf("cache write report = %#v, stored = %q, err = %v", report, cache.values["review:42"], err)
+	}
+}
+
+func TestCacheCardRequiresInjectedAdapter(t *testing.T) {
+	_, err := executeCache(context.Background(), Node{Key: "cache", Type: "cache", Name: "Cache", Config: map[string]any{"key": "review:42", "mode": "read"}}, nil, Adapters{})
+	if err == nil || err.Error() != `cache card "cache" requires an injected cache adapter` {
+		t.Fatalf("cache adapter error = %v", err)
+	}
+}
+
+func TestRunCacheCardEmitsNilForMissAndNothingForDelete(t *testing.T) {
+	cache := &memoryCache{}
+	for _, testCase := range []struct {
+		name    string
+		mode    string
+		outputs int
+	}{
+		{name: "miss", mode: "read", outputs: 1},
+		{name: "delete", mode: "delete", outputs: 0},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			definition := Definition{Key: testCase.name, Name: testCase.name, Nodes: []Node{{Key: "cache", Type: "cache", Name: "Cache", Config: map[string]any{"key": "review:missing", "mode": testCase.mode}}}}
+			report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, Adapters{Cache: cache})
+			if err != nil || len(report.Runs) != 1 || len(report.Runs[0].Outputs) != testCase.outputs {
+				t.Fatalf("cache report = %#v, err = %v", report, err)
+			}
+			if testCase.mode == "read" && report.Runs[0].Outputs[0].Value != nil {
+				t.Fatalf("cache miss output = %#v", report.Runs[0].Outputs)
+			}
+		})
 	}
 }

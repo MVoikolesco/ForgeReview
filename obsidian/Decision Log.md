@@ -128,3 +128,13 @@ an active profile and active integration, then supplies the profile model only i
 the in-memory provider configuration. This avoids duplicating credentials for
 each model while preserving execution of prior workflow versions that reference
 an integration directly. See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-22: Explicit Redis cache-card adapter
+
+The cache card uses a workflow-level cache interface and a Redis implementation
+separate from dispatch's execution-ID queue. Its configuration requires a key and
+an explicit `read`, `write`, or `delete` mode; writes additionally require a TTL
+of 1–86,400 seconds. The runner serializes values as JSON, treats a miss as a
+nil value, and emits no token after deletion. Redis cache wiring is conditional
+on a reachable Redis service, so no hidden in-memory cache changes workflow
+behavior. See [[Architecture]] and [[Feature Map]].

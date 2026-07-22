@@ -68,6 +68,13 @@ Execution input remains in SQLite. When configured, Redis transports execution
 IDs to a worker which atomically claims queued executions; status APIs continue
 to read SQLite. The in-process queue is an explicit local/test fallback only.
 
+Redis also backs the workflow `cache` card through a separate explicit adapter;
+it is not coupled to the execution-ID queue. Cache values cross the adapter as
+JSON and can be read, written with a bounded TTL, or deleted. The adapter is
+wired only after Redis is reachable; absent Redis leaves cache cards unavailable
+rather than falling back to process memory. A write waits for its `value` input;
+read and delete modes start without one. See [[Decision Log]].
+
 The frontend routes are intentionally thin: `/` redirects to `/studio`, while
 `/studio`, `/pipelines`, and `/integrations` compose dedicated client workspaces.
 Studio state and API calls live in reusable frontend components and `src/lib/`;

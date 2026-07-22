@@ -62,6 +62,10 @@ docs/      Arquitetura, auditoria e este roadmap
   template oficial, `response_filter` é terminal por grupo e `loop.results`
   retorna ao escopo raiz para consolidar todos os achados antes de formatar e
   publicar uma única vez.
+- `cache`: usa adaptador Redis explícito para ler, gravar JSON com TTL de 1 a
+  86.400 segundos, ou excluir uma chave. Leituras sem valor emitem `value:
+  null`; exclusões não emitem saída. Sem Redis disponível, o card falha em vez
+  de usar a fila ou memória local implícita.
 - Respostas de modelo são validadas como lista JSON de achados; respostas
   inválidas seguem pela saída `validate.invalid`.
 - O `model` aceita `retry_limit` (padrão `0`, máximo `3`) e
@@ -169,7 +173,6 @@ docs/      Arquitetura, auditoria e este roadmap
 
 - Transformações declarativas e variáveis com namespaces controlados.
 - Subpipelines (`workflow`) com interfaces de entrada/saída publicadas.
-- Cache com TTL e invalidação.
 - Joins `any`/`all` e ramos condicionais múltiplos.
 - Novos adaptadores: GitHub, GitLab, Gemini, Groq e outros providers
   OpenAI-compatible, sempre registrados no backend.

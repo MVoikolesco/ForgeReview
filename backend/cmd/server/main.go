@@ -53,6 +53,13 @@ func main() {
 		if queue != nil {
 			executionQueue = queue
 			defer queue.Close()
+			cache, cacheErr := dispatch.NewRedisCache(redisURL)
+			if cacheErr != nil {
+				log.Printf("Redis cache unavailable; cache cards are disabled: %v", cacheErr)
+			} else {
+				adapters.Cache = cache
+				defer cache.Close()
+			}
 		} else {
 			executionQueue = dispatch.NewInProcessQueue()
 		}

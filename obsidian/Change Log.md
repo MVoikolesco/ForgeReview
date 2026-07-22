@@ -2,6 +2,10 @@
 
 ## 2026-07-22
 
+- Added the end-to-end cache card: validated key/mode/TTL configuration, JSON
+  runner semantics, a Redis cache adapter separate from execution dispatch, and
+  Inspector controls for key, operation, and write TTL. See [[Architecture]] and
+  [[Decision Log]].
 - Added persisted reusable model profiles, safe list/create APIs, Studio profile
   selection, and provider-resolution coverage. Provider connections now retain
   encrypted credentials and transport settings independently from model choice;

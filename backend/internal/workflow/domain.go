@@ -102,6 +102,11 @@ func Validate(definition Definition, catalog Catalog) error {
 				return err
 			}
 		}
+		if node.Type == "cache" {
+			if _, err := cacheSettingsFor(node); err != nil {
+				return err
+			}
+		}
 		if node.Type == "model" {
 			if _, err := modelSettingsFor(node); err != nil {
 				return err

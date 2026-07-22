@@ -58,3 +58,6 @@
   credentials; profiles select the model and reference an active LLM connection.
   Model cards select profiles, and the runner resolves the profile in memory
   before calling the controlled provider adapter.
+- Cache card: reads, JSON-writes with a required 1–86,400 second TTL, or deletes
+  Redis values through an explicit runner adapter. Cache misses emit a nil value;
+  deletes emit no output. Its Inspector provides key, mode, and write-TTL fields.

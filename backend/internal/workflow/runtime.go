@@ -64,6 +64,7 @@ type Adapters struct {
 	Publications  PublicationLedger
 	Execution     ExecutionContext
 	Dispatcher    ExecutionDispatcher
+	Cache         Cache
 }
 
 // ExecutionContext identifies the durable execution currently being run.
@@ -95,6 +96,14 @@ type ExecutionDispatcher interface {
 	Enqueue(context.Context, int64) error
 }
 
+// Cache is the explicit boundary for the ephemeral cache card. Values are
+// JSON-encoded by the runner so implementations never receive Go objects.
+type Cache interface {
+	Get(context.Context, string) ([]byte, bool, error)
+	Set(context.Context, string, []byte, time.Duration) error
+	Delete(context.Context, string) error
+}
+
 // Run preserves local-card execution without external adapters.
 func Run(ctx context.Context, definition Definition, catalog Catalog, input map[string]any) (RunReport, error) {
 	return RunWithAdapters(ctx, definition, catalog, input, Adapters{})
@@ -111,7 +120,7 @@ func RunWithAdapters(ctx context.Context, definition Definition, catalog Catalog
 	ready := make([]nodeScope, 0)
 	for _, node := range definition.Nodes {
 		card, _ := catalog.Get(node.Type)
-		if len(card.Inputs) == 0 {
+		if len(card.Inputs) == 0 || (node.Type == "cache" && node.Config["mode"] != "write") {
 			ready = append(ready, nodeScope{NodeKey: node.Key, ScopeKey: rootScope})
 		}
 	}
@@ -351,6 +360,34 @@ const (
 type modelSettings struct {
 	RetryLimit   int
 	RetryDelayMS int
+}
+
+const maxCacheTTLSeconds = 86400
+
+type cacheSettings struct {
+	Key        string
+	Mode       string
+	TTLSeconds int
+}
+
+func cacheSettingsFor(node Node) (cacheSettings, error) {
+	key, _ := node.Config["key"].(string)
+	if strings.TrimSpace(key) == "" {
+		return cacheSettings{}, fmt.Errorf("cache card %q requires config.key", node.Key)
+	}
+	mode, _ := node.Config["mode"].(string)
+	if mode != "read" && mode != "write" && mode != "delete" {
+		return cacheSettings{}, fmt.Errorf("cache card %q config.mode must be \"read\", \"write\", or \"delete\"", node.Key)
+	}
+	settings := cacheSettings{Key: key, Mode: mode}
+	if mode == "write" {
+		ttl, ok := integer(node.Config["ttl_seconds"])
+		if !ok || ttl < 1 || ttl > maxCacheTTLSeconds {
+			return cacheSettings{}, fmt.Errorf("cache card %q config.ttl_seconds must be between 1 and %d for write mode", node.Key, maxCacheTTLSeconds)
+		}
+		settings.TTLSeconds = ttl
+	}
+	return settings, nil
 }
 
 func modelSettingsFor(node Node) (modelSettings, error) {
@@ -600,6 +637,9 @@ func loopItems(values []any) ([]any, error) {
 }
 
 func inputsReady(node Node, inbox map[string][]Token, incoming map[string]int, catalog Catalog) bool {
+	if node.Type == "cache" && node.Config["mode"] == "write" && len(inbox["value"]) == 0 {
+		return false
+	}
 	card, _ := catalog.Get(node.Type)
 	for _, port := range card.Inputs {
 		if port.Required && len(inbox[port.Key]) == 0 {
@@ -639,8 +679,10 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		return map[string]any{"event": input}, nil
 	case "transform", "log":
 		return map[string]any{"output": first()}, nil
-	case "variable", "cache":
+	case "variable":
 		return map[string]any{"value": first()}, nil
+	case "cache":
+		return executeCache(ctx, node, inputs, adapters)
 	case "filter":
 		files, err := filterFiles(inputs["files"], node.Config)
 		if err != nil {
@@ -747,6 +789,48 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		return map[string]any{"response": response}, nil
 	default:
 		return nil, fmt.Errorf("card type %q has no configured executor", node.Type)
+	}
+}
+
+func executeCache(ctx context.Context, node Node, inputs map[string][]any, adapters Adapters) (map[string]any, error) {
+	settings, err := cacheSettingsFor(node)
+	if err != nil {
+		return nil, err
+	}
+	if adapters.Cache == nil {
+		return nil, fmt.Errorf("cache card %q requires an injected cache adapter", node.Key)
+	}
+	switch settings.Mode {
+	case "read":
+		payload, found, err := adapters.Cache.Get(ctx, settings.Key)
+		if err != nil {
+			return nil, fmt.Errorf("cache card %q: %w", node.Key, err)
+		}
+		if !found {
+			return map[string]any{"value": nil}, nil
+		}
+		var value any
+		if err := json.Unmarshal(payload, &value); err != nil {
+			return nil, fmt.Errorf("cache card %q returned invalid JSON", node.Key)
+		}
+		return map[string]any{"value": value}, nil
+	case "write":
+		value := firstForPort(inputs, "value")
+		payload, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("cache card %q could not encode value: %w", node.Key, err)
+		}
+		if err := adapters.Cache.Set(ctx, settings.Key, payload, time.Duration(settings.TTLSeconds)*time.Second); err != nil {
+			return nil, fmt.Errorf("cache card %q: %w", node.Key, err)
+		}
+		return map[string]any{"value": value}, nil
+	case "delete":
+		if err := adapters.Cache.Delete(ctx, settings.Key); err != nil {
+			return nil, fmt.Errorf("cache card %q: %w", node.Key, err)
+		}
+		return map[string]any{}, nil
+	default:
+		return nil, fmt.Errorf("cache card %q has invalid mode", node.Key)
 	}
 }
 
