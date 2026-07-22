@@ -11,7 +11,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useState } from "react";
-import { createIntegration, createModelProfile } from "../../lib/api";
+import { createIntegration, createModelProfile, validateIntegration } from "../../lib/api";
 import type { Integration } from "../../lib/types";
 import { ModalShell } from "../common/ModalShell";
 import styles from "./ConnectionWizard.module.scss";
@@ -43,6 +43,7 @@ export function ConnectionWizard({
   const [secret, setSecret] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [validating, setValidating] = useState(false);
   const steps = [
     ["Tipo", "Escolha Gitea ou LLM"],
     ["Conexão", "URL e segredo"],
@@ -60,15 +61,23 @@ export function ConnectionWizard({
     setStep(1);
     setError("");
   };
-  const next = () => {
+  const next = async () => {
     if (step === 1 && (!key || !name || !baseURL || !secret)) {
       setError(
         "Preencha identificação, URL e Token/API key para continuar.",
       );
       return;
     }
+    setValidating(true);
     setError("");
-    setStep(2);
+    try {
+      await validateIntegration({ key, name, type: family === "gitea" ? "gitea" : provider === "openrouter" ? "openai" : "ollama", status: "active", secret, config: { base_url: baseURL } });
+      setStep(2);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Não foi possível validar a conexão.");
+    } finally {
+      setValidating(false);
+    }
   };
   const submit = async () => {
     setSaving(true);
@@ -180,8 +189,8 @@ export function ConnectionWizard({
                 </button>
               )}
               {step < 2 ? (
-                <button className={styles.primary} type="button" onClick={next}>
-                  Continuar <ChevronRight size={15} />
+                <button className={styles.primary} type="button" disabled={validating} onClick={() => void next()}>
+                  {validating ? "Validando conexão…" : "Continuar"} <ChevronRight size={15} />
                 </button>
               ) : (
                 <button

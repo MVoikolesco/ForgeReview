@@ -140,3 +140,28 @@ func TestHTTPChatClientRequestContracts(t *testing.T) {
 		})
 	}
 }
+
+func TestDiscoveryUsesProviderContractsAndOpenRouterVersionedBase(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/models" {
+			t.Fatalf("path = %s", request.URL.Path)
+		}
+		if request.Header.Get("Authorization") != "Bearer secret" {
+			t.Fatal("missing authorization")
+		}
+		_, _ = writer.Write([]byte(`{"data":[{"id":"openai/gpt"},{"id":"meta/llama"}]}`))
+	}))
+	defer server.Close()
+	item := testIntegration(t, TypeOpenAI, server.URL+"/api/v1")
+	adapter := HTTPDiscoveryAdapter{Client: server.Client()}
+	if err := adapter.Validate(context.Background(), item, "secret"); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	models, err := adapter.Models(context.Background(), item, "secret")
+	if err != nil || len(models) != 2 || models[0] != "openai/gpt" {
+		t.Fatalf("models = %#v, %v", models, err)
+	}
+	if endpoint := openAIEndpoint("https://openrouter.ai/api/v1", "chat/completions"); endpoint != "https://openrouter.ai/api/v1/chat/completions" {
+		t.Fatalf("endpoint = %s", endpoint)
+	}
+}

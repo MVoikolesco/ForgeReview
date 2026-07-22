@@ -22,8 +22,8 @@ var (
 	ErrWorkflowVersionNotFound = errors.New("workflow version not found")
 	ErrWorkflowVersionNotDraft = errors.New("workflow version is not a draft")
 	ErrInvalidWorkflowVersion  = errors.New("workflow version is invalid")
-	ErrIntegrationNotFound      = errors.New("integration not found")
-	ErrIntegrationReferenced    = errors.New("integration has historical workflow references")
+	ErrIntegrationNotFound     = errors.New("integration not found")
+	ErrIntegrationReferenced   = errors.New("integration has historical workflow references")
 )
 
 func Open(path string) (*SQLite, error) {
@@ -142,52 +142,160 @@ func (s *SQLite) Integration(ctx context.Context, key string) (integration.Integ
 }
 
 func (s *SQLite) UpdateIntegration(ctx context.Context, item integration.Integration) error {
-	if err := item.Validate(); err != nil { return err }
+	if err := item.Validate(); err != nil {
+		return err
+	}
 	result, err := s.db.ExecContext(ctx, `UPDATE integrations SET name=?,type=?,config_json=?,secret_ciphertext=?,status=? WHERE integration_key=?`, item.Name, item.Type, string(item.Config), item.SecretCiphertext, item.Status, item.Key)
-	if err != nil { return err }
-	changed, err := result.RowsAffected(); if err != nil { return err }; if changed != 1 { return ErrIntegrationNotFound }; return nil
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return ErrIntegrationNotFound
+	}
+	return nil
 }
 
 func (s *SQLite) DisableIntegration(ctx context.Context, key string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE integrations SET status='disabled' WHERE integration_key=?`, key); if err != nil { return err }
-	changed, err := result.RowsAffected(); if err != nil { return err }; if changed != 1 { return ErrIntegrationNotFound }; return nil
+	result, err := s.db.ExecContext(ctx, `UPDATE integrations SET status='disabled' WHERE integration_key=?`, key)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return ErrIntegrationNotFound
+	}
+	return nil
 }
 
 func (s *SQLite) DeleteIntegration(ctx context.Context, key string) error {
-	tx, err := s.db.BeginTx(ctx, nil); if err != nil { return err }; defer tx.Rollback()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	var references int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM workflow_versions WHERE instr(definition_json, ?) > 0`, key).Scan(&references); err != nil { return err }
-	if references > 0 { return ErrIntegrationReferenced }
-	result, err := tx.ExecContext(ctx, `DELETE FROM integrations WHERE integration_key=?`, key); if err != nil { return err }
-	changed, err := result.RowsAffected(); if err != nil { return err }; if changed != 1 { return ErrIntegrationNotFound }
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM workflow_versions WHERE instr(definition_json, ?) > 0`, key).Scan(&references); err != nil {
+		return err
+	}
+	if references > 0 {
+		return ErrIntegrationReferenced
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM integrations WHERE integration_key=?`, key)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return ErrIntegrationNotFound
+	}
 	return tx.Commit()
 }
 
 func (s *SQLite) Repositories(ctx context.Context, key string) ([]integration.Repository, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT integration_key,owner,repo FROM integration_repositories WHERE integration_key=? ORDER BY owner,repo`, key); if err != nil { return nil, err }; defer rows.Close()
-	items := []integration.Repository{}; for rows.Next() { var item integration.Repository; if err = rows.Scan(&item.IntegrationKey, &item.Owner, &item.Name); err != nil { return nil, err }; items = append(items, item) }; return items, rows.Err()
+	rows, err := s.db.QueryContext(ctx, `SELECT integration_key,owner,repo FROM integration_repositories WHERE integration_key=? ORDER BY owner,repo`, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []integration.Repository{}
+	for rows.Next() {
+		var item integration.Repository
+		if err = rows.Scan(&item.IntegrationKey, &item.Owner, &item.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (s *SQLite) ReplaceRepositories(ctx context.Context, key string, items []integration.Repository) error {
-	tx, err := s.db.BeginTx(ctx, nil); if err != nil { return err }; defer tx.Rollback()
-	var kind, status string; if err = tx.QueryRowContext(ctx, `SELECT type,status FROM integrations WHERE integration_key=?`, key).Scan(&kind, &status); err != nil { if errors.Is(err, sql.ErrNoRows) { return ErrIntegrationNotFound }; return err }; if kind != integration.TypeGitea || status != integration.StatusActive { return fmt.Errorf("repositories require an active Gitea connection") }
-	if _, err = tx.ExecContext(ctx, `DELETE FROM integration_repositories WHERE integration_key=?`, key); err != nil { return err }
-	for _, item := range items { item.IntegrationKey = key; if err = item.Validate(); err != nil { return err }; if _, err = tx.ExecContext(ctx, `INSERT INTO integration_repositories(integration_key,owner,repo) VALUES(?,?,?)`, key,item.Owner,item.Name); err != nil { return err } }
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var kind, status string
+	if err = tx.QueryRowContext(ctx, `SELECT type,status FROM integrations WHERE integration_key=?`, key).Scan(&kind, &status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrIntegrationNotFound
+		}
+		return err
+	}
+	if kind != integration.TypeGitea || status != integration.StatusActive {
+		return fmt.Errorf("repositories require an active Gitea connection")
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM integration_repositories WHERE integration_key=?`, key); err != nil {
+		return err
+	}
+	for _, item := range items {
+		item.IntegrationKey = key
+		if err = item.Validate(); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO integration_repositories(integration_key,owner,repo) VALUES(?,?,?)`, key, item.Owner, item.Name); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
 // ReplaceModelProfiles atomically makes the selected provider models reusable
 // profiles. Keys are deterministic per integration/model to avoid secret data.
 func (s *SQLite) ReplaceModelProfiles(ctx context.Context, key string, models []string) ([]integration.ModelProfile, error) {
-	tx, err := s.db.BeginTx(ctx, nil); if err != nil { return nil, err }; defer tx.Rollback()
-	var kind, status string; if err = tx.QueryRowContext(ctx, `SELECT type,status FROM integrations WHERE integration_key=?`, key).Scan(&kind, &status); err != nil { if errors.Is(err, sql.ErrNoRows) { return nil, ErrIntegrationNotFound }; return nil, err }; if (kind != integration.TypeOpenAI && kind != integration.TypeOllama) || status != integration.StatusActive { return nil, fmt.Errorf("models require an active LLM connection") }
-	if _, err = tx.ExecContext(ctx, `DELETE FROM model_profiles WHERE integration_key=?`, key); err != nil { return nil, err }
-	profiles := make([]integration.ModelProfile, 0, len(models)); seen := map[string]bool{}
-	for _, model := range models { model = strings.TrimSpace(model); if model == "" || seen[model] { continue }; seen[model] = true; profile := integration.ModelProfile{Key: profileKey(key, model), Name: model, IntegrationKey: key, Model: model, Status: integration.StatusActive}; if err = profile.Validate(); err != nil { return nil, err }; if _, err = tx.ExecContext(ctx, `INSERT INTO model_profiles(profile_key,name,integration_key,model,status) VALUES(?,?,?,?,?)`, profile.Key,profile.Name,key,model,profile.Status); err != nil { return nil, err }; profiles = append(profiles, profile) }
-	if err = tx.Commit(); err != nil { return nil, err }; return profiles, nil
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var kind, status string
+	if err = tx.QueryRowContext(ctx, `SELECT type,status FROM integrations WHERE integration_key=?`, key).Scan(&kind, &status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrIntegrationNotFound
+		}
+		return nil, err
+	}
+	if (kind != integration.TypeOpenAI && kind != integration.TypeOllama) || status != integration.StatusActive {
+		return nil, fmt.Errorf("models require an active LLM connection")
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM model_profiles WHERE integration_key=?`, key); err != nil {
+		return nil, err
+	}
+	profiles := make([]integration.ModelProfile, 0, len(models))
+	seen := map[string]bool{}
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" || seen[model] {
+			continue
+		}
+		seen[model] = true
+		profile := integration.ModelProfile{Key: profileKey(key, model), Name: model, IntegrationKey: key, Model: model, Status: integration.StatusActive}
+		if err = profile.Validate(); err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO model_profiles(profile_key,name,integration_key,model,status) VALUES(?,?,?,?,?)`, profile.Key, profile.Name, key, model, profile.Status); err != nil {
+			return nil, err
+		}
+		profiles = append(profiles, profile)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return profiles, nil
 }
 
-func profileKey(connection, model string) string { return strings.NewReplacer("/", "-", ":", "-", " ", "-").Replace(connection+"-"+model) }
+func profileKey(connection, model string) string {
+	return strings.NewReplacer("/", "-", ":", "-", " ", "-").Replace(connection + "-" + model)
+}
 
 func (s *SQLite) CreateModelProfile(ctx context.Context, profile integration.ModelProfile) error {
 	if err := profile.Validate(); err != nil {

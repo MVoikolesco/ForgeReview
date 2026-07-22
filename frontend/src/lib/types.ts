@@ -100,6 +100,9 @@ export type ModelProfile = {
   status: "active" | "disabled";
 };
 
+export type Repository = { integration_key: string; owner: string; name: string };
+export type Discovery = { repositories?: Repository[]; models?: string[] };
+
 export type ExecutionSummary = {
   execution_id: number;
   status: "queued" | "running" | "completed" | "failed" | string;

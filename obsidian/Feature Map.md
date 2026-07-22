@@ -20,7 +20,10 @@
   review graph onto the canvas.
 - Integrations: create and list Gitea, OpenAI-compatible and Ollama connection
   records using AES-256-GCM ciphertext in SQLite; APIs expose only safe
-  `secret_configured` state.
+  `secret_configured` state. Admins validate unsaved connections server-side,
+  own safe connection lifecycle, and can discover resources after creation;
+  editors can transactionally manage selected active repositories/models, while
+  viewers are read-only.
 - Frontend routes: `/` is the operational dashboard with safe connection health,
   official review readiness/safety, and recent PR-context execution summaries;
   `/studio` contains the workflow editor; `/integrations` provides the reusable

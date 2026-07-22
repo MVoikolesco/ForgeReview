@@ -48,7 +48,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "http://localhost:3010")
-		c.Header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type")
 		c.Header("Access-Control-Allow-Credentials", "true")
 		if c.Request.Method == http.MethodOptions {
@@ -61,6 +61,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 	router.Use(gin.Logger(), gin.Recovery())
 	router.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	api := router.Group("/api")
+	discovery := integration.HTTPDiscoveryAdapter{}
 	api.POST("/auth/login", func(c *gin.Context) {
 		var request struct {
 			Email    string `json:"email"`
@@ -131,11 +132,16 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		decoder := json.NewDecoder(c.Request.Body)
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&request); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid integration request"})
 			return
 		}
 		if adapters.Secrets == nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "integration secret manager is not configured"})
+			return
+		}
+		candidate := integration.Integration{Key: request.Key, Name: request.Name, Type: request.Type, Config: request.Config, SecretCiphertext: "provided", Status: request.Status}
+		if err := candidate.Validate(); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "invalid connection configuration"})
 			return
 		}
 		ciphertext, err := adapters.Secrets.Encrypt(request.Key, request.Secret)
@@ -161,6 +167,192 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 			summaries = append(summaries, item.Summary())
 		}
 		c.JSON(http.StatusOK, summaries)
+	})
+	api.POST("/integrations/validate", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+		var request struct {
+			Key    string          `json:"key"`
+			Name   string          `json:"name"`
+			Type   string          `json:"type"`
+			Config json.RawMessage `json:"config"`
+			Secret string          `json:"secret"`
+			Status string          `json:"status"`
+		}
+		decoder := json.NewDecoder(c.Request.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid integration request"})
+			return
+		}
+		item := integration.Integration{Key: request.Key, Name: request.Name, Type: request.Type, Config: request.Config, SecretCiphertext: "provided", Status: request.Status}
+		if err := item.Validate(); err != nil || discovery.Validate(c.Request.Context(), item, request.Secret) != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "connection validation failed"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "validated"})
+	})
+	api.GET("/integrations/:key", func(c *gin.Context) {
+		item, err := workflows.Integration(c.Request.Context(), c.Param("key"))
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "connection not found"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load connection"})
+			return
+		}
+		c.JSON(http.StatusOK, item.Summary())
+	})
+	api.PATCH("/integrations/:key", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+		var request struct {
+			Name   string          `json:"name"`
+			Config json.RawMessage `json:"config"`
+			Secret *string         `json:"secret"`
+			Status string          `json:"status"`
+		}
+		decoder := json.NewDecoder(c.Request.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid integration request"})
+			return
+		}
+		item, err := workflows.Integration(c.Request.Context(), c.Param("key"))
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "connection not found"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load connection"})
+			return
+		}
+		item.Name = request.Name
+		item.Config = request.Config
+		item.Status = request.Status
+		if request.Secret != nil {
+			ciphertext, encryptErr := adapters.Secrets.Encrypt(item.Key, *request.Secret)
+			if encryptErr != nil {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "integration secret is required"})
+				return
+			}
+			item.SecretCiphertext = ciphertext
+		}
+		if err = workflows.UpdateIntegration(c.Request.Context(), item); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "could not update connection"})
+			return
+		}
+		c.JSON(http.StatusOK, item.Summary())
+	})
+	api.POST("/integrations/:key/disable", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+		if err := workflows.DisableIntegration(c.Request.Context(), c.Param("key")); errors.Is(err, store.ErrIntegrationNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "connection not found"})
+		} else if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not disable connection"})
+		} else {
+			c.Status(http.StatusNoContent)
+		}
+	})
+	api.DELETE("/integrations/:key", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+		err := workflows.DeleteIntegration(c.Request.Context(), c.Param("key"))
+		if errors.Is(err, store.ErrIntegrationReferenced) {
+			c.JSON(http.StatusConflict, gin.H{"error": "connection is referenced by workflow history; disable it instead"})
+		} else if errors.Is(err, store.ErrIntegrationNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "connection not found"})
+		} else if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not delete connection"})
+		} else {
+			c.Status(http.StatusNoContent)
+		}
+	})
+	api.GET("/integrations/:key/discover", requireRoles(auth.RoleEditor, auth.RoleAdmin), func(c *gin.Context) {
+		item, err := workflows.Integration(c.Request.Context(), c.Param("key"))
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "connection not found"})
+			return
+		}
+		if err != nil || item.Status != integration.StatusActive || adapters.Secrets == nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "connection is not available"})
+			return
+		}
+		secret, err := adapters.Secrets.Resolve(item)
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "connection is not available"})
+			return
+		}
+		if item.Type == integration.TypeGitea {
+			repos, err := discovery.Repositories(c.Request.Context(), item, secret)
+			if err != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "resource discovery failed"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"repositories": repos})
+			return
+		}
+		models, err := discovery.Models(c.Request.Context(), item, secret)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "resource discovery failed"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"models": models})
+	})
+	api.GET("/integrations/:key/resources", func(c *gin.Context) {
+		item, err := workflows.Integration(c.Request.Context(), c.Param("key"))
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "connection not found"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load resources"})
+			return
+		}
+		if item.Type == integration.TypeGitea {
+			repositories, err := workflows.Repositories(c.Request.Context(), item.Key)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load resources"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"repositories": repositories})
+			return
+		}
+		profiles, err := workflows.ModelProfiles(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load resources"})
+			return
+		}
+		selected := []string{}
+		for _, p := range profiles {
+			if p.IntegrationKey == item.Key {
+				selected = append(selected, p.Model)
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"models": selected})
+	})
+	api.PUT("/integrations/:key/repositories", requireRoles(auth.RoleEditor, auth.RoleAdmin), func(c *gin.Context) {
+		var request struct {
+			Repositories []integration.Repository `json:"repositories"`
+		}
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid resource request"})
+			return
+		}
+		if err := workflows.ReplaceRepositories(c.Request.Context(), c.Param("key"), request.Repositories); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "could not replace repositories"})
+			return
+		}
+		c.Status(http.StatusNoContent)
+	})
+	api.PUT("/integrations/:key/models", requireRoles(auth.RoleEditor, auth.RoleAdmin), func(c *gin.Context) {
+		var request struct {
+			Models []string `json:"models"`
+		}
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid resource request"})
+			return
+		}
+		profiles, err := workflows.ReplaceModelProfiles(c.Request.Context(), c.Param("key"), request.Models)
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "could not replace models"})
+			return
+		}
+		c.JSON(http.StatusOK, profiles)
 	})
 	api.POST("/model-profiles", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
 		var profile integration.ModelProfile

@@ -19,6 +19,14 @@ Gitea PR reader and `model` selects OpenAI-compatible or Ollama chat. API
 summaries expose only `secret_configured`, never ciphertext or plaintext. See
 [[Decision Log]] and [[Feature Map]].
 
+Connection setup validates unsaved credentials only through a server-side,
+ten-second-bounded provider adapter and returns sanitized outcomes. Active
+connections can discover safe Gitea organization repositories or provider model
+names; SQLite transactionally replaces repository selections or LLM model
+profiles. Admins own connection lifecycle; editors may manage selections and
+viewers are read-only. OpenAI-compatible URL construction preserves an existing
+`/v1` suffix for OpenRouter. See [[Decision Log]] and [[Feature Map]].
+
 Workflow definitions are append-only saved versions. SQLite groups their safe
 metadata by workflow key for `GET /api/workflows`; each summary includes its
 numeric version, creation time, and `draft`, `published`, or `archived` status.

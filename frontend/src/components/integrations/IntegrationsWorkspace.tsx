@@ -59,7 +59,7 @@ export function IntegrationsWorkspace() {
             {message}
           </p>
         ) : (
-            <IntegrationList items={items} profiles={profiles} />
+            <IntegrationList items={items} profiles={profiles} role={user?.role} onChanged={() => void load()} />
         )}
       </section>
       {showWizard && (

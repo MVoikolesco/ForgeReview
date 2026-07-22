@@ -53,8 +53,9 @@ attribute there before exposing the instance beyond localhost.
 `POST /api/auth/login`, `POST /api/auth/logout`, and `GET /api/auth/me` provide
 the session lifecycle. All application APIs require a session. Viewers may read
 safe dashboard, pipeline, version, integration, model-profile, and execution
-summaries. Editors may additionally save drafts, publish drafts, and start
-executions. Only admins may create integrations/model profiles and users.
+summaries. Editors may additionally save drafts, publish drafts, start
+executions, and replace selected resources on active existing connections.
+Only admins may create, edit, disable, or delete connections and users.
 
 - `GET /health`: backend health.
 - `GET /api/cards`: registered card catalog and typed ports.
@@ -63,6 +64,16 @@ executions. Only admins may create integrations/model profiles and users.
   `model`; `secret` is a one-time Token/API key input and is never returned.
 - `GET /api/integrations`: list safe integration summaries with
   `secret_configured`. Ciphertext and credential values are never returned.
+- `POST /api/integrations/validate`: admin-only server-side validation of an
+  unsaved connection. The provider call is bounded to ten seconds and returns
+  only sanitized success/failure; neither candidate nor secret is persisted.
+- `GET /api/integrations/:key/discover`: admin/editor-only discovery of Gitea
+  organization repositories or LLM models for an active connection. `PUT`
+  resource endpoints transactionally replace selections; LLM selections become
+  reusable profiles.
+- `GET/PATCH /api/integrations/:key`, `POST /disable`, and `DELETE` provide
+  safe detail and admin lifecycle actions. PATCH preserves ciphertext when
+  `secret` is omitted; delete conflicts when workflow history references it.
 - `POST /api/workflows`: validate and persist a new draft version.
 - `GET /api/workflows`: list workflow keys with their latest name/description
   and all version summaries (`version_id`, `version`, `created_at`, and
@@ -269,7 +280,9 @@ The connection flow uses a three-step Studio wizard: choose the Gitea or LLM
 family, configure the URL and Token/API key, then select a model or review a
 Gitea connection. The only LLM choices exposed in the current UI are Ollama
 local, Ollama Cloud and OpenRouter. OpenRouter uses the controlled
-OpenAI-compatible adapter; both Ollama choices use the Ollama adapter.
+OpenAI-compatible adapter; both Ollama choices use the Ollama adapter. The
+OpenAI-compatible URL normalizer accepts a versioned base such as
+`https://openrouter.ai/api/v1` without appending a duplicate `/v1`.
 
 Selecting a card opens its inspector. The inspector edits its display name and
 the supported configuration fields: Gitea connection/PR coordinates for fetch

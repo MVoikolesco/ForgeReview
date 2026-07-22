@@ -169,6 +169,31 @@ func TestModelProfileRequiresAnLLMConnection(t *testing.T) {
 	}
 }
 
+func TestReplaceSelectedResourcesIsTransactional(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/resources.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	config := json.RawMessage(`{"base_url":"https://models.example"}`)
+	item := encryptedStoreIntegration(t, integration.Integration{Key: "models", Name: "Models", Type: integration.TypeOpenAI, Config: config, Status: integration.StatusActive}, "secret")
+	if err = database.CreateIntegration(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := database.ReplaceModelProfiles(context.Background(), "models", []string{"one", "two", "one"})
+	if err != nil || len(profiles) != 2 {
+		t.Fatalf("first replace = %#v, %v", profiles, err)
+	}
+	profiles, err = database.ReplaceModelProfiles(context.Background(), "models", []string{"three"})
+	if err != nil || len(profiles) != 1 || profiles[0].Model != "three" {
+		t.Fatalf("replacement = %#v, %v", profiles, err)
+	}
+	stored, err := database.ModelProfiles(context.Background())
+	if err != nil || len(stored) != 1 || stored[0].Model != "three" {
+		t.Fatalf("stored = %#v, %v", stored, err)
+	}
+}
+
 func TestOpenMigratesLegacyIntegrationReferencesWithoutRetainingThem(t *testing.T) {
 	path := "file:" + t.TempDir() + "/legacy-integrations.db"
 	legacy, err := sql.Open("sqlite", path)

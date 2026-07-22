@@ -83,6 +83,50 @@ func TestModelProfilesUseExistingLLMConnection(t *testing.T) {
 	}
 }
 
+func TestIntegrationDetailEditDisableAndHistoricalDeleteConflict(t *testing.T) {
+	database, err := store.Open("file:" + t.TempDir() + "/connection-life.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	secrets, err := integration.NewEncryptedSecrets("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := New(workflow.DefaultCatalog(), database, workflow.Adapters{Secrets: secrets})
+	create := httptest.NewRecorder()
+	router.ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/api/integrations", bytes.NewBufferString(`{"key":"life","name":"Original","type":"gitea","config":{"base_url":"https://gitea.example"},"status":"active","secret":"secret-value"}`)))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s", create.Code, create.Body.String())
+	}
+	before, err := database.Integration(context.Background(), "life")
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := httptest.NewRecorder()
+	router.ServeHTTP(edit, httptest.NewRequest(http.MethodPatch, "/api/integrations/life", bytes.NewBufferString(`{"name":"Renamed","config":{"base_url":"https://gitea.example"},"status":"active"}`)))
+	if edit.Code != http.StatusOK || strings.Contains(edit.Body.String(), "secret-value") {
+		t.Fatalf("edit = %d %s", edit.Code, edit.Body.String())
+	}
+	after, err := database.Integration(context.Background(), "life")
+	if err != nil || after.SecretCiphertext != before.SecretCiphertext {
+		t.Fatalf("secret replacement = %#v, %v", after, err)
+	}
+	if _, err = database.Save(context.Background(), workflow.Definition{Key: "history", Name: "History", Nodes: []workflow.Node{{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "life"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	remove := httptest.NewRecorder()
+	router.ServeHTTP(remove, httptest.NewRequest(http.MethodDelete, "/api/integrations/life", nil))
+	if remove.Code != http.StatusConflict {
+		t.Fatalf("delete = %d %s", remove.Code, remove.Body.String())
+	}
+	disable := httptest.NewRecorder()
+	router.ServeHTTP(disable, httptest.NewRequest(http.MethodPost, "/api/integrations/life/disable", nil))
+	if disable.Code != http.StatusNoContent {
+		t.Fatalf("disable = %d", disable.Code)
+	}
+}
+
 func TestExecutionStartQueuesWhenDispatcherConfigured(t *testing.T) {
 	database, err := store.Open("file:" + t.TempDir() + "/queue.db")
 	if err != nil {

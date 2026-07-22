@@ -4,6 +4,8 @@ import type {
   Integration,
   ModelProfile,
   NewIntegration,
+  Discovery,
+  Repository,
   WorkflowDefinition,
   WorkflowSummary,
   WorkflowVersionSummary,
@@ -42,6 +44,15 @@ export const createIntegration = (integration: NewIntegration) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(integration),
   });
+export const validateIntegration = (integration: NewIntegration) =>
+  request<{ status: string }>("/api/integrations/validate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(integration) });
+export const discoverResources = (key: string) => request<Discovery>(`/api/integrations/${encodeURIComponent(key)}/discover`);
+export const getResources = (key: string) => request<Discovery>(`/api/integrations/${encodeURIComponent(key)}/resources`);
+export const replaceRepositories = (key: string, repositories: Repository[]) => request<void>(`/api/integrations/${encodeURIComponent(key)}/repositories`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repositories }) });
+export const replaceModels = (key: string, models: string[]) => request<ModelProfile[]>(`/api/integrations/${encodeURIComponent(key)}/models`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ models }) });
+export const disableIntegration = (key: string) => request<void>(`/api/integrations/${encodeURIComponent(key)}/disable`, { method: "POST" });
+export const deleteIntegration = (key: string) => request<void>(`/api/integrations/${encodeURIComponent(key)}`, { method: "DELETE" });
+export const updateIntegration = (key: string, update: { name: string; config: { base_url: string }; status: "active" | "disabled"; secret?: string }) => request<Integration>(`/api/integrations/${encodeURIComponent(key)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update) });
 export const getModelProfiles = () => request<ModelProfile[]>("/api/model-profiles");
 export const createModelProfile = (profile: ModelProfile) =>
   request<ModelProfile>("/api/model-profiles", {
