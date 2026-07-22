@@ -2,6 +2,13 @@
 
 ## 2026-07-22
 
+- Added local SQLite identity, bcrypt password hashing, first-admin bootstrap,
+  signed revocable HttpOnly sessions, API authentication, and viewer/editor/admin
+  authorization. Compose and `.env.example` now require bootstrap and session
+  signing configuration; the frontend presents a login gate without persisting a
+  token. The Go module now declares bcrypt's `x/crypto` dependency directly.
+  See [[Architecture]], [[Feature Map]], and [[Decision Log]].
+
 - Added the root operational dashboard and the bounded safe execution-summary
   API. The dashboard presents backend/connection health, the published official
   review pipeline's readiness and conservative policy, and recent safe PR

@@ -1,6 +1,12 @@
 # Feature Map
 
 - POC: preserved under `POC/`.
+- Local identity and RBAC: login, logout, and current-user endpoints use
+  bcrypt-backed SQLite users and signed, revocable HttpOnly sessions. Viewers
+  read safe summaries, editors save/publish/run drafts, and admins manage
+  integrations, model profiles, and users (including the admin user list/create
+  API). The frontend gates login and hides
+  or disables role-ineligible navigation/actions.
 - Workflow catalog: initial backend foundation implemented.
 - Studio canvas: initial visual prototype implemented.
 - Studio validation: saves and executes a local card graph, then reflects node

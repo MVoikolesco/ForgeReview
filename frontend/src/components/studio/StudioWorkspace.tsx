@@ -55,8 +55,11 @@ import { CardInspector } from "../workflow/CardInspector";
 import { CardLibrary } from "../workflow/CardLibrary";
 import { WorkflowCanvas } from "../workflow/WorkflowCanvas";
 import styles from "./StudioWorkspace.module.scss";
+import { useCurrentUser } from "../auth/AuthGate";
 
 export function StudioWorkspace() {
+	const user = useCurrentUser();
+	const canEdit = user?.role === "editor" || user?.role === "admin";
   const searchParams = useSearchParams();
   const versionParam = searchParams.get("version");
   const versionID = versionParam && /^\d+$/.test(versionParam) ? Number(versionParam) : undefined;
@@ -339,16 +342,16 @@ export function StudioWorkspace() {
         <span>{openedVersionID ? `Versão salva ${openedVersionID}` : "Fluxo de verificação"}</span>
         {dirty && <em className={styles.unsaved}>Alterações não salvas</em>}
         <div>
-          <button onClick={loadReviewTemplate}>
+          <button disabled={!canEdit} onClick={loadReviewTemplate}>
             <BookOpen size={14} /> Template review
           </button>
-          <button onClick={openConnections}>
+          <button disabled={user?.role !== "admin"} onClick={openConnections}>
             <Settings2 size={14} /> Integrações
           </button>
           <Link href="/pipelines">Pipelines</Link>
           <Link href="/integrations">Gerenciar integrações</Link>
           <button
-            disabled={busy}
+            disabled={busy || !canEdit}
             onClick={() =>
               setMessage("As conexões visíveis usam contratos compatíveis.")
             }
@@ -356,14 +359,14 @@ export function StudioWorkspace() {
             <ShieldCheck size={14} /> Validar
           </button>
           <button
-            disabled={busy}
+            disabled={busy || !canEdit}
             onClick={() => void saveDraft()}
           >
             <Save size={14} /> Salvar novo rascunho
           </button>
           <button
             className={styles.publish}
-            disabled={busy}
+            disabled={busy || !canEdit}
             onClick={() => void publishCurrent()}
           >
             <Upload size={14} /> Publicar

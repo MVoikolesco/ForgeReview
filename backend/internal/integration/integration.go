@@ -120,6 +120,30 @@ type ModelProfileLookup interface {
 	ModelProfile(context.Context, string) (ModelProfile, error)
 }
 
+// Repository is a selected Gitea repository. It contains no credential or
+// provider response metadata and is safe to expose to authenticated users.
+type Repository struct {
+	IntegrationKey string `json:"integration_key"`
+	Owner          string `json:"owner"`
+	Name           string `json:"name"`
+}
+
+func (r Repository) Validate() error {
+	if strings.TrimSpace(r.IntegrationKey) == "" || strings.TrimSpace(r.Owner) == "" || strings.TrimSpace(r.Name) == "" {
+		return fmt.Errorf("repository integration_key, owner, and name are required")
+	}
+	return nil
+}
+
+// DiscoveryAdapter is the narrow server-only boundary used by connection
+// validation and resource discovery. Implementations must return safe names
+// only and must not retain supplied credentials.
+type DiscoveryAdapter interface {
+	Validate(context.Context, Integration, string) error
+	Repositories(context.Context, Integration, string) ([]Repository, error)
+	Models(context.Context, Integration, string) ([]string, error)
+}
+
 // SecretManager encrypts one-time API input and decrypts it only immediately
 // before a controlled provider call. Implementations must not log secrets.
 type SecretManager interface {

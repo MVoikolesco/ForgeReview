@@ -4,6 +4,12 @@ The new application separates `backend/` (Gin, SQLite and workflow domain) from
 `frontend/` (Next.js Studio). The workflow catalog is backend-controlled and
 definitions connect typed card ports. See `docs/architecture.md`.
 
+SQLite also owns local identity: users have bcrypt password hashes and a
+`viewer`, `editor`, or `admin` role. An empty database can bootstrap only
+`admin@localhost` from an environment password. Sessions use a short-lived
+HMAC-signed, HttpOnly/SameSite-Lax cookie plus a revocable SQLite nonce; no
+browser token persistence is used. See [[Decision Log]] and [[Feature Map]].
+
 SQLite also stores controlled integration records: key, name, provider type,
 safe transport configuration, AES-256-GCM ciphertext, and status. The master
 key is loaded only from `FORGEREVIEW_ENCRYPTION_KEY` and must be canonical

@@ -33,10 +33,12 @@ import type {
   WorkflowSummary,
 } from "../../lib/types";
 import styles from "./DashboardWorkspace.module.scss";
+import { useCurrentUser } from "../auth/AuthGate";
 
 type LoadState = "loading" | "ready" | "error";
 
 export function DashboardWorkspace() {
+	const user = useCurrentUser();
   const [connections, setConnections] = useState<Integration[]>([]);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
@@ -85,9 +87,9 @@ export function DashboardWorkspace() {
       <Link className={styles.brand} href="/" aria-label="ForgeReview dashboard"><Braces size={19} /> ForgeReview <span>CONTROL</span></Link>
       <nav aria-label="Navegação principal">
         <Link aria-current="page" href="/">Visão geral</Link>
-        <Link href="/studio">Studio</Link>
+        {user?.role !== "viewer" && <Link href="/studio">Studio</Link>}
         <Link href="/pipelines">Pipelines</Link>
-        <Link href="/integrations">Integrações</Link>
+        {user?.role === "admin" && <Link href="/integrations">Integrações</Link>}
       </nav>
       <button className={styles.refresh} onClick={() => void load()} aria-label="Atualizar dashboard"><RefreshCw size={16} /> <span>Atualizar</span></button>
     </header>
@@ -100,7 +102,7 @@ export function DashboardWorkspace() {
     </section>
 
     <section aria-labelledby="connections-title">
-      <div className={styles.sectionHeading}><div><p>CONEXÕES</p><h2 id="connections-title">Saúde operacional</h2></div><Link href="/integrations">Gerenciar <ArrowUpRight size={15} /></Link></div>
+      <div className={styles.sectionHeading}><div><p>CONEXÕES</p><h2 id="connections-title">Saúde operacional</h2></div>{user?.role === "admin" && <Link href="/integrations">Gerenciar <ArrowUpRight size={15} /></Link>}</div>
       {states.connections === "error" ? <PanelError text="Não foi possível carregar o estado das conexões." /> : <div className={styles.connectionGrid}>
         <ConnectionCard icon={<PlugZap size={19} />} label="Gitea" items={gitea} ready={connectionReady(gitea)} loading={states.connections === "loading"} />
         <ConnectionCard icon={<Network size={19} />} label="Modelos" items={models} ready={connectionReady(models)} loading={states.connections === "loading"} />

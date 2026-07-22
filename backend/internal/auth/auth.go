@@ -35,6 +35,7 @@ type SessionStore interface {
 	CreateUser(context.Context, string, string, Role) (User, error)
 	UserByEmail(context.Context, string) (User, string, error)
 	UserByID(context.Context, int64) (User, error)
+	Users(context.Context) ([]User, error)
 	CreateSession(context.Context, string, int64, time.Time) error
 	DeleteSession(context.Context, string) error
 	SessionValid(context.Context, string, int64, time.Time) (bool, error)

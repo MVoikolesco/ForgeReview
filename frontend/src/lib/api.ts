@@ -13,7 +13,7 @@ export const apiURL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8088";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiURL}${path}`, init);
+  const response = await fetch(`${apiURL}${path}`, { credentials: "include", ...init });
   const payload = (await response.json()) as T & { error?: string };
   if (!response.ok)
     throw new Error(payload.error || "Não foi possível concluir a operação.");
@@ -30,6 +30,10 @@ export const normalizeCard = (card: CardType): CardType => ({
 export const getCards = async () =>
   (await request<CardType[]>("/api/cards")).map(normalizeCard);
 export const getHealth = () => request<{ status: string }>("/health");
+export type CurrentUser = { id: number; email: string; role: "viewer" | "editor" | "admin" };
+export const getCurrentUser = () => request<CurrentUser>("/api/auth/me");
+export const login = (email: string, password: string) => request<CurrentUser>("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
+export const logout = () => request<void>("/api/auth/logout", { method: "POST" });
 export const getIntegrations = () =>
   request<Integration[]>("/api/integrations");
 export const createIntegration = (integration: NewIntegration) =>

@@ -33,6 +33,29 @@ default. `GET /api/workflows` identifies the published version and
 
 ## Current API
 
+### Local identity, sessions, and roles
+
+ForgeReview uses SQLite `users` records with bcrypt password hashes and the
+`viewer`, `editor`, and `admin` roles. On an empty users table, startup creates
+only `admin@localhost` from `FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD`; the value is
+used to produce a bcrypt hash and is not persisted. Later restarts never reset
+or create that account.
+
+The browser receives an `HttpOnly`, `SameSite=Lax` session cookie. Its opaque
+session nonce is stored in SQLite, while its user ID, expiry, and nonce are
+HMAC-SHA-256 signed with `FORGEREVIEW_SESSION_SIGNING_KEY` (minimum 32
+characters). Sessions expire after eight hours by default (or the positive Go
+duration in `FORGEREVIEW_SESSION_TTL`) and logout deletes the server-side nonce.
+This supports local HTTP hosting without browser token persistence. Deployments
+behind HTTPS should terminate TLS at the reverse proxy and set the cookie secure
+attribute there before exposing the instance beyond localhost.
+
+`POST /api/auth/login`, `POST /api/auth/logout`, and `GET /api/auth/me` provide
+the session lifecycle. All application APIs require a session. Viewers may read
+safe dashboard, pipeline, version, integration, model-profile, and execution
+summaries. Editors may additionally save drafts, publish drafts, and start
+executions. Only admins may create integrations/model profiles and users.
+
 - `GET /health`: backend health.
 - `GET /api/cards`: registered card catalog and typed ports.
 - `POST /api/integrations`: create an active or disabled Gitea, OpenAI-compatible
@@ -199,9 +222,11 @@ artifact. It intentionally does not run `next dev`, because the final image
 does not contain source files and uses `NODE_ENV=production`.
 
 Copy `.env.example` to `.env` for local Compose configuration and generate the
-required master key with `openssl rand -base64 32`. Compose passes only
-`FORGEREVIEW_ENCRYPTION_KEY` to the backend; no provider-specific integration
-credentials are environment configuration.
+required encryption key with `openssl rand -base64 32` and a separate session
+signing key with `openssl rand -base64 48`. Set a strong bootstrap administrator
+password before the first start. Compose passes these three setup values to the
+backend; no provider-specific integration credentials are environment
+configuration.
 
 ## Studio lifecycle and validation flow
 

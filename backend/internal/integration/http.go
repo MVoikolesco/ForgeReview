@@ -9,11 +9,81 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 type HTTPGiteaClient struct{ Client *http.Client }
 type HTTPOpenAIClient struct{ Client *http.Client }
 type HTTPOllamaClient struct{ Client *http.Client }
+
+const outboundTimeout = 10 * time.Second
+
+// HTTPDiscoveryAdapter performs the setup-only provider calls with a dedicated
+// bounded client. It is intentionally separate from workflow execution clients.
+type HTTPDiscoveryAdapter struct{ Client *http.Client }
+
+func (a HTTPDiscoveryAdapter) Validate(ctx context.Context, item Integration, secret string) error {
+	if item.Type == TypeGitea {
+		var current map[string]any
+		return a.getJSON(ctx, strings.TrimRight(configBaseURL(item), "/")+"/api/v1/user", "token "+secret, &current)
+	}
+	if item.Type == TypeOpenAI {
+		var models struct{ Data []json.RawMessage `json:"data"` }
+		return a.getJSON(ctx, openAIEndpoint(configBaseURL(item), "models"), "Bearer "+secret, &models)
+	}
+	if item.Type == TypeOllama {
+		var models struct{ Models []json.RawMessage `json:"models"` }
+		return a.getJSON(ctx, strings.TrimRight(configBaseURL(item), "/")+"/api/tags", "Bearer "+secret, &models)
+	}
+	return fmt.Errorf("unsupported integration type")
+}
+
+func (a HTTPDiscoveryAdapter) Repositories(ctx context.Context, item Integration, secret string) ([]Repository, error) {
+	if item.Type != TypeGitea { return nil, fmt.Errorf("repositories require Gitea") }
+	var orgs []struct{ UserName string `json:"username"`; Name string `json:"name"` }
+	if err := a.getJSON(ctx, strings.TrimRight(configBaseURL(item), "/")+"/api/v1/user/orgs", "token "+secret, &orgs); err != nil { return nil, err }
+	repositories := []Repository{}
+	for _, org := range orgs {
+		owner := org.UserName; if owner == "" { owner = org.Name }; if owner == "" { continue }
+		var repos []struct{ Name string `json:"name"`; Owner struct{ UserName string `json:"username"` } `json:"owner"` }
+		if err := a.getJSON(ctx, fmt.Sprintf("%s/api/v1/orgs/%s/repos", strings.TrimRight(configBaseURL(item), "/"), url.PathEscape(owner)), "token "+secret, &repos); err != nil { return nil, err }
+		for _, repo := range repos { if repo.Name != "" { repoOwner := repo.Owner.UserName; if repoOwner == "" { repoOwner = owner }; repositories = append(repositories, Repository{IntegrationKey: item.Key, Owner: repoOwner, Name: repo.Name}) } }
+	}
+	return repositories, nil
+}
+
+func (a HTTPDiscoveryAdapter) Models(ctx context.Context, item Integration, secret string) ([]string, error) {
+	var models []string
+	if item.Type == TypeOpenAI {
+		var response struct{ Data []struct{ ID string `json:"id"` } `json:"data"` }
+		if err := a.getJSON(ctx, openAIEndpoint(configBaseURL(item), "models"), "Bearer "+secret, &response); err != nil { return nil, err }; for _, model := range response.Data { if model.ID != "" { models = append(models, model.ID) } }; return models, nil
+	}
+	if item.Type == TypeOllama {
+		var response struct{ Models []struct{ Name string `json:"name"` } `json:"models"` }
+		if err := a.getJSON(ctx, strings.TrimRight(configBaseURL(item), "/")+"/api/tags", "Bearer "+secret, &response); err != nil { return nil, err }; for _, model := range response.Models { if model.Name != "" { models = append(models, model.Name) } }; return models, nil
+	}
+	return nil, fmt.Errorf("models require an LLM connection")
+}
+
+func (a HTTPDiscoveryAdapter) getJSON(ctx context.Context, endpoint, authorization string, target any) error {
+	ctx, cancel := context.WithTimeout(ctx, outboundTimeout); defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil); if err != nil { return err }
+	request.Header.Set("Accept", "application/json"); if authorization != "" { request.Header.Set("Authorization", authorization) }
+	client := a.Client; if client == nil { client = &http.Client{Timeout: outboundTimeout} }
+	response, err := client.Do(request); if err != nil { return err }; defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices { return fmt.Errorf("unexpected status %d", response.StatusCode) }
+	return json.NewDecoder(response.Body).Decode(target)
+}
+
+func configBaseURL(item Integration) string { config, _ := item.ConfigValues(); return config["base_url"] }
+
+// openAIEndpoint accepts either a provider root or an already versioned base
+// URL (OpenRouter's https://openrouter.ai/api/v1), preventing a duplicate /v1.
+func openAIEndpoint(baseURL, resource string) string {
+	baseURL = strings.TrimRight(baseURL, "/")
+	if strings.HasSuffix(baseURL, "/v1") { return baseURL + "/" + resource }
+	return baseURL + "/v1/" + resource
+}
 
 func (c HTTPGiteaClient) ReadPullRequest(ctx context.Context, integration Integration, secret string, request PullRequestRequest) (PullRequest, error) {
 	if integration.Type != TypeGitea {
@@ -147,7 +217,7 @@ func (c HTTPOpenAIClient) Chat(ctx context.Context, integration Integration, sec
 			} `json:"message"`
 		} `json:"choices"`
 	}
-	if err = postJSON(ctx, c.Client, strings.TrimRight(config["base_url"], "/")+"/v1/chat/completions", payload, "Bearer "+secret, &response); err != nil {
+	if err = postJSON(ctx, c.Client, openAIEndpoint(config["base_url"], "chat/completions"), payload, "Bearer "+secret, &response); err != nil {
 		return "", fmt.Errorf("OpenAI-compatible chat: %w", err)
 	}
 	if len(response.Choices) == 0 || response.Choices[0].Message.Content == "" {

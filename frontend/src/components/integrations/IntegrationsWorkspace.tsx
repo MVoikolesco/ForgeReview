@@ -8,8 +8,10 @@ import type { Integration, ModelProfile } from "../../lib/types";
 import { ConnectionWizard } from "./ConnectionWizard";
 import { IntegrationList } from "./IntegrationList";
 import styles from "./IntegrationsWorkspace.module.scss";
+import { useCurrentUser } from "../auth/AuthGate";
 
 export function IntegrationsWorkspace() {
+	const user = useCurrentUser();
   const [items, setItems] = useState<Integration[]>([]);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [showWizard, setShowWizard] = useState(false);
@@ -48,7 +50,7 @@ export function IntegrationsWorkspace() {
               sem armazenamento no navegador.
             </p>
           </div>
-          <button onClick={() => setShowWizard(true)}>
+          <button disabled={user?.role !== "admin"} onClick={() => setShowWizard(true)}>
             <Plus size={16} /> Nova conexão
           </button>
         </div>

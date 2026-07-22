@@ -186,8 +186,13 @@ dashboard derives official-pipeline readiness and conservative publication state
 from the published definition plus safe connection/profile summaries. See
 [[Architecture]] and [[Feature Map]].
 
-## Planned: Viewer/editor/admin RBAC
+## 2026-07-22: Local signed sessions with revocable SQLite state
 
-Viewer, editor, and admin roles are planned for dashboard and management access.
-Authentication and authorization are not implemented in this increment, so no
-route currently enforces these roles.
+ForgeReview uses bcrypt password hashes in SQLite and bootstraps one administrator
+only while the users table is empty. A session cookie is HttpOnly and SameSite
+Lax; its user/expiry/nonce claims are HMAC-SHA-256 signed, and the nonce is also
+persisted so logout and expiry can be enforced server-side. This avoids browser
+token persistence while remaining practical for a local self-hosted HTTP setup.
+Viewer access is read-only, editor access is limited to workflow drafts and
+execution, and integration/model/user management requires admin. See
+[[Architecture]] and [[Feature Map]].

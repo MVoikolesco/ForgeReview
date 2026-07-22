@@ -88,6 +88,14 @@ docs/      Arquitetura, auditoria e este roadmap
 
 ### Integrações e segurança
 
+- Identidade local em SQLite: usuários têm hash bcrypt e os papéis `viewer`,
+  `editor` e `admin`. Somente a primeira inicialização, com tabela vazia, cria
+  `admin@localhost` a partir de `FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD`.
+- Sessões usam cookie `HttpOnly`/`SameSite=Lax`, nonce revogável no SQLite e
+  payload assinado por `FORGEREVIEW_SESSION_SIGNING_KEY`; nenhum token é salvo
+  no browser. Viewer é somente leitura, editor gerencia rascunhos e admin
+  gerencia integrações, segredos e usuários.
+
 - Integrações persistidas para Gitea, Ollama e OpenAI-compatible/OpenRouter.
 - Perfis de modelo reutilizáveis separam a seleção de modelo da conexão e de
   sua credencial. Cada perfil referencia uma conexão LLM registrada e ativa.
@@ -172,9 +180,7 @@ docs/      Arquitetura, auditoria e este roadmap
 
 ### 4. Administração e segurança
 
-- Autenticação e autorização por domínio administrativo.
-- Decisão de RBAC com papéis viewer/editor/admin para o painel e áreas de
-  gestão; planejada, ainda não implementada.
+- Interface completa de listagem, alteração e desativação de usuários.
 - Gestão de segredos com armazenamento cifrado ou secret manager, substituindo
    o armazenamento local AES-GCM quando houver operação remota, incluindo
    rotação de chave e re-cifragem.
@@ -200,7 +206,9 @@ docs/      Arquitetura, auditoria e este roadmap
   pôde ser executada neste ambiente por erro de I/O no binário Docker.
 - A política de CORS atual permite somente `http://localhost:3010`; ambientes
   externos exigirão configuração explícita de origem.
-- Não há autenticação no novo backend nesta fase.
+- A sessão local requer `FORGEREVIEW_SESSION_SIGNING_KEY` e uma senha de
+  bootstrap na primeira inicialização; a senha de bootstrap não redefine contas
+  existentes.
 - Aprovação manual e reconciliação de uma publicação de review com resultado
   externo incerto ainda não são implementadas.
 
