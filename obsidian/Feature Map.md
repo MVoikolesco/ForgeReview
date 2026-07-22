@@ -37,7 +37,8 @@
   deduplicated, consolidated, and emitted as a deterministic formatted-review
   payload.
 - Controlled publication: the `publish` card accepts `formatted_review` and
-  posts one Gitea PR comment only through an active configured integration,
+  creates one native Gitea PR review with deterministic inline observations and
+  a policy-controlled final event, only through an active configured integration,
   writer adapter, and durable execution-bound idempotency record.
 - Async execution: configured Redis dispatches persisted execution IDs to a
   worker; execution status remains queryable while queued, running, completed,

@@ -932,7 +932,7 @@ func publishReview(ctx context.Context, node Node, inputs map[string][]any, adap
 		_ = adapters.Publications.RetryPublication(ctx, key, err)
 		return nil, err
 	}
-	receipt, err := adapters.GiteaWriter.PublishReview(ctx, item, secret, integration.GiteaReviewRequest{Owner: request.Owner, Repo: request.Repo, Number: request.Number, Body: formattedReviewBody(formatted), IdempotencyKey: key})
+	receipt, err := adapters.GiteaWriter.PublishReview(ctx, item, secret, integration.GiteaReviewRequest{Owner: request.Owner, Repo: request.Repo, Number: request.Number, Body: formattedReviewBody(formatted), Event: publishEvent(formatted, node.Config), Comments: giteaReviewComments(formatted.Observations), IdempotencyKey: key})
 	if err != nil {
 		_ = adapters.Publications.RetryPublication(ctx, key, err)
 		return nil, fmt.Errorf("publish card %q: %w", node.Key, err)
@@ -952,11 +952,35 @@ func publicationKey(execution ExecutionContext, nodeKey, scopeKey string) string
 }
 
 func formattedReviewBody(review FormattedReview) string {
-	lines := []string{fmt.Sprintf("## ForgeReview: %d finding(s)", review.Summary.Total)}
+	lines := []string{fmt.Sprintf("## ForgeReview: %d finding(s)", review.Summary.Total), fmt.Sprintf("Status: %s", review.Summary.Status)}
 	for _, finding := range review.Findings {
 		lines = append(lines, fmt.Sprintf("- **%s** `%s:%d` — %s", strings.ToUpper(finding.Severity), finding.Path, finding.Line, finding.Comment))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func publishEvent(review FormattedReview, config map[string]any) string {
+	if review.Summary.High > 0 || review.Summary.Critical > 0 {
+		allowed, _ := configuredBool(config, "allow_autonomous_rejection", false)
+		if allowed {
+			return "REQUEST_CHANGES"
+		}
+		return "COMMENT"
+	}
+	if review.Summary.Medium > 0 {
+		if event, ok := config["medium_severity_event"].(string); ok && event == "REQUEST_CHANGES" {
+			return event
+		}
+	}
+	return "COMMENT"
+}
+
+func giteaReviewComments(observations []ReviewObservation) []integration.GiteaReviewComment {
+	comments := make([]integration.GiteaReviewComment, 0, len(observations))
+	for _, observation := range observations {
+		comments = append(comments, integration.GiteaReviewComment{Path: observation.Path, Body: observation.Body, NewPosition: observation.NewPosition})
+	}
+	return comments
 }
 
 func configuredIntegration(ctx context.Context, node Node, adapters Adapters, card string) (integration.Integration, error) {

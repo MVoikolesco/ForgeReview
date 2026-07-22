@@ -214,11 +214,14 @@ func TestRunFiltersDeduplicatesConsolidatesAndFormatsFindings(t *testing.T) {
 		t.Fatalf("run workflow: %v", err)
 	}
 	formatted := outputFor(t, report, "format", "formatted").(FormattedReview)
-	if formatted.Summary != (ReviewSummary{Total: 2, High: 1, Critical: 1}) {
+	if formatted.Summary != (ReviewSummary{Total: 2, High: 1, Critical: 1, Event: "REQUEST_CHANGES", Status: "changes_requested"}) {
 		t.Fatalf("summary = %#v", formatted.Summary)
 	}
 	if len(formatted.Findings) != 2 || formatted.Findings[0].Path != "a.go" || formatted.Findings[1].Path != "b.go" {
 		t.Fatalf("formatted findings = %#v", formatted.Findings)
+	}
+	if len(formatted.Observations) != 2 || formatted.Observations[0] != (ReviewObservation{Path: "a.go", Body: "duplicate", NewPosition: 4}) {
+		t.Fatalf("formatted observations = %#v", formatted.Observations)
 	}
 }
 
@@ -304,11 +307,32 @@ func TestRunAggregatesScopedReviewFindingsAndPublishesOnceAtRoot(t *testing.T) {
 		t.Fatalf("aggregated review = %#v", review)
 	}
 	formatted := outputFor(t, report, "format", "formatted").(FormattedReview)
-	if formatted.Summary != (ReviewSummary{Total: 2, Medium: 1, High: 1}) {
+	if formatted.Summary != (ReviewSummary{Total: 2, Medium: 1, High: 1, Event: "REQUEST_CHANGES", Status: "changes_requested"}) {
 		t.Fatalf("formatted review = %#v", formatted)
 	}
 	if len(publisher.requests) != 1 || len(ledger.attempts) != 1 {
 		t.Fatalf("publications = %#v, attempts = %#v", publisher.requests, ledger.attempts)
+	}
+	request := publisher.requests[0]
+	if request.Event != "COMMENT" || len(request.Comments) != 2 || request.Comments[0] != (integration.GiteaReviewComment{Path: "a.go", Body: "first", NewPosition: 2}) {
+		t.Fatalf("published review = %#v", request)
+	}
+}
+
+func TestPublishEventUsesSafeSeverityDefaults(t *testing.T) {
+	high := FormattedReview{Summary: ReviewSummary{High: 1}}
+	medium := FormattedReview{Summary: ReviewSummary{Medium: 1}}
+	if got := publishEvent(high, nil); got != "COMMENT" {
+		t.Fatalf("high event = %q", got)
+	}
+	if got := publishEvent(high, map[string]any{"allow_autonomous_rejection": true}); got != "REQUEST_CHANGES" {
+		t.Fatalf("allowed high event = %q", got)
+	}
+	if got := publishEvent(medium, nil); got != "COMMENT" {
+		t.Fatalf("medium event = %q", got)
+	}
+	if got := publishEvent(medium, map[string]any{"medium_severity_event": "REQUEST_CHANGES"}); got != "REQUEST_CHANGES" {
+		t.Fatalf("configured medium event = %q", got)
 	}
 }
 

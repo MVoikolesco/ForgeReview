@@ -138,3 +138,15 @@ of 1–86,400 seconds. The runner serializes values as JSON, treats a miss as a
 nil value, and emits no token after deletion. Redis cache wiring is conditional
 on a reachable Redis service, so no hidden in-memory cache changes workflow
 behavior. See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-22: Safe native Gitea review events
+
+The publish adapter creates one native Gitea pull-request review with inline
+comments derived from validated findings, instead of posting an issue comment.
+Formatting proposes `REQUEST_CHANGES` for high or critical findings, but the
+publisher defaults to `COMMENT` unless an administrator explicitly enables
+`allow_autonomous_rejection`; medium findings default to `COMMENT` and can only
+escalate through `medium_severity_event`. The system never automates approval.
+Existing execution-bound idempotency remains the sole duplicate-post control;
+manual approval and reconciliation after uncertain provider outcomes are pending.
+See [[Architecture]] and [[Feature Map]].

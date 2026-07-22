@@ -55,24 +55,28 @@ func TestHTTPGiteaClientReadPullRequestContract(t *testing.T) {
 
 func TestHTTPGiteaClientPublishReviewContract(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/repos/acme/review/issues/7/comments" {
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/repos/acme/review/pulls/7/reviews" {
 			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
 		}
 		if request.Header.Get("Authorization") != "token gitea-secret" || request.Header.Get("X-ForgeReview-Idempotency-Key") != "forgereview:publication:1:2:publish" {
 			t.Fatalf("unexpected controlled headers")
 		}
-		var body map[string]string
+		var body struct {
+			Body     string               `json:"body"`
+			Event    string               `json:"event"`
+			Comments []GiteaReviewComment `json:"comments"`
+		}
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body["body"] != "review body\n\n<!-- forgereview:idempotency=forgereview:publication:1:2:publish -->" {
-			t.Fatalf("body = %q", body["body"])
+		if body.Body != "review body\n\n<!-- forgereview:idempotency=forgereview:publication:1:2:publish -->" || body.Event != "REQUEST_CHANGES" || len(body.Comments) != 1 || body.Comments[0] != (GiteaReviewComment{Path: "main.go", Body: "inline", NewPosition: 4}) {
+			t.Fatalf("body = %#v", body)
 		}
 		_, _ = writer.Write([]byte(`{"id":42,"html_url":"https://gitea.example/comments/42"}`))
 	}))
 	defer server.Close()
 
-	receipt, err := (HTTPGiteaClient{Client: server.Client()}).PublishReview(context.Background(), testIntegration(t, TypeGitea, server.URL), "gitea-secret", GiteaReviewRequest{Owner: "acme", Repo: "review", Number: 7, Body: "review body", IdempotencyKey: "forgereview:publication:1:2:publish"})
+	receipt, err := (HTTPGiteaClient{Client: server.Client()}).PublishReview(context.Background(), testIntegration(t, TypeGitea, server.URL), "gitea-secret", GiteaReviewRequest{Owner: "acme", Repo: "review", Number: 7, Body: "review body", Event: "REQUEST_CHANGES", Comments: []GiteaReviewComment{{Path: "main.go", Body: "inline", NewPosition: 4}}, IdempotencyKey: "forgereview:publication:1:2:publish"})
 	if err != nil {
 		t.Fatalf("publish review: %v", err)
 	}

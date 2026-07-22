@@ -31,11 +31,19 @@ runner: `filter` → `group` → `validate` → `response_filter` → `consolida
 incoming finding list. See [[Feature Map]] and `docs/architecture.md`.
 
 `publish` now consumes `formatted_review` and is restricted to an active Gitea
-integration and the Gitea writer adapter. SQLite records a publication attempt
-before the external comment request, keyed from execution ID, version ID, node
+integration and the Gitea writer adapter. It creates a native Gitea PR review
+with a final event and inline comments, rather than an issue comment. SQLite records a publication attempt
+before the external review request, keyed from execution ID, version ID, node
 key, and child scope when present; duplicate completed or pending attempts do
 not post again. Attempts have `pending`, `completed`, and `retryable` states.
 See [[Decision Log]].
+
+Formatting deterministically adds a proposed event/status and inline
+observations (`path`, `body`, `new_position`) from the sorted findings. High or
+critical findings propose `REQUEST_CHANGES`, but publication defaults to
+`COMMENT` unless its `allow_autonomous_rejection` setting is true. Medium
+findings remain `COMMENT` unless `medium_severity_event` is `REQUEST_CHANGES`.
+Automated approval and uncertain-result reconciliation are intentionally pending.
 
 LLM provider connections store only transport configuration and encrypted
 credentials. `model_profiles` stores a reusable model name plus the key of its

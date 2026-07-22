@@ -40,11 +40,24 @@ func TestPublicationIsIdempotentAcrossDuplicateExecutionRun(t *testing.T) {
 	var mu sync.Mutex
 	posts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/repos/acme/review/issues/7/comments" {
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/repos/acme/review/pulls/7/reviews" {
 			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
 		}
 		if request.Header.Get("Authorization") != "token gitea-secret" {
 			t.Fatal("missing Gitea authorization")
+		}
+		var payload struct {
+			Event    string `json:"event"`
+			Comments []struct {
+				Path        string `json:"path"`
+				NewPosition int    `json:"new_position"`
+			} `json:"comments"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Event != "COMMENT" || len(payload.Comments) != 1 || payload.Comments[0].Path != "api/main.go" || payload.Comments[0].NewPosition != 2 {
+			t.Fatalf("review payload = %#v", payload)
 		}
 		mu.Lock()
 		posts++

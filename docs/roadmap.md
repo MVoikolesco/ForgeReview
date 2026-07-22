@@ -55,8 +55,8 @@ docs/      Arquitetura, auditoria e este roadmap
   template, condição, merge, validar, filtrar resposta, consolidar e formatar.
 - `fetch`: lê metadados, diff e arquivos de PR pelo adaptador Gitea.
 - `model`: executa chat por adaptador OpenAI-compatible ou Ollama.
-- `publish`: publica comentário controlado no Gitea com idempotência por
-  execução, versão e card.
+- `publish`: cria review nativa controlada no Gitea, com evento final e
+  comentários inline, mantendo idempotência por execução, versão e card.
 - `loop`: executa listas e grupos em escopos filhos sequenciais, aplica limite
   de iterações e agrega saídas terminais após os ramos filhos concluírem. No
   template oficial, `response_filter` é terminal por grupo e `loop.results`
@@ -128,8 +128,6 @@ docs/      Arquitetura, auditoria e este roadmap
 
 ### 1. Completar a primeira pipeline de review
 
-- Reimplementar a decisão final de review, comentários inline e publicação de
-  review no Gitea a partir das regras maduras da POC.
 - Criar pipeline seed oficial versionada para o fluxo de review.
 
 ### 2. Concluir gerenciamento visual
@@ -189,6 +187,8 @@ docs/      Arquitetura, auditoria e este roadmap
 - A política de CORS atual permite somente `http://localhost:3010`; ambientes
   externos exigirão configuração explícita de origem.
 - Não há autenticação no novo backend nesta fase.
+- Aprovação manual e reconciliação de uma publicação de review com resultado
+  externo incerto ainda não são implementadas.
 
 ## Validação recorrente
 

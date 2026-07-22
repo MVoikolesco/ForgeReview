@@ -127,6 +127,24 @@ export function CardInspector({
               />
             </label>
             {numberField("pull_request", "Número do PR", 0)}
+            <label>
+              Evento para severidade média
+              <select
+                value={configText(selected.config.medium_severity_event) || "COMMENT"}
+                onChange={(event) => updateConfig("medium_severity_event", event.target.value)}
+              >
+                <option value="COMMENT">Comentar</option>
+                <option value="REQUEST_CHANGES">Solicitar mudanças</option>
+              </select>
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={selected.config.allow_autonomous_rejection === true}
+                onChange={(event) => updateConfig("allow_autonomous_rejection", event.target.checked)}
+              />
+              Permitir solicitar mudanças para achados altos/críticos
+            </label>
           </>
         )}
         {selected.type === "model" && (

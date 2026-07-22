@@ -44,15 +44,19 @@ func (c HTTPGiteaClient) PublishReview(ctx context.Context, integration Integrat
 	if integration.Type != TypeGitea {
 		return PublicationReceipt{}, fmt.Errorf("integration %q is not a Gitea integration", integration.Key)
 	}
-	if request.Owner == "" || request.Repo == "" || request.Number < 1 || request.Body == "" || request.IdempotencyKey == "" {
+	if request.Owner == "" || request.Repo == "" || request.Number < 1 || request.Body == "" || request.Event == "" || request.IdempotencyKey == "" {
 		return PublicationReceipt{}, fmt.Errorf("Gitea review request is incomplete")
 	}
 	config, err := integration.ConfigValues()
 	if err != nil {
 		return PublicationReceipt{}, err
 	}
-	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s/issues/%d/comments", strings.TrimRight(config["base_url"], "/"), url.PathEscape(request.Owner), url.PathEscape(request.Repo), request.Number)
-	payload := map[string]string{"body": request.Body + "\n\n<!-- forgereview:idempotency=" + request.IdempotencyKey + " -->"}
+	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s/pulls/%d/reviews", strings.TrimRight(config["base_url"], "/"), url.PathEscape(request.Owner), url.PathEscape(request.Repo), request.Number)
+	payload := struct {
+		Body     string               `json:"body"`
+		Event    string               `json:"event"`
+		Comments []GiteaReviewComment `json:"comments"`
+	}{Body: request.Body + "\n\n<!-- forgereview:idempotency=" + request.IdempotencyKey + " -->", Event: request.Event, Comments: request.Comments}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return PublicationReceipt{}, err

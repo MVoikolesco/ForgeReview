@@ -2,6 +2,11 @@
 
 ## 2026-07-22
 
+- Changed controlled Gitea publication from an issue comment to a native PR
+  review with a final event and inline comments. Formatted reviews now include
+  deterministic event/status summaries and observations; safe event defaults and
+  Inspector policy fields prevent autonomous rejection unless enabled. See
+  [[Architecture]] and [[Decision Log]].
 - Added the end-to-end cache card: validated key/mode/TTL configuration, JSON
   runner semantics, a Redis cache adapter separate from execution dispatch, and
   Inspector controls for key, operation, and write TTL. See [[Architecture]] and

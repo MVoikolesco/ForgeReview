@@ -236,9 +236,11 @@ export function reviewTemplate(
       node("fetch", "fetch", "Buscar dados do PR", 315, 280, {
         owner: "",
         repo: "",
-        pull_request: 0,
-        integration: "",
-      }),
+         pull_request: 0,
+         integration: "",
+         medium_severity_event: "COMMENT",
+         allow_autonomous_rejection: false,
+       }),
       node("filter", "filter", "Filtrar arquivos", 610, 125, {
         include_extensions: [".go", ".ts", ".tsx", ".php"],
         ignore_generated: true,

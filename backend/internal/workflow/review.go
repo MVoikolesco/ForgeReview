@@ -36,16 +36,26 @@ type Review struct {
 
 // FormattedReview is a destination-neutral, deterministic review payload.
 type FormattedReview struct {
-	Summary  ReviewSummary `json:"summary"`
-	Findings []Finding     `json:"findings"`
+	Summary      ReviewSummary       `json:"summary"`
+	Observations []ReviewObservation `json:"observations"`
+	Findings     []Finding           `json:"findings"`
 }
 
 type ReviewSummary struct {
-	Total    int `json:"total"`
-	Low      int `json:"low"`
-	Medium   int `json:"medium"`
-	High     int `json:"high"`
-	Critical int `json:"critical"`
+	Total    int    `json:"total"`
+	Low      int    `json:"low"`
+	Medium   int    `json:"medium"`
+	High     int    `json:"high"`
+	Critical int    `json:"critical"`
+	Event    string `json:"event"`
+	Status   string `json:"status"`
+}
+
+// ReviewObservation is the destination-neutral representation of one inline review comment.
+type ReviewObservation struct {
+	Path        string `json:"path"`
+	Body        string `json:"body"`
+	NewPosition int    `json:"new_position"`
 }
 
 func filterFiles(values []any, config map[string]any) ([]map[string]any, error) {
@@ -233,7 +243,7 @@ func formatReview(values []any) (FormattedReview, error) {
 		return FormattedReview{}, fmt.Errorf("format card requires a review input")
 	}
 	findings := deduplicateFindings(review.Findings)
-	formatted := FormattedReview{Findings: findings, Summary: ReviewSummary{Total: len(findings)}}
+	formatted := FormattedReview{Findings: findings, Observations: make([]ReviewObservation, 0, len(findings)), Summary: ReviewSummary{Total: len(findings), Event: "COMMENT", Status: "commented"}}
 	for _, finding := range findings {
 		switch finding.Severity {
 		case "low":
@@ -245,6 +255,11 @@ func formatReview(values []any) (FormattedReview, error) {
 		case "critical":
 			formatted.Summary.Critical++
 		}
+		formatted.Observations = append(formatted.Observations, ReviewObservation{Path: finding.Path, Body: finding.Comment, NewPosition: finding.Line})
+	}
+	if formatted.Summary.High > 0 || formatted.Summary.Critical > 0 {
+		formatted.Summary.Event = "REQUEST_CHANGES"
+		formatted.Summary.Status = "changes_requested"
 	}
 	return formatted, nil
 }

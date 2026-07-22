@@ -134,12 +134,18 @@ they do not create comments or call an external destination.
   emitted by `loop.results`, and applies the same deterministic deduplication.
   Finding order is path, line, descending severity, then comment.
 - `format` emits `formatted_review`: a destination-neutral payload with the
-  sorted findings and fixed summary counters (`total`, `low`, `medium`, `high`,
-  `critical`).
+  sorted findings, fixed summary counters (`total`, `low`, `medium`, `high`,
+  `critical`), a proposed event/status, and inline observations (`path`, `body`,
+  `new_position`) derived from each validated finding. High or critical findings
+  propose `REQUEST_CHANGES`; all other findings propose `COMMENT`.
 - `publish` consumes `formatted_review` and requires `config.integration`,
   `owner`, `repo`, and positive `pull_request`. The integration must be active
-  and Gitea. Its writer posts one controlled PR issue comment; arbitrary URLs,
-  bodies, and credentials cannot be supplied by the workflow.
+  and Gitea. Its writer creates one native Gitea PR review at
+  `pulls/{number}/reviews`, with the final event and inline comments. High and
+  critical proposals are downgraded to `COMMENT` unless
+  `allow_autonomous_rejection` is true. Medium findings use `COMMENT` unless
+  `medium_severity_event` is `REQUEST_CHANGES`. Approval is never automated.
+  Arbitrary URLs, bodies, and credentials cannot be supplied by the workflow.
 
 ## Publication idempotency
 
@@ -151,7 +157,8 @@ move from `pending` to `completed` with a safe provider receipt, or to
 stored receipt instead of posting again; a duplicate pending attempt does not
 post. The Gitea writer also sends the key in `X-ForgeReview-Idempotency-Key` and
 as an HTML comment marker. Credentials and provider response bodies are never
-stored in the attempt record or returned by APIs.
+stored in the attempt record or returned by APIs. Manual approval and recovery
+or reconciliation of an uncertain external review result remain out of scope.
 
 ## Asynchronous execution dispatch
 
