@@ -20,6 +20,7 @@ import {
 } from "../../lib/api";
 import type { Integration, NewIntegration, Repository } from "../../lib/types";
 import { ModalShell } from "../common/ModalShell";
+import { ToggleSwitch } from "../common/ToggleSwitch";
 import styles from "./ConnectionWizard.module.scss";
 
 type Family = "gitea" | "llm";
@@ -451,6 +452,7 @@ export function ConnectionWizard({
                   : "Modelos descobertos na conexão validada."}{" "}
                 Selecione um ou mais recursos.
               </p>
+              <strong className={styles.selectionCount}>{selected.length} selecionado{selected.length === 1 ? "" : "s"}</strong>
               <div
                 className={styles.resourceList}
                 aria-label={
@@ -459,14 +461,15 @@ export function ConnectionWizard({
               >
                 {available.length ? (
                   available.map((item) => (
-                    <label key={item.value}>
-                      <input
-                        type="checkbox"
-                        checked={selected.includes(item.value)}
-                        onChange={() => select(item.value)}
-                      />{" "}
-                      <span>{item.label}</span>
-                    </label>
+                    <ToggleSwitch
+                      key={item.value}
+                      variant="card"
+                      checked={selected.includes(item.value)}
+                      onChange={() => select(item.value)}
+                      label={item.label}
+                      description={isGitea ? `Repositório · ${organization}` : `${provider === "openrouter" ? "OpenRouter" : "Ollama"} · modelo`}
+                      leading={isGitea ? <Server size={16} /> : <Cpu size={16} />}
+                    />
                   ))
                 ) : (
                   <p className={styles.empty}>

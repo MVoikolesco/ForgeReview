@@ -62,6 +62,37 @@ func TestValidateBoundsModelCorrectiveRetryConfiguration(t *testing.T) {
 	if err := Validate(definition, DefaultCatalog()); err == nil || err.Error() != `model card "model" config.retry_delay_ms must be between 0 and 60000` {
 		t.Fatalf("retry delay validation error = %v", err)
 	}
+	definition.Nodes[0].Config = map[string]any{"model_profile": "reviewer", "max_tokens": 128001}
+	if err := Validate(definition, DefaultCatalog()); err == nil || err.Error() != `model card "model" config.max_tokens must be between 1 and 128000` {
+		t.Fatalf("max tokens validation error = %v", err)
+	}
+}
+
+func TestValidateRejectsUnavailableSubpipelineAndMisplacedPublishPolicy(t *testing.T) {
+	definition := Definition{Key: "unsupported", Name: "Unsupported", Nodes: []Node{{Key: "child", Type: "workflow", Name: "Child"}}}
+	if err := Validate(definition, DefaultCatalog()); err == nil || err.Error() != `node "child" uses unavailable card type "workflow"` {
+		t.Fatalf("unavailable card validation error = %v", err)
+	}
+	definition.Nodes[0] = Node{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"medium_severity_event": "COMMENT"}}
+	if err := Validate(definition, DefaultCatalog()); err == nil || err.Error() != `fetch card "fetch" does not support config.medium_severity_event; configure it on publish` {
+		t.Fatalf("misplaced policy validation error = %v", err)
+	}
+	definition.Nodes[0] = Node{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"medium_severity_event": "APPROVE"}}
+	if err := Validate(definition, DefaultCatalog()); err == nil || err.Error() != `publish card "publish" config.medium_severity_event must be "COMMENT" or "REQUEST_CHANGES"` {
+		t.Fatalf("publish policy validation error = %v", err)
+	}
+}
+
+func TestCatalogMarksMergeAsCollectAllAndSubpipelineUnavailable(t *testing.T) {
+	catalog := DefaultCatalog()
+	merge, _ := catalog.Get("merge")
+	if len(merge.Inputs) != 1 || !merge.Inputs[0].CollectAll {
+		t.Fatalf("merge input = %#v", merge.Inputs)
+	}
+	workflowCard, _ := catalog.Get("workflow")
+	if workflowCard.Available || workflowCard.UnavailableReason == "" {
+		t.Fatalf("workflow availability = %#v", workflowCard)
+	}
 }
 
 func TestValidateRequiresCacheConfiguration(t *testing.T) {

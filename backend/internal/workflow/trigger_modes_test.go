@@ -43,8 +43,8 @@ func TestRunFromTriggerIgnoresInactiveInputsAtConvergedNode(t *testing.T) {
 		{Key: "api-merge", FromNode: "api", FromPort: "event", ToNode: "merged", ToPort: "inputs"},
 	}}
 	catalog := NewCatalog(
-		CardType{Key: "trigger", Inputs: []Port{}, Outputs: []Port{{Key: "event", Contract: "any"}}},
-		CardType{Key: "merge", Inputs: []Port{{Key: "inputs", Contract: "any", Required: true, CollectAll: true}}, Outputs: []Port{{Key: "output", Contract: "any"}}},
+		CardType{Key: "trigger", Inputs: []Port{}, Outputs: []Port{{Key: "event", Contract: "any"}}, Available: true},
+		CardType{Key: "merge", Inputs: []Port{{Key: "inputs", Contract: "any", Required: true, CollectAll: true}}, Outputs: []Port{{Key: "output", Contract: "any"}}, Available: true},
 	)
 	report, err := RunFromTriggerWithAdapters(context.Background(), definition, catalog, "api", map[string]any{"value": "selected"}, Adapters{})
 	if err != nil || report.Status != "completed" || len(report.Runs) != 2 || report.Runs[1].NodeKey != "merged" {

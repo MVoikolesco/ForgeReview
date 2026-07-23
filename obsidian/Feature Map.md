@@ -117,3 +117,12 @@
 - Safe execution summaries: `GET /api/executions?limit=10` exposes bounded
   status/timestamp/workflow metadata and configured PR owner/repo/number only;
   it excludes node data, errors, execution inputs, and secret material.
+- Accessible selection controls: a shared polished switch replaces native
+  checkbox presentation across Inspector booleans and repository/model
+  multi-selection. Resource rows show provider identity, selection count,
+  hover/selected state, focus, disabled behavior, and reduced-motion support.
+- Truthful card contracts: publication event/autonomous-rejection settings live
+  only on `publish`; model `max_tokens` is bounded and reaches both provider
+  adapters; `merge` waits for all active incoming edges through `collect_all`;
+  and unsupported `workflow`/subpipeline is visible but unavailable and cannot
+  be saved; its library control shows an explicit unavailable status and reason.

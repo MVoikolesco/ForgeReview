@@ -135,26 +135,16 @@
 
 .resourceList {
     display: grid;
+    gap: 7px;
     max-height: 300px;
+    padding: 7px;
     overflow: auto;
-    border: 1px solid #334154;
-    border-radius: 6px;
-    background: #111820;
+    border-radius: 10px;
+    background: #0f161f;
 }
 
-.resourceList label {
-    display: flex;
-    gap: 9px;
-    align-items: center;
-    min-height: 38px;
-    padding: 8px 10px;
-    border-bottom: 1px solid #263343;
-    color: #dce7f6;
-    font-size: 11px;
-}
-
-.resourceList label:last-child { border-bottom: 0; }
 .resourceList p { padding: 0 10px; }
+.selectionCount { color: #a9c8ff; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
 .error { margin: 0; color: #ff9da8 !important; }
 .loading { display: flex; gap: 7px; align-items: center; }
 .spinner { animation: spin .8s linear infinite; }

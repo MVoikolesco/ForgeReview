@@ -1,6 +1,6 @@
 "use client";
 
-import { LoaderCircle } from "lucide-react";
+import { Cpu, LoaderCircle, Server } from "lucide-react";
 import { useState } from "react";
 import {
   deleteIntegration,
@@ -13,6 +13,7 @@ import {
 } from "../../lib/api";
 import type { Integration, ModelProfile, Repository } from "../../lib/types";
 import { ModalShell } from "../common/ModalShell";
+import { ToggleSwitch } from "../common/ToggleSwitch";
 import styles from "./IntegrationList.module.scss";
 
 type Role = "viewer" | "editor" | "admin";
@@ -249,7 +250,7 @@ export function IntegrationList({
                   : "Desativada"}
               </em>
               <div className={styles.itemActions}>
-                {role !== "viewer" && item.status === "active" && (
+                {(role === "editor" || role === "admin") && item.status === "active" && (
                   <button type="button" onClick={() => void openManage(item)}>
                     Gerenciar recursos
                   </button>
@@ -309,7 +310,7 @@ export function IntegrationList({
                     : "Desativada"}
                 </em>
                 <div className={styles.itemActions}>
-                  {role !== "viewer" && item.status === "active" && (
+                  {(role === "editor" || role === "admin") && item.status === "active" && (
                     <button type="button" onClick={() => void openManage(item)}>
                       Gerenciar modelos
                     </button>
@@ -505,17 +506,20 @@ export function IntegrationList({
                 recursos…
               </p>
             )}
-            <div className={styles.resourceList}>
+            <strong className={styles.selectionCount}>{selected.length} selecionado{selected.length === 1 ? "" : "s"}</strong>
+            <div className={styles.resourceList} aria-label={managing.type === "gitea" ? "Repositórios selecionáveis" : "Modelos selecionáveis"}>
               {filtered.length
                 ? filtered.map((item) => (
-                    <label key={item.value}>
-                      <input
-                        type="checkbox"
-                        checked={selected.includes(item.value)}
-                        onChange={() => toggle(item.value)}
-                      />{" "}
-                      <span>{item.label}</span>
-                    </label>
+                    <ToggleSwitch
+                      key={item.value}
+                      variant="card"
+                      checked={selected.includes(item.value)}
+                      disabled={busy || role === "viewer"}
+                      onChange={() => toggle(item.value)}
+                      label={item.label}
+                      description={managing.type === "gitea" ? `Repositório Gitea · ${organization}` : `${managing.type === "openai" ? "OpenAI compatível" : "Ollama"} · modelo`}
+                      leading={managing.type === "gitea" ? <Server size={16} /> : <Cpu size={16} />}
+                    />
                   ))
                 : !busy && <p>Nenhum recurso disponível.</p>}
             </div>

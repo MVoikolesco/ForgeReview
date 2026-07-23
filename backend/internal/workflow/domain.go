@@ -28,7 +28,9 @@ type CardType struct {
 	Outputs     []Port `json:"outputs"`
 	// ErrorOutput is an opt-in output: it is usable only when a node selects
 	// config.on_error="route", so ordinary cards do not gain a permanent port.
-	ErrorOutput *Port `json:"error_output,omitempty"`
+	ErrorOutput       *Port  `json:"error_output,omitempty"`
+	Available         bool   `json:"available"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
 }
 
 type Node struct {
@@ -129,6 +131,10 @@ func Validate(definition Definition, catalog Catalog) error {
 		if _, ok := catalog.Get(node.Type); !ok {
 			return fmt.Errorf("node %q uses unknown card type %q", node.Key, node.Type)
 		}
+		cardType, _ := catalog.Get(node.Type)
+		if !cardType.Available {
+			return fmt.Errorf("node %q uses unavailable card type %q", node.Key, node.Type)
+		}
 		if err := validateSafeConfig(node.Config); err != nil {
 			return fmt.Errorf("node %q contains unsafe configuration: %w", node.Key, err)
 		}
@@ -162,6 +168,19 @@ func Validate(definition Definition, catalog Catalog) error {
 				if _, legacy := node.Config["integration"].(string); !legacy {
 					return fmt.Errorf("model card %q requires config.model_profile", node.Key)
 				}
+			}
+		}
+		if node.Type == "fetch" {
+			if _, exists := node.Config["medium_severity_event"]; exists {
+				return fmt.Errorf("fetch card %q does not support config.medium_severity_event; configure it on publish", node.Key)
+			}
+			if _, exists := node.Config["allow_autonomous_rejection"]; exists {
+				return fmt.Errorf("fetch card %q does not support config.allow_autonomous_rejection; configure it on publish", node.Key)
+			}
+		}
+		if node.Type == "publish" {
+			if err := validatePublishPolicy(node); err != nil {
+				return err
 			}
 		}
 		nodes[node.Key] = node

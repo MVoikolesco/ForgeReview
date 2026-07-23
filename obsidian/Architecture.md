@@ -185,3 +185,21 @@ claims the released width and the Inspector becomes a responsive overlay below
 the desktop breakpoint. Manual trigger JSON is entered only in the focused run
 modal, not stored in card data or displayed in the global header. See
 [[Feature Map]] and [[Decision Log]].
+
+Catalog cards now declare availability. `workflow`/subpipeline remains visible
+but unavailable in Studio and backend validation rejects it until a runtime
+contract exists. `merge.inputs` is a `collect_all` port and emits the ordered
+list only after every active incoming edge has delivered. Frontend `Port` typing
+exposes `collect_all`. See [[Feature Map]] and [[Decision Log]].
+
+Model `max_tokens` defaults to 2,000 and is bounded from 1 through 128,000. The
+runner adds it only to the in-memory provider configuration; OpenAI-compatible
+requests receive `max_tokens` and Ollama receives `options.num_predict`.
+Publication policy fields are validated only on `publish` and are rejected on
+`fetch`. See [[Decision Log]].
+
+All boolean controls and repository/model multi-selection use the shared
+accessible `ToggleSwitch`. Resource choices are provider-identified selectable
+cards with selection counts; switches retain native keyboard/input semantics,
+visible focus and disabled states, and reduced-motion behavior. Viewer resource
+management is never exposed while role state is unknown. See [[Feature Map]].

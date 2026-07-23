@@ -1,6 +1,6 @@
 # ForgeReview Workflow Studio Roadmap
 
-Atualizado em 2026-07-22.
+Atualizado em 2026-07-23.
 
 ## Visão
 
@@ -64,6 +64,8 @@ docs/      Arquitetura, auditoria e este roadmap
   template, condição, merge, validar, filtrar resposta, consolidar e formatar.
 - `fetch`: lê metadados, diff e arquivos de PR pelo adaptador Gitea.
 - `model`: executa chat por adaptador OpenAI-compatible ou Ollama.
+  `max_tokens` é validado entre 1 e 128.000 (padrão 2.000) e enviado como
+  `max_tokens` no contrato OpenAI-compatible ou `options.num_predict` no Ollama.
 - `publish`: cria review nativa controlada no Gitea, com evento final e
   comentários inline, mantendo idempotência por execução, versão e card.
 - `loop`: executa listas e grupos em escopos filhos sequenciais, aplica limite
@@ -85,6 +87,10 @@ docs/      Arquitetura, auditoria e este roadmap
   rota `validate.invalid` permanece após esgotamento. Metadados de node runs
   registram contagens e estados de chamadas/validações, sem inserir prompts,
   respostas ou segredos nesses metadados.
+- `merge` é um join real: sua entrada `collect_all` aguarda todas as arestas
+  declaradas e emite a lista ordenada dos valores recebidos.
+- `workflow`/subpipeline aparece no catálogo como indisponível e não pode ser
+  salvo até existir um contrato de execução backend.
 
 ### Integrações e segurança
 
@@ -134,6 +140,11 @@ docs/      Arquitetura, auditoria e este roadmap
   `allow_autonomous_rejection: false`.
 - Frontend estruturado em componentes reutilizáveis, base card shell, modal
   shell, tipos/API compartilhados e SCSS modular com tokens, temas e mixins.
+- Um `ToggleSwitch` compartilhado oferece semântica de input, foco, teclado,
+  disabled e reduced-motion para todas as configurações booleanas. Seleções de
+  repositórios/modelos usam linhas modernas com identidade do provider, contagem
+  e estados hover/selecionado. A política de severidade/rejeição pertence ao
+  Inspector de `publish`, nunca ao `fetch`.
 - Login responsivo no estilo escuro do dashboard/Studio, com orientação de
   primeira inicialização sem mostrar senhas e feedback distinto para credenciais
   inválidas e backend de autenticação indisponível.
@@ -179,7 +190,7 @@ docs/      Arquitetura, auditoria e este roadmap
 - Teste de conexão para Gitea, Ollama e OpenRouter.
 - Atualização, desativação e remoção segura de integrações.
 - Catálogo de modelos por provider e seleção em vez de entrada textual livre.
-- Parâmetros por card de modelo: temperatura, top-p, tokens, timeout,
+- Parâmetros por card de modelo: temperatura, top-p, timeout,
   keep-alive, fallback e limites de custo.
 
 ### 3. Execução durável e observabilidade
@@ -203,8 +214,9 @@ docs/      Arquitetura, auditoria e este roadmap
 ### 5. Expansão de cards
 
 - Transformações declarativas e variáveis com namespaces controlados.
-- Subpipelines (`workflow`) com interfaces de entrada/saída publicadas.
-- Joins `any`/`all` e ramos condicionais múltiplos.
+- Implementar subpipelines (`workflow`) com interfaces de entrada/saída publicadas;
+  até lá o card permanece explicitamente indisponível.
+- Joins `any` e ramos condicionais múltiplos (`merge` já cobre join `all`).
 - Novos adaptadores: GitHub, GitLab, Gemini, Groq e outros providers
   OpenAI-compatible, sempre registrados no backend.
 

@@ -1,5 +1,17 @@
 # Change Log
 
+## 2026-07-23
+
+- Replaced native checkbox presentation with a shared accessible switch for all
+  Inspector booleans and repository/model selection. Resource choices now use
+  provider-identified selectable cards and selection counts, and viewer access
+  remains read-only. See [[Feature Map]] and [[Decision Log]].
+- Corrected workflow contracts: publication policy moved from fetch to publish,
+  bounded `max_tokens` reaches OpenAI-compatible and Ollama requests, merge is an
+  all-input `collect_all` join, and unsupported subpipelines are unavailable in
+  both catalog validation and Studio. Added backend/frontend validation and
+  request/runtime coverage. See [[Architecture]] and [[Decision Log]].
+
 ## 2026-07-22
 
 - Added typed manual/API/webhook triggers, selected-branch execution, encrypted

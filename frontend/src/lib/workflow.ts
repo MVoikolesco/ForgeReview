@@ -285,7 +285,8 @@ export function validateStudioWorkflow(
   const cardByType = new Map(cards.map((card) => [card.key, card]));
   const nodeKeys = new Set<string>();
   for (const node of definition.nodes) {
-    if (!node.key || !node.name || !cardByType.has(node.type))
+    const catalogCard = cardByType.get(node.type);
+    if (!node.key || !node.name || !catalogCard || catalogCard.available === false)
       issues.push({ nodeKey: node.key, message: `O card "${node.key || "sem chave"}" é inválido ou usa um tipo indisponível.` });
     if (nodeKeys.has(node.key)) issues.push({ nodeKey: node.key, message: `A chave do card "${node.key}" está duplicada.` });
     if (hasUnsafeConfig(node.config))
@@ -310,6 +311,18 @@ export function validateStudioWorkflow(
         if (value !== undefined && (!Number.isInteger(value) || (value as number) < 0 || (value as number) > max))
           issues.push({ nodeKey: node.key, message: `"${node.name}" precisa de ${key} entre 0 e ${max}.` });
       }
+      const maxTokens = node.config.max_tokens;
+      if (maxTokens !== undefined && (!Number.isInteger(maxTokens) || (maxTokens as number) < 1 || (maxTokens as number) > 128000))
+        issues.push({ nodeKey: node.key, message: `"${node.name}" precisa de max_tokens entre 1 e 128000.` });
+    }
+    if (node.type === "fetch" && (node.config.medium_severity_event !== undefined || node.config.allow_autonomous_rejection !== undefined))
+      issues.push({ nodeKey: node.key, message: `Mova a política de publicação de "${node.name}" para o card Publicar.` });
+    if (node.type === "publish") {
+      const mediumEvent = node.config.medium_severity_event;
+      if (mediumEvent !== undefined && !["COMMENT", "REQUEST_CHANGES"].includes(configText(mediumEvent)))
+        issues.push({ nodeKey: node.key, message: `Selecione um evento válido para severidade média em "${node.name}".` });
+      if (node.config.allow_autonomous_rejection !== undefined && typeof node.config.allow_autonomous_rejection !== "boolean")
+        issues.push({ nodeKey: node.key, message: `A rejeição autônoma de "${node.name}" deve ser booleana.` });
     }
     if (["fetch", "publish"].includes(node.type)) {
       const hasDynamicTarget = definition.edges.some((edge) => edge.to_node === node.key &&

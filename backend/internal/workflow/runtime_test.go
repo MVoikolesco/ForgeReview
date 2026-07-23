@@ -104,6 +104,28 @@ func TestRunExecutesReadyNodesAndRoutesTokens(t *testing.T) {
 	}
 }
 
+func TestMergeWaitsForAndReturnsAllIncomingValues(t *testing.T) {
+	definition := Definition{
+		Key: "join", Name: "Join",
+		Nodes: []Node{{Key: "trigger", Type: "trigger", Name: "Trigger"}, {Key: "left", Type: "transform", Name: "Left"}, {Key: "right", Type: "transform", Name: "Right"}, {Key: "merge", Type: "merge", Name: "Merge"}},
+		Edges: []Edge{
+			{Key: "left-in", FromNode: "trigger", FromPort: "event", ToNode: "left", ToPort: "input"},
+			{Key: "right-in", FromNode: "trigger", FromPort: "event", ToNode: "right", ToPort: "input"},
+			{Key: "left-join", FromNode: "left", FromPort: "output", ToNode: "merge", ToPort: "inputs"},
+			{Key: "right-join", FromNode: "right", FromPort: "output", ToNode: "merge", ToPort: "inputs"},
+		},
+	}
+	report, err := Run(context.Background(), definition, DefaultCatalog(), map[string]any{"value": 1})
+	if err != nil {
+		t.Fatalf("run merge: %v", err)
+	}
+	last := report.Runs[len(report.Runs)-1]
+	joined, ok := last.Outputs[0].Value.([]any)
+	if !ok || len(joined) != 2 {
+		t.Fatalf("merge output = %#v", last.Outputs[0].Value)
+	}
+}
+
 func TestRunRoutesConditionToSelectedPort(t *testing.T) {
 	definition := Definition{
 		Key: "condition", Name: "Condition",
@@ -356,7 +378,7 @@ func TestRunWithAdaptersExecutesFetchAndModelCards(t *testing.T) {
 				return
 			}
 			var payload map[string]any
-			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload["model"] != "reviewer" {
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload["model"] != "reviewer" || payload["max_tokens"] != float64(4096) {
 				t.Fatalf("model profile payload = %#v, %v", payload, err)
 			}
 			_, _ = writer.Write([]byte(`{"choices":[{"message":{"content":"review complete"}}]}`))
@@ -366,7 +388,7 @@ func TestRunWithAdaptersExecutesFetchAndModelCards(t *testing.T) {
 		definition := Definition{Key: "model", Name: "Model", Nodes: []Node{
 			{Key: "start", Type: "trigger", Name: "Start"},
 			{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"template": "review this"}},
-			{Key: "model", Type: "model", Name: "Model", Config: map[string]any{"model_profile": "reviewer"}},
+			{Key: "model", Type: "model", Name: "Model", Config: map[string]any{"model_profile": "reviewer", "max_tokens": 4096}},
 		}, Edges: []Edge{
 			{Key: "context", FromNode: "start", FromPort: "event", ToNode: "template", ToPort: "context"},
 			{Key: "prompt", FromNode: "template", FromPort: "prompt", ToNode: "model", ToPort: "prompt"},

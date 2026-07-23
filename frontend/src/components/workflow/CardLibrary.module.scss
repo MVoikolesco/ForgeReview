@@ -65,6 +65,9 @@
     margin-left: auto;
 }
 
+.library button small { color: #8e9caf; font-size: 8px; }
+.library button:disabled { cursor: not-allowed; opacity: .5; }
+
 @media (max-width: $breakpoint-mobile) {
     .library {
         display: none;

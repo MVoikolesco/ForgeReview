@@ -1,4 +1,4 @@
-import { Database, GitBranch, Layers3, Plus } from "lucide-react";
+import { Database, GitBranch, Layers3, LockKeyhole, Plus } from "lucide-react";
 import type { CardType } from "../../lib/types";
 import styles from "./CardLibrary.module.scss";
 
@@ -36,11 +36,13 @@ export function CardLibrary({
             .map((card) => (
               <button
                 key={card.key}
-                title={card.description}
-                onClick={() => onAdd(card)} disabled={readOnly}
+                title={card.available === false ? card.unavailable_reason || "Card indisponível" : card.description}
+                onClick={() => onAdd(card)} disabled={readOnly || card.available === false}
+                aria-describedby={card.available === false ? `card-${card.key}-availability` : undefined}
               >
                 <i /> <span>{card.name}</span>
-                <Plus size={13} />
+                {card.available === false ? <LockKeyhole size={13} /> : <Plus size={13} />}
+                {card.available === false && <small id={`card-${card.key}-availability`}>Indisponível</small>}
               </button>
             ))}
         </section>

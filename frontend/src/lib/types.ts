@@ -3,6 +3,7 @@ export type Port = {
   label: string;
   contract: string;
   required: boolean;
+  collect_all?: boolean;
 };
 
 export type CardType = {
@@ -13,6 +14,8 @@ export type CardType = {
   inputs: Port[];
   outputs: Port[];
   error_output?: Port;
+  available?: boolean;
+  unavailable_reason?: string;
 };
 
 export type CardStatus =

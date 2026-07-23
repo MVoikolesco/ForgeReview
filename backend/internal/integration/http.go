@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -303,6 +304,9 @@ func (c HTTPOpenAIClient) Chat(ctx context.Context, integration Integration, sec
 		return "", err
 	}
 	payload := map[string]any{"model": config["model"], "messages": []map[string]string{{"role": "user", "content": prompt}}}
+	if maxTokens, parseErr := strconv.Atoi(config["max_tokens"]); parseErr == nil && maxTokens > 0 {
+		payload["max_tokens"] = maxTokens
+	}
 	var response struct {
 		Choices []struct {
 			Message struct {
@@ -328,6 +332,9 @@ func (c HTTPOllamaClient) Chat(ctx context.Context, integration Integration, sec
 		return "", err
 	}
 	payload := map[string]any{"model": config["model"], "messages": []map[string]string{{"role": "user", "content": prompt}}, "stream": false}
+	if maxTokens, parseErr := strconv.Atoi(config["max_tokens"]); parseErr == nil && maxTokens > 0 {
+		payload["options"] = map[string]any{"num_predict": maxTokens}
+	}
 	var response struct {
 		Message struct {
 			Content string `json:"content"`

@@ -1,0 +1,71 @@
+@use "../../styles/tokens" as *;
+
+.toggle {
+    position: relative;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    min-width: 0;
+    margin: 12px 0;
+    color: $text-secondary;
+    cursor: pointer;
+}
+
+.copy { display: grid; flex: 1; gap: 3px; min-width: 0; }
+.copy strong { overflow-wrap: anywhere; color: #dce7f6; font-size: 11px; font-weight: 650; }
+.copy small { color: #8291a6; font-size: 10px; line-height: 1.4; }
+.leading { display: grid; flex: 0 0 30px; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: #8db5ff; background: #1d2a3d; }
+
+.toggle.toggle input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.track {
+    position: relative;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 20px;
+    border: 1px solid #506078;
+    border-radius: 999px;
+    background: #202936;
+    transition: border-color 160ms ease, background 160ms ease;
+}
+
+.track span {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #aab7c8;
+    box-shadow: 0 1px 3px #0008;
+    transition: transform 160ms ease, background 160ms ease;
+}
+
+.toggle input:checked + .track { border-color: #6f9ff2; background: #2c65c4; }
+.toggle input:checked + .track span { transform: translateX(16px); background: #fff; }
+.toggle input:focus-visible + .track { outline: 2px solid #8eb7ff; outline-offset: 3px; }
+.toggle:has(input:disabled) { cursor: not-allowed; opacity: .52; }
+
+.card {
+    margin: 0;
+    padding: 11px 12px;
+    border: 1px solid #303e50;
+    border-radius: 9px;
+    background: #141c27;
+    transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+.card:hover { border-color: #4b6280; background: #182332; transform: translateY(-1px); }
+.card.selected { border-color: #588de7; background: #182b47; box-shadow: inset 3px 0 #6ba0fa; }
+.card:has(input:focus-visible) { border-color: #8eb7ff; }
+
+@media (prefers-reduced-motion: reduce) {
+    .track, .track span, .card { transition: none; }
+    .card:hover { transform: none; }
+}

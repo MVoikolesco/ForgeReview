@@ -126,17 +126,6 @@
 .valid { color: #78d2a5; }
 .invalid { color: #e87b91; }
 
-.check {
-    display: flex !important;
-    align-items: center;
-    grid-template-columns: auto 1fr;
-}
-
-.check input {
-    width: 15px;
-    min-height: 15px;
-}
-
 .note,
 .config p {
     margin-top: 24px;

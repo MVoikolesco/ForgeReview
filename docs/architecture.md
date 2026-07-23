@@ -131,12 +131,17 @@ execution uses `root`. Each completed or failed card is persisted in the
 execution report. The safe local executors currently cover trigger, transform,
 variable, log, cache, filter, group, loop, template, condition, merge, validate,
 response_filter, consolidate and format. A collecting input port waits for all
-of its declared incoming edges; the `consolidate.comments` port uses this so
-all available finding lists are merged before formatting. A `fetch`
+of its declared incoming edges; `merge.inputs` and `consolidate.comments` use
+this behavior. Merge emits the ordered list of all branch values instead of
+running after the first branch. The catalog exposes `workflow`/subpipeline as
+unavailable, with a reason, and validation prevents it from being saved until
+an execution contract exists. A `fetch`
 card requires `config.integration`, `owner`, `repo` and `pull_request`; it uses
 the injected Gitea adapter to read PR metadata, file changes and diff. A `model`
 card requires `config.integration` and uses the injected OpenAI-compatible or
-   Ollama chat adapter. Both require an active stored integration and decrypt
+   Ollama chat adapter. Its optional `max_tokens` is validated from 1 through
+   128,000 (default 2,000) and reaches OpenAI-compatible `max_tokens` or Ollama
+   `options.num_predict`. Both require an active stored integration and decrypt
    its configured credential only immediately before the controlled provider
    request.
 
@@ -221,7 +226,8 @@ they do not create comments or call an external destination.
   `pulls/{number}/reviews`, with the final event and inline comments. High and
   critical proposals are downgraded to `COMMENT` unless
   `allow_autonomous_rejection` is true. Medium findings use `COMMENT` unless
-  `medium_severity_event` is `REQUEST_CHANGES`. Approval is never automated.
+  `medium_severity_event` is `REQUEST_CHANGES`. Both controls belong only to
+  `publish`; definitions that place them on `fetch` are rejected. Approval is never automated.
   Arbitrary URLs, bodies, and credentials cannot be supplied by the workflow.
 
 ## Publication idempotency
@@ -306,6 +312,10 @@ through the integration API. After validation, Gitea requires an organization
 selection before it discovers and multi-selects only that organization's
 repositories. Ollama/OpenRouter instead show a searchable multi-select of
 discovered models; free-text model entry is not part of the normal setup path.
+Resource choices are provider-identified selectable rows with a selection count
+and accessible switch semantics. The shared switch also replaces native-looking
+boolean controls in the Inspector and preserves focus, disabled, keyboard, and
+reduced-motion behavior.
 The chosen models transactionally become reusable profiles, which store only key,
 display name, provider connection, model, and status. A model card stores
 `model_profile`, while existing stored cards using `integration` remain supported.
@@ -328,6 +338,8 @@ The inspector edits its display name and
 the supported configuration fields: Gitea connection/PR coordinates for fetch
 and publish, reusable model selection and output limit for model, templates,
 file filters, group bounds, conditions and review validation/filter policies.
+Publication event and autonomous-rejection controls appear on `publish`, not
+`fetch`. Viewer fieldsets and resource controls remain disabled/read-only.
 `Template review` loads the first official workflow graph into the canvas; it
 connects `group -> loop -> template -> model -> validate -> response_filter`
 per group. The inspector explains that `loop.item` stays in the group scope and

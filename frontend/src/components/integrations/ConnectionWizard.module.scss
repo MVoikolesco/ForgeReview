@@ -343,31 +343,19 @@
 
 .resourceList {
     display: grid;
+    gap: 7px;
     max-height: 280px;
+    padding: 7px;
     overflow: auto;
-    border: 1px solid #334154;
-    border-radius: 6px;
-    background: #121923;
-}
-
-.resourceList label {
-    display: flex;
-    gap: 9px;
-    align-items: center;
-    min-height: 38px;
-    padding: 8px 11px;
-    border-bottom: 1px solid #273241;
-    color: #dce7f6;
-    font-size: 11px;
-}
-
-.resourceList label:last-child {
-    border-bottom: 0;
+    border-radius: 10px;
+    background: #101720;
 }
 
 .resourceList p {
     padding: 0 11px;
 }
+
+.selectionCount { color: #a9c8ff; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
 
 .spinner {
     animation: spin .8s linear infinite;

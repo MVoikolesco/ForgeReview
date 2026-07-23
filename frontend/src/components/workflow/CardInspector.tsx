@@ -2,6 +2,7 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import type { CardData, Integration, ModelProfile, WebhookRegistration } from "../../lib/types";
 import { configList, configNumber, configText } from "../../lib/workflow";
+import { ToggleSwitch } from "../common/ToggleSwitch";
 import styles from "./CardInspector.module.scss";
 
 export function CardInspector({
@@ -187,24 +188,6 @@ export function CardInspector({
               />
             </label>
             {numberField("pull_request", "Número do PR", 0)}
-            <label>
-              Evento para severidade média
-              <select
-                value={configText(selected.config.medium_severity_event) || "COMMENT"}
-                onChange={(event) => updateConfig("medium_severity_event", event.target.value)}
-              >
-                <option value="COMMENT">Comentar</option>
-                <option value="REQUEST_CHANGES">Solicitar mudanças</option>
-              </select>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={selected.config.allow_autonomous_rejection === true}
-                onChange={(event) => updateConfig("allow_autonomous_rejection", event.target.checked)}
-              />
-              Permitir solicitar mudanças para achados altos/críticos
-            </label>
           </>
         )}
         {selected.type === "model" && (
@@ -240,6 +223,22 @@ export function CardInspector({
               />
             </label>
             {numberField("pull_request", "Número do PR", 0)}
+            <label>
+              Evento para severidade média
+              <select
+                value={configText(selected.config.medium_severity_event) || "COMMENT"}
+                onChange={(event) => updateConfig("medium_severity_event", event.target.value)}
+              >
+                <option value="COMMENT">Comentar</option>
+                <option value="REQUEST_CHANGES">Solicitar mudanças</option>
+              </select>
+            </label>
+            <ToggleSwitch
+              checked={selected.config.allow_autonomous_rejection === true}
+              onChange={(checked) => updateConfig("allow_autonomous_rejection", checked)}
+              label="Permitir rejeição autônoma"
+              description="Achados altos ou críticos poderão solicitar mudanças automaticamente."
+            />
           </>
         )}
         {selected.type === "filter" && (
@@ -276,32 +275,14 @@ export function CardInspector({
                 placeholder=".min.js, .lock"
               />
             </label>
-            <label className={styles.check}>
-              <input
-                type="checkbox"
-                checked={Boolean(selected.config.ignore_generated)}
-                onChange={(event) =>
-                  updateConfig("ignore_generated", event.target.checked)
-                }
-              />{" "}
-              Ignorar arquivos gerados
-            </label>
+            <ToggleSwitch checked={Boolean(selected.config.ignore_generated)} onChange={(checked) => updateConfig("ignore_generated", checked)} label="Ignorar arquivos gerados" description="Remove artefatos gerados antes da análise." />
           </>
         )}
         {selected.type === "group" && (
           <>
             {numberField("max_files", "Máximo de arquivos", 8)}
             {numberField("max_characters", "Máximo de caracteres", 12000)}
-            <label className={styles.check}>
-              <input
-                type="checkbox"
-                checked={Boolean(selected.config.group_by_extension)}
-                onChange={(event) =>
-                  updateConfig("group_by_extension", event.target.checked)
-                }
-              />{" "}
-              Separar por extensão
-            </label>
+            <ToggleSwitch checked={Boolean(selected.config.group_by_extension)} onChange={(checked) => updateConfig("group_by_extension", checked)} label="Separar por extensão" description="Mantém linguagens diferentes em grupos distintos." />
           </>
         )}
         {selected.type === "loop" && (
@@ -414,16 +395,7 @@ export function CardInspector({
           </label>
         )}
         {selected.type === "validate" && (
-          <label className={styles.check}>
-            <input
-              type="checkbox"
-              checked={Boolean(selected.config.validate_paths)}
-              onChange={(event) =>
-                updateConfig("validate_paths", event.target.checked)
-              }
-            />{" "}
-            Validar caminho contra arquivos do PR
-          </label>
+          <ToggleSwitch checked={Boolean(selected.config.validate_paths)} onChange={(checked) => updateConfig("validate_paths", checked)} label="Validar caminhos do PR" description="Recusa achados para arquivos ausentes nos dados buscados." />
         )}
         {selected.type === "response_filter" && (
           <label>

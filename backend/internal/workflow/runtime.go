@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -415,13 +416,16 @@ func (r *scopedRunner) handleFailure(node Node, current nodeScope, nodeRun NodeR
 }
 
 const (
-	maxModelRetryLimit = 3
-	maxModelRetryDelay = 60000
+	maxModelRetryLimit    = 3
+	maxModelRetryDelay    = 60000
+	defaultModelMaxTokens = 2000
+	maxModelMaxTokens     = 128000
 )
 
 type modelSettings struct {
 	RetryLimit   int
 	RetryDelayMS int
+	MaxTokens    int
 }
 
 const maxCacheTTLSeconds = 86400
@@ -453,7 +457,14 @@ func cacheSettingsFor(node Node) (cacheSettings, error) {
 }
 
 func modelSettingsFor(node Node) (modelSettings, error) {
-	settings := modelSettings{}
+	settings := modelSettings{MaxTokens: defaultModelMaxTokens}
+	if value, exists := node.Config["max_tokens"]; exists {
+		limit, ok := integer(value)
+		if !ok || limit < 1 || limit > maxModelMaxTokens {
+			return modelSettings{}, fmt.Errorf("model card %q config.max_tokens must be between 1 and %d", node.Key, maxModelMaxTokens)
+		}
+		settings.MaxTokens = limit
+	}
 	if value, exists := node.Config["retry_limit"]; exists {
 		limit, ok := integer(value)
 		if !ok || limit < 0 || limit > maxModelRetryLimit {
@@ -776,7 +787,7 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		}
 		return map[string]any{"false": first()}, nil
 	case "merge":
-		return map[string]any{"output": inputs}, nil
+		return map[string]any{"output": inputs["inputs"]}, nil
 	case "loop":
 		return nil, fmt.Errorf("loop card %q must be executed by the scoped runner", node.Key)
 	case "error_control":
@@ -921,6 +932,19 @@ func modelResponse(ctx context.Context, node Node, prompt string, adapters Adapt
 	if err != nil {
 		return "", err
 	}
+	settings, err := modelSettingsFor(node)
+	if err != nil {
+		return "", err
+	}
+	config, err := item.ConfigValues()
+	if err != nil {
+		return "", err
+	}
+	config["max_tokens"] = strconv.Itoa(settings.MaxTokens)
+	item.Config, err = json.Marshal(config)
+	if err != nil {
+		return "", err
+	}
 	response, err := client.Chat(ctx, item, secret, prompt)
 	if err != nil {
 		return "", fmt.Errorf("model card %q: %w", node.Key, err)
@@ -1042,6 +1066,19 @@ func publishEvent(review FormattedReview, config map[string]any) string {
 		}
 	}
 	return "COMMENT"
+}
+
+func validatePublishPolicy(node Node) error {
+	if value, exists := node.Config["medium_severity_event"]; exists {
+		event, ok := value.(string)
+		if !ok || (event != "COMMENT" && event != "REQUEST_CHANGES") {
+			return fmt.Errorf("publish card %q config.medium_severity_event must be \"COMMENT\" or \"REQUEST_CHANGES\"", node.Key)
+		}
+	}
+	if _, err := configuredBool(node.Config, "allow_autonomous_rejection", false); err != nil {
+		return fmt.Errorf("publish card %q config.allow_autonomous_rejection must be a boolean", node.Key)
+	}
+	return nil
 }
 
 func giteaReviewComments(observations []ReviewObservation) []integration.GiteaReviewComment {

@@ -28,7 +28,7 @@ func DefaultCatalog() Catalog {
 	}
 	out := func(key, label, contract string) Port { return Port{Key: key, Label: label, Contract: contract} }
 	card := func(key, name, category, description string, inputs, outputs []Port) CardType {
-		return CardType{Key: key, Name: name, Category: category, Description: description, Inputs: inputs, Outputs: outputs, ErrorOutput: &Port{Key: "error", Label: "Erro", Contract: "error"}}
+		return CardType{Key: key, Name: name, Category: category, Description: description, Inputs: inputs, Outputs: outputs, ErrorOutput: &Port{Key: "error", Label: "Erro", Contract: "error"}, Available: true}
 	}
 	return NewCatalog(
 		card("trigger", "Trigger", "Entradas", "Inicia uma execução por evento, API, agenda ou ação manual.", nil, []Port{out("event", "Evento", "event")}),
@@ -40,8 +40,8 @@ func DefaultCatalog() Catalog {
 		card("variable", "Variáveis", "Transformação", "Declara ou atualiza variáveis do escopo da execução.", []Port{in("value", "Valor", "any", false)}, []Port{out("value", "Valor", "any")}),
 		card("condition", "Condição", "Controle", "Roteia dados para saídas nomeadas conforme regras.", []Port{in("input", "Entrada", "any", true)}, []Port{out("true", "Verdadeiro", "any"), out("false", "Falso", "any")}),
 		card("loop", "Loop", "Controle", "Itera uma lista ou grupos com escopo, concorrência e limite configurados.", []Port{in("items", "Itens", "any", true)}, []Port{out("item", "Item atual", "any"), out("results", "Resultados", "list")}),
-		card("merge", "Merge", "Controle", "Aguarda e combina resultados de ramos.", []Port{in("inputs", "Entradas", "any", true)}, []Port{out("output", "Resultado unido", "any")}),
-		card("workflow", "Workflow", "Controle", "Executa uma subpipeline publicada por sua interface declarada.", []Port{in("input", "Entrada", "any", false)}, []Port{out("output", "Saída", "any")}),
+		card("merge", "Merge", "Controle", "Aguarda todas as entradas e combina seus resultados.", []Port{{Key: "inputs", Label: "Entradas", Contract: "any", Required: true, CollectAll: true}}, []Port{out("output", "Resultado unido", "any")}),
+		CardType{Key: "workflow", Name: "Workflow", Category: "Controle", Description: "Executa uma subpipeline publicada por sua interface declarada.", Inputs: []Port{in("input", "Entrada", "any", false)}, Outputs: []Port{out("output", "Saída", "any")}, Available: false, UnavailableReason: "Subpipelines ainda não possuem contrato de execução."},
 		card("model", "Modelo IA", "IA", "Executa um modelo por um adaptador de provider.", []Port{in("prompt", "Prompt", "prompt", true)}, []Port{out("response", "Resposta", "model_response")}),
 		card("validate", "Validar", "Validação", "Valida uma lista JSON de achados e, opcionalmente, seus caminhos nos arquivos buscados.", []Port{in("response", "Resposta", "model_response", true), in("files", "Arquivos buscados", "files", false)}, []Port{out("valid", "Resposta válida", "validated_response"), out("invalid", "Resposta inválida", "error")}),
 		card("response_filter", "Filtrar resposta", "Validação", "Remove resultados inválidos, duplicados ou abaixo da política.", []Port{in("response", "Resposta validada", "validated_response", true)}, []Port{out("comments", "Comentários", "list")}),
@@ -50,6 +50,6 @@ func DefaultCatalog() Catalog {
 		card("publish", "Publicar no Gitea", "Saída", "Publica uma revisão formatada por uma integração Gitea ativa, com idempotência durável.", []Port{in("formatted_review", "Review formatada", "formatted_review", true), in("pull_request", "Destino do PR", "pull_request", false)}, []Port{out("receipt", "Comprovante", "publication")}),
 		card("log", "Log", "Infraestrutura", "Registra dados sanitizados para observabilidade.", []Port{in("input", "Entrada", "any", false)}, []Port{out("output", "Saída", "any")}),
 		card("cache", "Cache", "Infraestrutura", "Lê ou grava dados efêmeros por uma chave configurada.", []Port{in("value", "Valor", "any", false)}, []Port{out("value", "Valor", "any")}),
-		CardType{Key: "error_control", Name: "Controle de erro", Category: "Infraestrutura", Description: "Recebe um erro roteado e encerra, continua ou produz um fallback.", Inputs: []Port{in("error", "Erro", "error", true)}, Outputs: []Port{out("recovered", "Resultado de fallback", "any")}},
+		CardType{Key: "error_control", Name: "Controle de erro", Category: "Infraestrutura", Description: "Recebe um erro roteado e encerra, continua ou produz um fallback.", Inputs: []Port{in("error", "Erro", "error", true)}, Outputs: []Port{out("recovered", "Resultado de fallback", "any")}, Available: true},
 	)
 }

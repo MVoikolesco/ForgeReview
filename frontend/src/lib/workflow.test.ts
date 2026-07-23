@@ -106,6 +106,29 @@ test("saving an opened canvas preserves its workflow identity", () => {
   );
 });
 
+test("catalog availability and bounded model/publish configuration are validated", () => {
+  const cards = [
+    { key: "workflow", name: "Workflow", category: "Controle", description: "", inputs: [], outputs: [], available: false, unavailable_reason: "Ainda não suportado" },
+    { key: "model", name: "Modelo", category: "IA", description: "", inputs: [], outputs: [] },
+    { key: "fetch", name: "Buscar", category: "Dados", description: "", inputs: [], outputs: [] },
+    { key: "publish", name: "Publicar", category: "Saída", description: "", inputs: [], outputs: [] },
+  ];
+  const definition = {
+    key: "truthful", name: "Truthful", description: "", edges: [],
+    nodes: [
+      { key: "child", type: "workflow", name: "Child", config: {}, position: { x: 0, y: 0 } },
+      { key: "model", type: "model", name: "Model", config: { model_profile: "reviewer", max_tokens: 128001 }, position: { x: 0, y: 0 } },
+      { key: "fetch", type: "fetch", name: "Fetch", config: { integration: "gitea", owner: "acme", repo: "api", pull_request: 1, allow_autonomous_rejection: true }, position: { x: 0, y: 0 } },
+      { key: "publish", type: "publish", name: "Publish", config: { integration: "gitea", owner: "acme", repo: "api", pull_request: 1, medium_severity_event: "APPROVE" }, position: { x: 0, y: 0 } },
+    ],
+  };
+  const messages = validateStudioWorkflow(definition, cards).map((issue) => issue.message);
+  assert.ok(messages.some((message) => message.includes("tipo indisponível")));
+  assert.ok(messages.some((message) => message.includes("max_tokens")));
+  assert.ok(messages.some((message) => message.includes("Mova a política")));
+  assert.ok(messages.some((message) => message.includes("evento válido")));
+});
+
 test("workflow export envelope validates safe graphs and rejects credential fields", () => {
   const definition = toDefinition(starterNodes, starterEdges);
   const parsed = parseWorkflowExport(JSON.stringify(workflowExportEnvelope(definition)), localCards);

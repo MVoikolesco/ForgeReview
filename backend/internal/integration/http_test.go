@@ -116,6 +116,12 @@ func TestHTTPChatClientRequestContracts(t *testing.T) {
 				if test.kind == TypeOllama && body["stream"] != false {
 					t.Fatalf("stream = %#v", body["stream"])
 				}
+				if test.kind == TypeOpenAI && body["max_tokens"] != float64(4096) {
+					t.Fatalf("max_tokens = %#v", body["max_tokens"])
+				}
+				if test.kind == TypeOllama && body["options"].(map[string]any)["num_predict"] != float64(4096) {
+					t.Fatalf("options = %#v", body["options"])
+				}
 				writer.Header().Set("Content-Type", "application/json")
 				_, _ = writer.Write([]byte(test.response))
 			}))
@@ -130,7 +136,11 @@ func TestHTTPChatClientRequestContracts(t *testing.T) {
 				value.Client = server.Client()
 				client = value
 			}
-			response, err := client.Chat(context.Background(), testIntegration(t, test.kind, server.URL), "chat-secret", "review this")
+			item := testIntegration(t, test.kind, server.URL)
+			config, _ := item.ConfigValues()
+			config["max_tokens"] = "4096"
+			item.Config, _ = json.Marshal(config)
+			response, err := client.Chat(context.Background(), item, "chat-secret", "review this")
 			if err != nil {
 				t.Fatalf("chat: %v", err)
 			}

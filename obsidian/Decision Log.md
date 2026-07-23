@@ -275,3 +275,22 @@ owner/repository/PR coordinates before persistence. New review graphs pass that
 typed target from trigger to fetch and from fetch to publish, while old immutable
 versions retain fixed-coordinate fallback. See [[Architecture]] and
 [[Feature Map]].
+
+## 2026-07-23: Truthful catalog and provider request contracts
+
+Catalog availability is explicit: the unsupported `workflow` card remains
+discoverable but disabled and backend validation refuses definitions containing
+it. `merge.inputs` uses `collect_all` and emits all branch values only after all
+active incoming edges deliver. Model `max_tokens` is bounded to 1–128,000 with a
+2,000 default and translated to each provider's request shape. Review event and
+autonomous-rejection policy is valid only on `publish`, preventing `fetch` from
+advertising settings it cannot execute. See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-23: One accessible switch language
+
+Boolean settings and resource multi-selection share one native-input-backed
+`ToggleSwitch` rather than exposing browser checkbox styling. Provider-labelled
+resource cards add selection counts and selected/hover feedback while preserving
+keyboard, focus, disabled, screen-reader, and reduced-motion behavior. Viewer
+authorization remains read-only independently of visual presentation. See
+[[Architecture]] and [[Feature Map]].
