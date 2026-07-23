@@ -224,9 +224,7 @@ docs/      Arquitetura, auditoria e este roadmap
 
 - Loops são sequenciais neste incremento (`concurrency` deve ser `1`) e não
   suportam aninhamento. O template oficial continua exigindo integrações Gitea
-  e de modelo ativas, além das coordenadas do PR, para executar os cards
-  externos.
-- O browser não executa testes de conexão; o wizard apenas cadastra a conexão.
+  e de modelo ativas; as coordenadas do PR vêm obrigatoriamente do trigger.
 - A imagem Docker de produção foi corrigida, mas a build local por Docker não
   pôde ser executada neste ambiente por erro de I/O no binário Docker.
 - A política de CORS atual permite somente `http://localhost:3010`; ambientes

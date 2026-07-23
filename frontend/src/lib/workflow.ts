@@ -325,10 +325,10 @@ export function validateStudioWorkflow(
         issues.push({ nodeKey: node.key, message: `A rejeição autônoma de "${node.name}" deve ser booleana.` });
     }
     if (["fetch", "publish"].includes(node.type)) {
-      const hasDynamicTarget = definition.edges.some((edge) => edge.to_node === node.key &&
-        ((node.type === "fetch" && edge.to_port === "event") || (node.type === "publish" && edge.to_port === "pull_request")));
-      if (!nonEmptyText(node.config.integration) || (!hasDynamicTarget && (!nonEmptyText(node.config.owner) || !nonEmptyText(node.config.repo) || !positiveInteger(node.config.pull_request))))
-        issues.push({ nodeKey: node.key, message: `Configure a conexão e um destino dinâmico ou fixo de PR em "${node.name}".` });
+      if (["owner", "repo", "pull_request"].some((key) => Object.prototype.hasOwnProperty.call(node.config, key)))
+        issues.push({ nodeKey: node.key, message: `Remova as coordenadas fixas de PR de "${node.name}".` });
+      if (!nonEmptyText(node.config.integration))
+        issues.push({ nodeKey: node.key, message: `Configure a conexão de "${node.name}".` });
     }
     if (node.type === "trigger" && !["manual", "api", "webhook"].includes(configText(node.config.mode) || "manual"))
       issues.push({ nodeKey: node.key, message: `Selecione um modo de trigger válido em "${node.name}".` });
@@ -497,9 +497,6 @@ export function reviewTemplate(
     nodes: [
       node("trigger", "trigger", "Webhook Gitea", 40, 280, { mode: "webhook" }),
       node("fetch", "fetch", "Buscar dados do PR", 315, 280, {
-        owner: "",
-        repo: "",
-        pull_request: 0,
         integration: "",
        }),
       node("filter", "filter", "Filtrar arquivos", 610, 125, {
@@ -535,9 +532,6 @@ export function reviewTemplate(
       node("consolidate", "consolidate", "Consolidar review", 2070, 480),
       node("format", "format", "Formatar review", 2365, 480),
       node("publish", "publish", "Publicar no Gitea", 2660, 480, {
-        owner: "",
-        repo: "",
-        pull_request: 0,
         integration: "",
         medium_severity_event: "COMMENT",
         allow_autonomous_rejection: false,

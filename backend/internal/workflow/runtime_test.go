@@ -353,10 +353,10 @@ func TestRunWithAdaptersExecutesFetchAndModelCards(t *testing.T) {
 		config, _ := json.Marshal(map[string]string{"base_url": server.URL})
 		definition := Definition{Key: "fetch", Name: "Fetch", Nodes: []Node{
 			{Key: "start", Type: "trigger", Name: "Start"},
-			{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea", "owner": "acme", "repo": "api", "pull_request": 12}},
+			{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea"}},
 		}, Edges: []Edge{{Key: "event", FromNode: "start", FromPort: "event", ToNode: "fetch", ToPort: "event"}}}
 		adapters := Adapters{Integrations: memoryIntegrations{"gitea": encryptedIntegration(t, integration.Integration{Key: "gitea", Name: "Gitea", Type: integration.TypeGitea, Config: config, Status: integration.StatusActive}, "secret")}, Secrets: testSecrets(t), Gitea: integration.HTTPGiteaClient{Client: server.Client()}}
-		report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, adapters)
+		report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), map[string]any{"pull_request": map[string]any{"owner": "acme", "repo": "api", "number": 12}}, adapters)
 		if err != nil {
 			t.Fatalf("run fetch: %v", err)
 		}

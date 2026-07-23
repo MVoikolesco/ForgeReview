@@ -55,9 +55,9 @@ curl -X POST "$FORGEREVIEW_URL/webhooks/gitea/gitea-review" \
 ```
 
 The allowlisted execution context is canonicalized as
-`pull_request.owner`, `pull_request.repo`, and `pull_request.number`. Fetch and
-publish cards prefer this typed runtime target and retain their fixed
-`owner`/`repo`/`pull_request` configuration as a legacy fallback.
+`pull_request.owner`, `pull_request.repo`, and `pull_request.number`. Fetch reads
+that typed runtime target and emits the fetched pull request to publish. Neither
+card accepts fixed `owner`/`repo`/`pull_request` configuration.
 
 Import [`ForgeReview.postman_collection.json`](ForgeReview.postman_collection.json)
 for login, API-trigger, registration, and signed-webhook samples. Fill collection

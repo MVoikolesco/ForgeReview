@@ -134,10 +134,11 @@ response_filter, consolidate and format. A collecting input port waits for all
 of its declared incoming edges; `merge.inputs` and `consolidate.comments` use
 this behavior. Merge emits the ordered list of all branch values instead of
 running after the first branch. The catalog exposes `workflow`/subpipeline as
-unavailable, with a reason, and validation prevents it from being saved until
-an execution contract exists. A `fetch`
-card requires `config.integration`, `owner`, `repo` and `pull_request`; it uses
-the injected Gitea adapter to read PR metadata, file changes and diff. A `model`
+    unavailable, with a reason, and validation prevents it from being saved until
+    an execution contract exists. A `fetch` card requires only
+`config.integration`; its required typed event input supplies owner, repository,
+and pull-request number. It uses the injected Gitea adapter to read PR metadata,
+file changes and diff. A `model`
 card requires `config.integration` and uses the injected OpenAI-compatible or
    Ollama chat adapter. Its optional `max_tokens` is validated from 1 through
    128,000 (default 2,000) and reaches OpenAI-compatible `max_tokens` or Ollama
@@ -218,10 +219,10 @@ they do not create comments or call an external destination.
   `critical`), a proposed event/status, and inline observations (`path`, `body`,
   `new_position`) derived from each validated finding. High or critical findings
   propose `REQUEST_CHANGES`; all other findings propose `COMMENT`.
-- `publish` consumes `formatted_review` and an optional typed `pull_request`
+- `publish` consumes `formatted_review` and a required typed `pull_request`
   target. `fetch` accepts the canonical target from its trigger event and emits
-  that target with the fetched PR. Both prefer the dynamic target and fall back
-  to configured `owner`, `repo`, and positive `pull_request`. The integration must be active
+  that target with the fetched PR. Fixed `owner`, `repo`, and `pull_request`
+  configuration is rejected for both cards. The integration must be active
   and Gitea. Its writer creates one native Gitea PR review at
   `pulls/{number}/reviews`, with the final event and inline comments. High and
   critical proposals are downgraded to `COMMENT` unless

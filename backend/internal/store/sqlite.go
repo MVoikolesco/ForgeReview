@@ -49,6 +49,10 @@ func Open(path string) (*SQLite, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = store.migrateFixedPullRequestCoordinates(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return store, nil
 }
 
@@ -341,6 +345,9 @@ func (s *SQLite) ModelProfile(ctx context.Context, key string) (integration.Mode
 }
 
 func (s *SQLite) Save(ctx context.Context, definition workflow.Definition) (int64, error) {
+	if err := workflow.ValidateNoFixedPullRequestConfig(definition); err != nil {
+		return 0, err
+	}
 	payload, err := json.Marshal(definition)
 	if err != nil {
 		return 0, err
@@ -388,7 +395,7 @@ func (s *SQLite) EnsureOfficialReviewWorkflow(ctx context.Context, catalog workf
 	err = tx.QueryRowContext(ctx, `SELECT id,version,status,created_at,definition_json FROM workflow_versions WHERE workflow_key=? AND status=?`, definition.Key, workflow.VersionStatusPublished).Scan(&existing.ID, &existing.Version, &existing.Status, &existing.CreatedAt, &existingPayload)
 	if err == nil {
 		var stored workflow.Definition
-		legacyJSON, _ := json.Marshal(workflow.LegacyOfficialReviewDefinition())
+		legacyJSON, _ := json.Marshal(workflow.PreviousOfficialReviewDefinition())
 		storedJSON := []byte(existingPayload)
 		if json.Unmarshal(storedJSON, &stored) != nil {
 			return workflow.VersionSummary{}, false, fmt.Errorf("decode existing official workflow")
@@ -861,11 +868,11 @@ func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.RunReport, e
 }
 
 // ExecutionSummaries returns a bounded, dashboard-safe view of recent runs.
-// It deliberately avoids execution input, node-run metadata, errors, and all
-// integration configuration. PR coordinates are derived only from the stored
-// immutable workflow version's fetch/publish card configuration.
+// It deliberately avoids returning execution input, node-run metadata, errors,
+// or integration configuration. Displayable PR coordinates are derived only
+// from the typed execution input.
 func (s *SQLite) ExecutionSummaries(ctx context.Context, limit int) ([]workflow.ExecutionSummary, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT e.id,e.status,e.started_at,COALESCE(e.finished_at,''),v.workflow_key,v.name,v.version,v.definition_json,e.execution_input_json
+	rows, err := s.db.QueryContext(ctx, `SELECT e.id,e.status,e.started_at,COALESCE(e.finished_at,''),v.workflow_key,v.name,v.version,e.execution_input_json
 		FROM workflow_executions e JOIN workflow_versions v ON v.id=e.workflow_version_id
 		ORDER BY e.started_at DESC,e.id DESC LIMIT ?`, limit)
 	if err != nil {
@@ -876,18 +883,11 @@ func (s *SQLite) ExecutionSummaries(ctx context.Context, limit int) ([]workflow.
 	items := []workflow.ExecutionSummary{}
 	for rows.Next() {
 		var item workflow.ExecutionSummary
-		var definitionJSON, inputJSON string
-		if err = rows.Scan(&item.ID, &item.Status, &item.StartedAt, &item.FinishedAt, &item.Workflow.Key, &item.Workflow.Name, &item.Workflow.Version, &definitionJSON, &inputJSON); err != nil {
+		var inputJSON string
+		if err = rows.Scan(&item.ID, &item.Status, &item.StartedAt, &item.FinishedAt, &item.Workflow.Key, &item.Workflow.Name, &item.Workflow.Version, &inputJSON); err != nil {
 			return nil, err
 		}
-		var definition workflow.Definition
-		if err = json.Unmarshal([]byte(definitionJSON), &definition); err != nil {
-			return nil, fmt.Errorf("decode execution workflow %d: %w", item.ID, err)
-		}
 		item.Review = reviewContextFromInput(inputJSON)
-		if item.Review == nil {
-			item.Review = reviewContext(definition)
-		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -913,27 +913,6 @@ func reviewContextFromInput(payload string) *workflow.ExecutionReviewContext {
 		return nil
 	}
 	return candidate
-}
-
-func reviewContext(definition workflow.Definition) *workflow.ExecutionReviewContext {
-	var context *workflow.ExecutionReviewContext
-	for _, node := range definition.Nodes {
-		if node.Type != "fetch" && node.Type != "publish" {
-			continue
-		}
-		candidate, ok := configuredReviewContext(node.Config)
-		if !ok {
-			continue
-		}
-		if context == nil {
-			context = candidate
-			continue
-		}
-		if *context != *candidate {
-			return nil
-		}
-	}
-	return context
 }
 
 func configuredReviewContext(config map[string]any) (*workflow.ExecutionReviewContext, bool) {
@@ -1183,4 +1162,135 @@ func (s *SQLite) ensureExecutionTriggerColumn(ctx context.Context) error {
 	}
 	_, err = s.db.ExecContext(ctx, `ALTER TABLE workflow_executions ADD COLUMN trigger_node_key TEXT NOT NULL DEFAULT ''`)
 	return err
+}
+
+// migrateFixedPullRequestCoordinates intentionally rewrites immutable version
+// payloads while preserving their IDs and lifecycle statuses. Fixed coordinates
+// are removed and every publish target is made explicit in the typed graph.
+func (s *SQLite) migrateFixedPullRequestCoordinates(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT id,definition_json FROM workflow_versions ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	type storedDefinition struct {
+		id         int64
+		definition workflow.Definition
+	}
+	definitions := []storedDefinition{}
+	for rows.Next() {
+		var item storedDefinition
+		var payload string
+		if err = rows.Scan(&item.id, &payload); err != nil {
+			rows.Close()
+			return err
+		}
+		if err = json.Unmarshal([]byte(payload), &item.definition); err != nil {
+			rows.Close()
+			return fmt.Errorf("migrate workflow version %d fixed PR coordinates: decode definition: %w", item.id, err)
+		}
+		definitions = append(definitions, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+
+	for _, item := range definitions {
+		changed, migrateErr := migrateDefinitionPullRequestCoordinates(&item.definition)
+		if migrateErr != nil {
+			return fmt.Errorf("migrate workflow version %d fixed PR coordinates: %w", item.id, migrateErr)
+		}
+		if !changed {
+			continue
+		}
+		payload, marshalErr := json.Marshal(item.definition)
+		if marshalErr != nil {
+			return fmt.Errorf("migrate workflow version %d fixed PR coordinates: %w", item.id, marshalErr)
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE workflow_versions SET definition_json=? WHERE id=?`, string(payload), item.id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func migrateDefinitionPullRequestCoordinates(definition *workflow.Definition) (bool, error) {
+	fetches := []workflow.Node{}
+	usedEdgeKeys := map[string]bool{}
+	for _, node := range definition.Nodes {
+		if node.Type == "fetch" {
+			fetches = append(fetches, node)
+		}
+	}
+	for _, edge := range definition.Edges {
+		usedEdgeKeys[edge.Key] = true
+	}
+	changed := false
+	for _, publish := range definition.Nodes {
+		if publish.Type != "publish" || hasPullRequestInputEdge(definition.Edges, publish.Key) {
+			continue
+		}
+		fetch, err := migrationFetchForPublish(fetches, publish)
+		if err != nil {
+			return false, err
+		}
+		base := fetch.Key + "-" + publish.Key + "-pull-request"
+		key := base
+		for suffix := 2; usedEdgeKeys[key]; suffix++ {
+			key = fmt.Sprintf("%s-%d", base, suffix)
+		}
+		usedEdgeKeys[key] = true
+		definition.Edges = append(definition.Edges, workflow.Edge{Key: key, FromNode: fetch.Key, FromPort: "pull_request", ToNode: publish.Key, ToPort: "pull_request"})
+		changed = true
+	}
+	for index := range definition.Nodes {
+		node := &definition.Nodes[index]
+		if node.Type != "fetch" && node.Type != "publish" {
+			continue
+		}
+		for _, key := range []string{"owner", "repo", "pull_request"} {
+			if _, exists := node.Config[key]; exists {
+				delete(node.Config, key)
+				changed = true
+			}
+		}
+	}
+	return changed, nil
+}
+
+func hasPullRequestInputEdge(edges []workflow.Edge, publishKey string) bool {
+	for _, edge := range edges {
+		if edge.ToNode == publishKey && edge.ToPort == "pull_request" {
+			return true
+		}
+	}
+	return false
+}
+
+func migrationFetchForPublish(fetches []workflow.Node, publish workflow.Node) (workflow.Node, error) {
+	if len(fetches) == 1 {
+		return fetches[0], nil
+	}
+	wanted, wantedOK := configuredReviewContext(publish.Config)
+	matches := []workflow.Node{}
+	if wantedOK {
+		for _, fetch := range fetches {
+			candidate, ok := configuredReviewContext(fetch.Config)
+			if ok && *candidate == *wanted {
+				matches = append(matches, fetch)
+			}
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	return workflow.Node{}, fmt.Errorf("publish card %q has no pull_request edge and its source is ambiguous across %d fetch cards", publish.Key, len(fetches))
 }

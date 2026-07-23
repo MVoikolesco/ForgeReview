@@ -14,6 +14,12 @@
 
 ## 2026-07-22
 
+- Removed fixed PR coordinates from fetch and publish. Both cards now require
+  typed runtime context from the selected trigger/fetched pull request, and
+  startup migrates stored definitions or rejects ambiguous graph mappings.
+  Inspector and local validation no longer request organization, repository, or
+  PR number on these cards. See [[Architecture]] and [[Decision Log]].
+
 - Added typed manual/API/webhook triggers, selected-branch execution, encrypted
   Gitea webhook registrations, signature and delivery-ID validation, durable
   queued recovery, and dynamic PR context from trigger through fetch/publication.

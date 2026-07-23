@@ -98,8 +98,8 @@ type ExecutionWorkflow struct {
 	Version int    `json:"version"`
 }
 
-// ExecutionReviewContext contains only the PR coordinates configured on the
-// stored fetch/publish cards. It intentionally has no integration reference.
+// ExecutionReviewContext contains only PR coordinates from typed execution
+// input. It intentionally has no integration reference.
 type ExecutionReviewContext struct {
 	Owner       string `json:"owner"`
 	Repo        string `json:"repo"`
@@ -171,6 +171,9 @@ func Validate(definition Definition, catalog Catalog) error {
 			}
 		}
 		if node.Type == "fetch" {
+			if err := validateNoFixedPullRequestConfig(node); err != nil {
+				return err
+			}
 			if _, exists := node.Config["medium_severity_event"]; exists {
 				return fmt.Errorf("fetch card %q does not support config.medium_severity_event; configure it on publish", node.Key)
 			}
@@ -179,6 +182,9 @@ func Validate(definition Definition, catalog Catalog) error {
 			}
 		}
 		if node.Type == "publish" {
+			if err := validateNoFixedPullRequestConfig(node); err != nil {
+				return err
+			}
 			if err := validatePublishPolicy(node); err != nil {
 				return err
 			}
@@ -222,6 +228,28 @@ func Validate(definition Definition, catalog Catalog) error {
 			if !hasRoute {
 				return fmt.Errorf("node %q config.on_error \"route\" requires an explicit error edge", node.Key)
 			}
+		}
+	}
+	return nil
+}
+
+// ValidateNoFixedPullRequestConfig is also used at the storage boundary so a
+// caller cannot bypass graph validation and persist obsolete PR coordinates.
+func ValidateNoFixedPullRequestConfig(definition Definition) error {
+	for _, node := range definition.Nodes {
+		if node.Type == "fetch" || node.Type == "publish" {
+			if err := validateNoFixedPullRequestConfig(node); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateNoFixedPullRequestConfig(node Node) error {
+	for _, key := range []string{"owner", "repo", "pull_request"} {
+		if _, exists := node.Config[key]; exists {
+			return fmt.Errorf("%s card %q does not support fixed PR coordinate config.%s", node.Type, node.Key, key)
 		}
 	}
 	return nil

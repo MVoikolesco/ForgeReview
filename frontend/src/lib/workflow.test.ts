@@ -127,6 +127,7 @@ test("catalog availability and bounded model/publish configuration are validated
   assert.ok(messages.some((message) => message.includes("max_tokens")));
   assert.ok(messages.some((message) => message.includes("Mova a política")));
   assert.ok(messages.some((message) => message.includes("evento válido")));
+  assert.ok(messages.some((message) => message.includes("coordenadas fixas")));
 });
 
 test("workflow export envelope validates safe graphs and rejects credential fields", () => {
@@ -331,9 +332,6 @@ test("review template scopes group review through loop before one root publicati
     retry_delay_ms: 0,
   });
   assert.deepEqual(template.nodes.find((node) => node.id === "publish")?.data.config, {
-    owner: "",
-    repo: "",
-    pull_request: 0,
     integration: "",
     medium_severity_event: "COMMENT",
     allow_autonomous_rejection: false,
@@ -342,10 +340,14 @@ test("review template scopes group review through loop before one root publicati
 
 test("dashboard derives official review readiness and conservative publication safety", () => {
   const definition = {
-    key: "official-gitea-pr-review", name: "Official", description: "", edges: [], nodes: [
-      { key: "fetch", type: "fetch", name: "Fetch", config: { integration: "gitea", owner: "acme", repo: "api", pull_request: 9 }, position: { x: 0, y: 0 } },
+    key: "official-gitea-pr-review", name: "Official", description: "", edges: [
+      { key: "event", from_node: "trigger", from_port: "event", to_node: "fetch", to_port: "event" },
+      { key: "target", from_node: "fetch", from_port: "pull_request", to_node: "publish", to_port: "pull_request" },
+    ], nodes: [
+      { key: "trigger", type: "trigger", name: "Trigger", config: {}, position: { x: 0, y: 0 } },
+      { key: "fetch", type: "fetch", name: "Fetch", config: { integration: "gitea" }, position: { x: 0, y: 0 } },
       { key: "model", type: "model", name: "Model", config: { model_profile: "reviewer" }, position: { x: 0, y: 0 } },
-      { key: "publish", type: "publish", name: "Publish", config: { integration: "gitea", owner: "acme", repo: "api", pull_request: 9, allow_autonomous_rejection: false, medium_severity_event: "COMMENT" }, position: { x: 0, y: 0 } },
+      { key: "publish", type: "publish", name: "Publish", config: { integration: "gitea", allow_autonomous_rejection: false, medium_severity_event: "COMMENT" }, position: { x: 0, y: 0 } },
     ],
   };
   const state = reviewPipelineState(definition, [

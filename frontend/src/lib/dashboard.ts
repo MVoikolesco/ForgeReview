@@ -30,16 +30,8 @@ export function reviewPipelineState(
     integrations.some(
       (item) => item.key === key && item.status === "active" && item.secret_configured,
     );
-  const coordinatesReady = (config: Record<string, unknown> | undefined) =>
-    Boolean(
-      config &&
-        typeof config.owner === "string" &&
-        config.owner &&
-        typeof config.repo === "string" &&
-        config.repo &&
-        typeof config.pull_request === "number" &&
-        config.pull_request > 0,
-    );
+  const hasInput = (nodeKey: string | undefined, port: string) =>
+    Boolean(nodeKey && definition.edges.some((edge) => edge.to_node === nodeKey && edge.to_port === port));
   const profile = profiles.find(
     (item) => item.key === model?.config.model_profile && item.status === "active",
   );
@@ -47,8 +39,8 @@ export function reviewPipelineState(
     activeConnection(fetch?.config.integration) &&
     activeConnection(publish?.config.integration) &&
     Boolean(profile && activeConnection(profile.integration_key)) &&
-    coordinatesReady(fetch?.config) &&
-    coordinatesReady(publish?.config);
+    hasInput(fetch?.key, "event") &&
+    hasInput(publish?.key, "pull_request");
   const safe =
     publish?.config.allow_autonomous_rejection === false &&
     publish?.config.medium_severity_event === "COMMENT";

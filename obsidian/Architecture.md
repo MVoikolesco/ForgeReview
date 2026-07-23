@@ -128,8 +128,11 @@ exact raw body with HMAC-SHA-256, requires Gitea event/delivery headers, and use
 a durable delivery ledger to return the original execution for identical
 retries while rejecting delivery-ID collisions. It persists only canonical PR
 coordinates as workflow input. `fetch` consumes that runtime target and passes
-the typed pull request to `publish`; immutable legacy workflows can still use
-fixed card coordinates. See [[Decision Log]] and [[Feature Map]].
+the typed pull request to `publish`. Fixed PR coordinates are rejected in both
+cards. Startup migrates stored definitions by removing those fields and adding a
+deterministic typed fetch-to-publish edge; ambiguous multi-fetch graphs stop with
+a migration error rather than selecting an unsafe target. See [[Decision Log]]
+and [[Feature Map]].
 
 Redis also backs the workflow `cache` card through a separate explicit adapter;
 it is not coupled to the execution-ID queue. Cache values cross the adapter as

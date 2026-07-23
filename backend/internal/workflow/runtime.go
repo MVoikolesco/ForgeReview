@@ -844,9 +844,9 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		if err != nil {
 			return nil, err
 		}
-		request, err := pullRequestRequestFromInputs(node, inputs)
+		request, err := pullRequestRequestFromEvent(firstForPort(inputs, "event"))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("fetch card %q requires a valid pull request event input", node.Key)
 		}
 		pullRequest, err := adapters.Gitea.ReadPullRequest(ctx, item, secret, request)
 		if err != nil {
@@ -1005,12 +1005,9 @@ func publishReview(ctx context.Context, node Node, inputs map[string][]any, adap
 	if !ok {
 		return nil, fmt.Errorf("publish card %q requires a formatted_review input", node.Key)
 	}
-	request, err := runtimePullRequestRequest(firstForPort(inputs, "pull_request"))
+	request, err := pullRequestRequestFromValue(firstForPort(inputs, "pull_request"))
 	if err != nil {
-		request, err = pullRequestRequestForCard(node, "publish")
-	}
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("publish card %q requires a valid pull_request input", node.Key)
 	}
 	key := publicationKey(adapters.Execution, node.Key, scopeKey)
 	attempt, shouldPublish, err := adapters.Publications.BeginPublication(ctx, PublicationAttempt{IdempotencyKey: key, ExecutionID: adapters.Execution.ID, VersionID: adapters.Execution.VersionID, NodeKey: node.Key})
@@ -1118,11 +1115,7 @@ func resolveSecret(item integration.Integration, adapters Adapters, card, nodeKe
 	return secret, nil
 }
 
-func pullRequestRequest(node Node) (integration.PullRequestRequest, error) {
-	return pullRequestRequestForCard(node, "fetch")
-}
-
-func runtimePullRequestRequest(value any) (integration.PullRequestRequest, error) {
+func pullRequestRequestFromValue(value any) (integration.PullRequestRequest, error) {
 	switch item := value.(type) {
 	case integration.PullRequest:
 		if item.Target.Owner != "" && item.Target.Repo != "" && item.Target.Number > 0 {
@@ -1139,24 +1132,19 @@ func runtimePullRequestRequest(value any) (integration.PullRequestRequest, error
 			return integration.PullRequestRequest{Owner: owner, Repo: repo, Number: number}, nil
 		}
 	}
-	return integration.PullRequestRequest{}, fmt.Errorf("runtime pull request target is unavailable")
+	return integration.PullRequestRequest{}, fmt.Errorf("pull request target is unavailable")
 }
 
-func pullRequestRequestFromInputs(node Node, inputs map[string][]any) (integration.PullRequestRequest, error) {
-	if request, err := runtimePullRequestRequest(firstForPort(inputs, "event")); err == nil {
-		return request, nil
+func pullRequestRequestFromEvent(value any) (integration.PullRequestRequest, error) {
+	event, ok := value.(map[string]any)
+	if !ok {
+		return integration.PullRequestRequest{}, fmt.Errorf("pull request event is unavailable")
 	}
-	return pullRequestRequest(node)
-}
-
-func pullRequestRequestForCard(node Node, card string) (integration.PullRequestRequest, error) {
-	owner, _ := node.Config["owner"].(string)
-	repo, _ := node.Config["repo"].(string)
-	number, ok := integer(node.Config["pull_request"])
-	if owner == "" || repo == "" || !ok || number < 1 {
-		return integration.PullRequestRequest{}, fmt.Errorf("%s card %q requires config.owner, config.repo, and positive config.pull_request", card, node.Key)
+	target, ok := event["pull_request"]
+	if !ok {
+		return integration.PullRequestRequest{}, fmt.Errorf("pull request event is unavailable")
 	}
-	return integration.PullRequestRequest{Owner: owner, Repo: repo, Number: number}, nil
+	return pullRequestRequestFromValue(target)
 }
 
 func integer(value any) (int, bool) {

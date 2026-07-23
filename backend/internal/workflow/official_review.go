@@ -8,8 +8,9 @@ const (
 )
 
 // OfficialReviewDefinition is the initial published review pipeline. Connection
-// and PR fields intentionally remain empty: administrators select persisted
-// Gitea and model-profile records before creating an executable derivative.
+// fields intentionally remain empty: administrators select persisted Gitea and
+// model-profile records before creating an executable derivative. PR identity
+// always flows through the typed event and pull_request ports.
 func OfficialReviewDefinition() Definition {
 	return Definition{
 		Key:         OfficialReviewWorkflowKey,
@@ -17,7 +18,7 @@ func OfficialReviewDefinition() Definition {
 		Description: "Seeded full pull-request review pipeline with one native Gitea review publication.",
 		Nodes: []Node{
 			{Key: "trigger", Type: "trigger", Name: "Webhook Gitea", Position: Position{X: 40, Y: 280}, Config: map[string]any{"mode": "webhook"}},
-			{Key: "fetch", Type: "fetch", Name: "Buscar dados do PR", Position: Position{X: 315, Y: 280}, Config: map[string]any{"integration": "", "owner": "", "repo": "", "pull_request": 0}},
+			{Key: "fetch", Type: "fetch", Name: "Buscar dados do PR", Position: Position{X: 315, Y: 280}, Config: map[string]any{"integration": ""}},
 			{Key: "filter", Type: "filter", Name: "Filtrar arquivos", Position: Position{X: 610, Y: 125}, Config: map[string]any{"include_extensions": []string{".go", ".ts", ".tsx", ".php"}, "ignore_generated": true}},
 			{Key: "group", Type: "group", Name: "Agrupar arquivos", Position: Position{X: 900, Y: 125}, Config: map[string]any{"max_files": 8, "max_characters": 12000, "group_by_extension": true}},
 			{Key: "loop", Type: "loop", Name: "Revisar cada grupo", Position: Position{X: 1190, Y: 125}, Config: map[string]any{"max_iterations": 20, "concurrency": 1, "on_error": "fail"}},
@@ -27,7 +28,7 @@ func OfficialReviewDefinition() Definition {
 			{Key: "response-filter", Type: "response_filter", Name: "Filtrar achados", Position: Position{X: 2365, Y: 125}, Config: map[string]any{"minimum_severity": "medium"}},
 			{Key: "consolidate", Type: "consolidate", Name: "Consolidar review", Position: Position{X: 2070, Y: 480}},
 			{Key: "format", Type: "format", Name: "Formatar review", Position: Position{X: 2365, Y: 480}},
-			{Key: "publish", Type: "publish", Name: "Publicar no Gitea", Position: Position{X: 2660, Y: 480}, Config: map[string]any{"integration": "", "owner": "", "repo": "", "pull_request": 0, "medium_severity_event": "COMMENT", "allow_autonomous_rejection": false}},
+			{Key: "publish", Type: "publish", Name: "Publicar no Gitea", Position: Position{X: 2660, Y: 480}, Config: map[string]any{"integration": "", "medium_severity_event": "COMMENT", "allow_autonomous_rejection": false}},
 		},
 		Edges: []Edge{
 			{Key: "trigger-fetch", FromNode: "trigger", FromPort: "event", ToNode: "fetch", ToPort: "event"},
@@ -47,12 +48,11 @@ func OfficialReviewDefinition() Definition {
 	}
 }
 
-// legacyOfficialReviewDefinition identifies only the untouched seed shipped
-// before webhook targets. It is used for an append-only startup upgrade.
-func LegacyOfficialReviewDefinition() Definition {
+// PreviousOfficialReviewDefinition identifies only the untouched seed shipped
+// before typed trigger modes. It is used for an append-only startup upgrade.
+func PreviousOfficialReviewDefinition() Definition {
 	definition := OfficialReviewDefinition()
 	definition.Nodes[0].Name = "Webhook / manual"
 	definition.Nodes[0].Config = nil
-	definition.Edges = definition.Edges[:len(definition.Edges)-1]
 	return definition
 }

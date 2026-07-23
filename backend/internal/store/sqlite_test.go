@@ -236,6 +236,113 @@ VALUES('legacy','Legacy','gitea','{"base_url":"https://gitea.example"}','OLD_TOK
 	}
 }
 
+func TestOpenMigratesFixedPullRequestCoordinatesWithoutChangingVersionIdentity(t *testing.T) {
+	path := "file:" + t.TempDir() + "/fixed-coordinates.db"
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = legacy.Exec(`CREATE TABLE workflow_versions (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_key TEXT NOT NULL, version INTEGER NOT NULL,
+ name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+ definition_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(workflow_key,version));`); err != nil {
+		t.Fatal(err)
+	}
+	sole := workflow.Definition{Key: "sole", Name: "Sole", Nodes: []workflow.Node{
+		{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea", "owner": "acme", "repo": "api", "pull_request": 4}},
+		{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"integration": "gitea", "owner": "acme", "repo": "api", "pull_request": 4}},
+	}}
+	matched := workflow.Definition{Key: "matched", Name: "Matched", Nodes: []workflow.Node{
+		{Key: "fetch-a", Type: "fetch", Name: "Fetch A", Config: map[string]any{"owner": "acme", "repo": "api", "pull_request": 1}},
+		{Key: "fetch-b", Type: "fetch", Name: "Fetch B", Config: map[string]any{"owner": "acme", "repo": "api", "pull_request": 2}},
+		{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"owner": "acme", "repo": "api", "pull_request": 2}},
+	}}
+	soleJSON, _ := json.Marshal(sole)
+	matchedJSON, _ := json.Marshal(matched)
+	if _, err = legacy.Exec(`INSERT INTO workflow_versions(id,workflow_key,version,name,status,definition_json) VALUES(41,'sole',3,'Sole','archived',?),(42,'matched',7,'Matched','published',?)`, string(soleJSON), string(matchedJSON)); err != nil {
+		t.Fatal(err)
+	}
+	if err = legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for _, expectation := range []struct {
+		id, version int64
+		status      string
+		source      string
+	}{{41, 3, "archived", "fetch"}, {42, 7, "published", "fetch-b"}} {
+		definition, loadErr := database.Load(context.Background(), expectation.id)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		for _, node := range definition.Nodes {
+			if node.Type == "fetch" || node.Type == "publish" {
+				for _, key := range []string{"owner", "repo", "pull_request"} {
+					if _, exists := node.Config[key]; exists {
+						t.Fatalf("version %d retained %s on %s: %#v", expectation.id, key, node.Key, node.Config)
+					}
+				}
+			}
+		}
+		if len(definition.Edges) != 1 || definition.Edges[0].FromNode != expectation.source || definition.Edges[0].FromPort != "pull_request" || definition.Edges[0].ToNode != "publish" || definition.Edges[0].ToPort != "pull_request" {
+			t.Fatalf("version %d migrated edges = %#v", expectation.id, definition.Edges)
+		}
+		var version int64
+		var status string
+		if err = database.db.QueryRow(`SELECT version,status FROM workflow_versions WHERE id=?`, expectation.id).Scan(&version, &status); err != nil || version != expectation.version || status != expectation.status {
+			t.Fatalf("version identity %d = %d/%s, %v", expectation.id, version, status, err)
+		}
+	}
+}
+
+func TestOpenRejectsAmbiguousFixedCoordinateMigrationAtomically(t *testing.T) {
+	path := "file:" + t.TempDir() + "/ambiguous-coordinates.db"
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = legacy.Exec(`CREATE TABLE workflow_versions (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_key TEXT NOT NULL, version INTEGER NOT NULL,
+ name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+ definition_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(workflow_key,version));`); err != nil {
+		t.Fatal(err)
+	}
+	definition := workflow.Definition{Key: "ambiguous", Name: "Ambiguous", Nodes: []workflow.Node{
+		{Key: "fetch-a", Type: "fetch", Name: "Fetch A", Config: map[string]any{"owner": "acme", "repo": "api", "pull_request": 1}},
+		{Key: "fetch-b", Type: "fetch", Name: "Fetch B", Config: map[string]any{"owner": "acme", "repo": "api", "pull_request": 1}},
+		{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"owner": "acme", "repo": "api", "pull_request": 1}},
+	}}
+	payload, _ := json.Marshal(definition)
+	if _, err = legacy.Exec(`INSERT INTO workflow_versions(id,workflow_key,version,name,status,definition_json) VALUES(9,'ambiguous',1,'Ambiguous','draft',?)`, string(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if err = legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if database, openErr := Open(path); openErr == nil || !strings.Contains(openErr.Error(), `workflow version 9`) || !strings.Contains(openErr.Error(), `publish card "publish"`) || !strings.Contains(openErr.Error(), "ambiguous") {
+		if database != nil {
+			database.Close()
+		}
+		t.Fatalf("ambiguous migration error = %v", openErr)
+	}
+	check, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Close()
+	var stored string
+	if err = check.QueryRow(`SELECT definition_json FROM workflow_versions WHERE id=9`).Scan(&stored); err != nil || !strings.Contains(stored, `"owner":"acme"`) {
+		t.Fatalf("failed migration changed payload: %s, %v", stored, err)
+	}
+}
+
 func TestPublicationRetryableAttemptCanBeClaimedAgain(t *testing.T) {
 	database, err := Open("file:" + t.TempDir() + "/retry.db")
 	if err != nil {
@@ -291,16 +398,19 @@ func TestQueuedExecutionRecoveryRetainsSelectedTriggerAndInput(t *testing.T) {
 
 func publicationDefinition() workflow.Definition {
 	return workflow.Definition{Key: "publication", Name: "Publication", Nodes: []workflow.Node{
-		{Key: "start", Type: "trigger", Name: "Start"},
+		{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": map[string]any{"pull_request": map[string]any{"owner": "acme", "repo": "review", "number": 7}}}},
+		{Key: "target", Type: "transform", Name: "Target"},
 		{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"template": "review"}},
 		{Key: "model", Type: "model", Name: "Model", Config: map[string]any{"integration": "model"}},
 		{Key: "validate", Type: "validate", Name: "Validate"},
 		{Key: "filter", Type: "response_filter", Name: "Filter"},
 		{Key: "consolidate", Type: "consolidate", Name: "Consolidate"},
 		{Key: "format", Type: "format", Name: "Format"},
-		{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"integration": "gitea", "owner": "acme", "repo": "review", "pull_request": 7}},
+		{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"integration": "gitea"}},
 	}, Edges: []workflow.Edge{
 		{Key: "context", FromNode: "start", FromPort: "event", ToNode: "template", ToPort: "context"},
+		{Key: "target-input", FromNode: "start", FromPort: "event", ToNode: "target", ToPort: "input"},
+		{Key: "target-output", FromNode: "target", FromPort: "output", ToNode: "publish", ToPort: "pull_request"},
 		{Key: "prompt", FromNode: "template", FromPort: "prompt", ToNode: "model", ToPort: "prompt"},
 		{Key: "response", FromNode: "model", FromPort: "response", ToNode: "validate", ToPort: "response"},
 		{Key: "valid", FromNode: "validate", FromPort: "valid", ToNode: "filter", ToPort: "response"},

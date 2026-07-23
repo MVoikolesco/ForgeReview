@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"forgereview/backend/internal/workflow"
@@ -132,7 +133,7 @@ func TestEnsureOfficialReviewWorkflowAppendOnlyUpgradesUntouchedLegacySeed(t *te
 		t.Fatal(err)
 	}
 	defer database.Close()
-	legacyID, err := database.Save(context.Background(), workflow.LegacyOfficialReviewDefinition())
+	legacyID, err := database.Save(context.Background(), workflow.PreviousOfficialReviewDefinition())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +151,18 @@ func TestEnsureOfficialReviewWorkflowAppendOnlyUpgradesUntouchedLegacySeed(t *te
 	definition, err := database.Load(context.Background(), upgraded.ID)
 	if err != nil || len(definition.Edges) != len(workflow.OfficialReviewDefinition().Edges) || definition.Nodes[0].Config["mode"] != "webhook" {
 		t.Fatalf("upgraded definition = %#v, %v", definition, err)
+	}
+}
+
+func TestSaveRejectsFixedPullRequestCoordinates(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/reject-fixed.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	definition := workflow.Definition{Key: "fixed", Name: "Fixed", Nodes: []workflow.Node{{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"owner": "acme"}}}}
+	if _, err = database.Save(context.Background(), definition); err == nil || !strings.Contains(err.Error(), "does not support fixed PR coordinate") {
+		t.Fatalf("fixed coordinate save error = %v", err)
 	}
 }
 

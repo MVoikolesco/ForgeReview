@@ -272,9 +272,10 @@ Gitea webhook registrations use a distinct encrypted signing secret, exact-body
 HMAC-SHA-256 verification, and a delivery ledger that deduplicates identical
 deliveries and rejects ID collisions. Provider payloads are reduced to canonical
 owner/repository/PR coordinates before persistence. New review graphs pass that
-typed target from trigger to fetch and from fetch to publish, while old immutable
-versions retain fixed-coordinate fallback. See [[Architecture]] and
-[[Feature Map]].
+typed target from trigger to fetch and from fetch to publish. Fixed PR fields are
+not a supported compatibility path: startup removes them from stored definitions
+and creates the typed edge where the source is deterministic. Ambiguous graphs
+fail migration explicitly. See [[Architecture]] and [[Feature Map]].
 
 ## 2026-07-23: Truthful catalog and provider request contracts
 

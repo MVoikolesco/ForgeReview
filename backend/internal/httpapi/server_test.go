@@ -320,8 +320,8 @@ func TestExecutionListProvidesOnlySafeSummaryAndValidatesLimit(t *testing.T) {
 	defer database.Close()
 	definition := workflow.Definition{Key: "review", Name: "Review", Nodes: []workflow.Node{
 		{Key: "start", Type: "trigger", Name: "Start"},
-		{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea-secret-key", "owner": "acme", "repo": "api", "pull_request": 42}},
-		{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"integration": "gitea-secret-key", "owner": "acme", "repo": "api", "pull_request": 42}},
+		{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea-secret-key"}},
+		{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"integration": "gitea-secret-key"}},
 	}}
 	versionID, err := database.Save(context.Background(), definition)
 	if err != nil {

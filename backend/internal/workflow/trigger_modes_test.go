@@ -52,21 +52,27 @@ func TestRunFromTriggerIgnoresInactiveInputsAtConvergedNode(t *testing.T) {
 	}
 }
 
-func TestFetchAndPublishPreferDynamicPullRequestTarget(t *testing.T) {
+func TestFetchAndPublishRequireDynamicPullRequestTargets(t *testing.T) {
 	config, _ := json.Marshal(map[string]string{"base_url": "https://gitea.example"})
 	item := encryptedIntegration(t, integration.Integration{Key: "gitea", Name: "Gitea", Type: integration.TypeGitea, Config: config, Status: integration.StatusActive}, "token")
 	reader := &targetReader{}
-	fetch := Node{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea", "owner": "legacy", "repo": "legacy", "pull_request": 1}}
+	fetch := Node{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea"}}
 	outputs, err := execute(context.Background(), fetch, map[string][]any{"event": {map[string]any{"pull_request": map[string]any{"owner": "acme", "repo": "api", "number": 42}}}}, nil, Adapters{Integrations: memoryIntegrations{"gitea": item}, Secrets: testSecrets(t), Gitea: reader}, rootScope)
 	if err != nil || reader.request.Owner != "acme" || reader.request.Repo != "api" || reader.request.Number != 42 {
 		t.Fatalf("dynamic fetch target = %#v, outputs = %#v, err = %v", reader.request, outputs, err)
 	}
 	publisher := &recordingPublisher{}
 	ledger := &recordingPublicationLedger{}
-	publish := Node{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"integration": "gitea", "owner": "legacy", "repo": "legacy", "pull_request": 1}}
+	publish := Node{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"integration": "gitea"}}
 	_, err = publishReview(context.Background(), publish, map[string][]any{"formatted_review": {FormattedReview{}}, "pull_request": {outputs["pull_request"]}}, Adapters{Integrations: memoryIntegrations{"gitea": item}, Secrets: testSecrets(t), GiteaWriter: publisher, Publications: ledger, Execution: ExecutionContext{ID: 1, VersionID: 1}}, rootScope)
 	if err != nil || len(publisher.requests) != 1 || publisher.requests[0].Owner != "acme" || publisher.requests[0].Repo != "api" || publisher.requests[0].Number != 42 {
 		t.Fatalf("dynamic publish target = %#v, err = %v", publisher.requests, err)
+	}
+	if _, err = execute(context.Background(), fetch, map[string][]any{"event": {map[string]any{}}}, nil, Adapters{Integrations: memoryIntegrations{"gitea": item}, Secrets: testSecrets(t), Gitea: reader}, rootScope); err == nil {
+		t.Fatal("fetch without a typed event target should fail")
+	}
+	if _, err = publishReview(context.Background(), publish, map[string][]any{"formatted_review": {FormattedReview{}}}, Adapters{Integrations: memoryIntegrations{"gitea": item}, Secrets: testSecrets(t), GiteaWriter: publisher, Publications: ledger, Execution: ExecutionContext{ID: 2, VersionID: 1}}, rootScope); err == nil {
+		t.Fatal("publish without a pull_request input should fail")
 	}
 }
 

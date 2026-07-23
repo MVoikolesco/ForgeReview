@@ -115,7 +115,7 @@
   Redis values through an explicit runner adapter. Cache misses emit a nil value;
   deletes emit no output. Its Inspector provides key, mode, and write-TTL fields.
 - Safe execution summaries: `GET /api/executions?limit=10` exposes bounded
-  status/timestamp/workflow metadata and configured PR owner/repo/number only;
+  status/timestamp/workflow metadata and canonical runtime PR context only;
   it excludes node data, errors, execution inputs, and secret material.
 - Accessible selection controls: a shared polished switch replaces native
   checkbox presentation across Inspector booleans and repository/model

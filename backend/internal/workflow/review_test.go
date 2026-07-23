@@ -11,6 +11,12 @@ import (
 	"forgereview/backend/internal/integration"
 )
 
+type staticPullRequestReader struct{ files []map[string]any }
+
+func (reader staticPullRequestReader) ReadPullRequest(_ context.Context, _ integration.Integration, _ string, _ integration.PullRequestRequest) (integration.PullRequest, error) {
+	return integration.PullRequest{Files: reader.files}, nil
+}
+
 func TestRunFiltersFetchedFilesAndGroupsDeterministically(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
@@ -35,7 +41,7 @@ func TestRunFiltersFetchedFilesAndGroupsDeterministically(t *testing.T) {
 	config, _ := json.Marshal(map[string]string{"base_url": server.URL})
 	definition := Definition{Key: "filter-group", Name: "Filter group", Nodes: []Node{
 		{Key: "start", Type: "trigger", Name: "Start"},
-		{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea", "owner": "acme", "repo": "api", "pull_request": 12}},
+		{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea"}},
 		{Key: "filter", Type: "filter", Name: "Filter", Config: map[string]any{"include_extensions": []any{"go", ".ts", ".js"}, "exclude_extensions": []any{".js"}, "ignore_generated": true}},
 		{Key: "group", Type: "group", Name: "Group", Config: map[string]any{"max_files": 2, "max_characters": 8, "group_by_extension": true}},
 	}, Edges: []Edge{
@@ -44,7 +50,7 @@ func TestRunFiltersFetchedFilesAndGroupsDeterministically(t *testing.T) {
 		{Key: "filtered", FromNode: "filter", FromPort: "files", ToNode: "group", ToPort: "files"},
 	}}
 	adapters := Adapters{Integrations: memoryIntegrations{"gitea": encryptedIntegration(t, integration.Integration{Key: "gitea", Name: "Gitea", Type: integration.TypeGitea, Config: config, Status: integration.StatusActive}, "secret")}, Secrets: testSecrets(t), Gitea: integration.HTTPGiteaClient{Client: server.Client()}}
-	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, adapters)
+	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), map[string]any{"pull_request": map[string]any{"owner": "acme", "repo": "api", "number": 12}}, adapters)
 	if err != nil {
 		t.Fatalf("run workflow: %v", err)
 	}
@@ -231,8 +237,8 @@ func TestRunAggregatesScopedReviewFindingsAndPublishesOnceAtRoot(t *testing.T) {
 		{"filename": "b.go", "patch": "package b"},
 	}
 	definition := Definition{Key: "scoped-review", Name: "Scoped review", Nodes: []Node{
-		{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": files}},
-		{Key: "prepare", Type: "transform", Name: "Prepare"},
+		{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": map[string]any{"pull_request": map[string]any{"owner": "acme", "repo": "review", "number": 7}}}},
+		{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea"}},
 		{Key: "group", Type: "group", Name: "Group", Config: map[string]any{"max_files": 1, "max_characters": 100}},
 		{Key: "loop", Type: "loop", Name: "Loop", Config: map[string]any{"max_iterations": 2, "concurrency": 1}},
 		{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"template": "review"}},
@@ -241,10 +247,10 @@ func TestRunAggregatesScopedReviewFindingsAndPublishesOnceAtRoot(t *testing.T) {
 		{Key: "response-filter", Type: "response_filter", Name: "Filter", Config: map[string]any{"minimum_severity": "medium"}},
 		{Key: "consolidate", Type: "consolidate", Name: "Consolidate"},
 		{Key: "format", Type: "format", Name: "Format"},
-		{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"integration": "gitea", "owner": "acme", "repo": "review", "pull_request": 7}},
+		{Key: "publish", Type: "publish", Name: "Publish", Config: map[string]any{"integration": "gitea"}},
 	}, Edges: []Edge{
-		{Key: "event", FromNode: "start", FromPort: "event", ToNode: "prepare", ToPort: "input"},
-		{Key: "files", FromNode: "prepare", FromPort: "output", ToNode: "group", ToPort: "files"},
+		{Key: "event", FromNode: "start", FromPort: "event", ToNode: "fetch", ToPort: "event"},
+		{Key: "files", FromNode: "fetch", FromPort: "files", ToNode: "group", ToPort: "files"},
 		{Key: "groups", FromNode: "group", FromPort: "groups", ToNode: "loop", ToPort: "items"},
 		{Key: "context", FromNode: "loop", FromPort: "item", ToNode: "template", ToPort: "context"},
 		{Key: "prompt", FromNode: "template", FromPort: "prompt", ToNode: "model", ToPort: "prompt"},
@@ -254,6 +260,7 @@ func TestRunAggregatesScopedReviewFindingsAndPublishesOnceAtRoot(t *testing.T) {
 		{Key: "results", FromNode: "loop", FromPort: "results", ToNode: "consolidate", ToPort: "comments"},
 		{Key: "review", FromNode: "consolidate", FromPort: "review", ToNode: "format", ToPort: "review"},
 		{Key: "formatted", FromNode: "format", FromPort: "formatted", ToNode: "publish", ToPort: "formatted_review"},
+		{Key: "target", FromNode: "fetch", FromPort: "pull_request", ToNode: "publish", ToPort: "pull_request"},
 	}}
 	giteaConfig, err := json.Marshal(map[string]string{"base_url": "https://gitea.example"})
 	if err != nil {
@@ -271,6 +278,7 @@ func TestRunAggregatesScopedReviewFindingsAndPublishesOnceAtRoot(t *testing.T) {
 			"gitea": encryptedIntegration(t, integration.Integration{Key: "gitea", Name: "Gitea", Type: integration.TypeGitea, Config: giteaConfig, Status: integration.StatusActive}, "gitea-secret"),
 		},
 		Secrets:      testSecrets(t),
+		Gitea:        staticPullRequestReader{files: files},
 		OpenAI:       model,
 		GiteaWriter:  publisher,
 		Publications: ledger,
