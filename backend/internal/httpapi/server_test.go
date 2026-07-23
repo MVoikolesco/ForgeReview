@@ -3,6 +3,9 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -206,6 +209,77 @@ func TestExecutionStartQueuesWhenDispatcherConfigured(t *testing.T) {
 	}
 }
 
+func TestSignedGiteaWebhookRegistersQueuesDeduplicatesAndRejectsCollision(t *testing.T) {
+	database, err := store.Open("file:" + t.TempDir() + "/webhook.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	definition := workflow.Definition{Key: "review", Name: "Review", Nodes: []workflow.Node{{Key: "gitea", Type: "trigger", Name: "Gitea", Config: map[string]any{"mode": "webhook"}}}}
+	versionID, err := database.Save(context.Background(), definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Publish(context.Background(), versionID, workflow.DefaultCatalog()); err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := integration.NewEncryptedSecrets("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := &recordingDispatcher{}
+	router := New(workflow.DefaultCatalog(), database, workflow.Adapters{Secrets: secrets, Dispatcher: dispatcher})
+	registration := httptest.NewRecorder()
+	router.ServeHTTP(registration, httptest.NewRequest(http.MethodPost, "/api/webhook-registrations", bytes.NewBufferString(`{"key":"gitea-review","name":"Gitea Review","workflow_key":"review","trigger_node_key":"gitea","secret":"signing-secret","active":true}`)))
+	if registration.Code != http.StatusCreated || strings.Contains(registration.Body.String(), "signing-secret") || strings.Contains(registration.Body.String(), "secret_ciphertext") {
+		t.Fatalf("registration = %d %s", registration.Code, registration.Body.String())
+	}
+	stored, err := database.WebhookRegistration(context.Background(), "gitea-review")
+	if err != nil || stored.SecretCiphertext == "" || strings.Contains(stored.SecretCiphertext, "signing-secret") {
+		t.Fatalf("stored registration = %#v, %v", stored, err)
+	}
+
+	body := []byte(`{"action":"synchronized","number":42,"repository":{"name":"api","owner":{"login":"acme"}},"pull_request":{"number":42}}`)
+	requestWebhook := func(delivery string, payload []byte, signature string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/webhooks/gitea/gitea-review", bytes.NewReader(payload))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-Gitea-Event", "pull_request")
+		request.Header.Set("X-Gitea-Delivery", delivery)
+		request.Header.Set("X-Gitea-Signature", signature)
+		router.ServeHTTP(response, request)
+		return response
+	}
+	sign := func(payload []byte) string {
+		mac := hmac.New(sha256.New, []byte("signing-secret"))
+		_, _ = mac.Write(payload)
+		return hex.EncodeToString(mac.Sum(nil))
+	}
+	if response := requestWebhook("delivery-1", body, strings.Repeat("0", 64)); response.Code != http.StatusUnauthorized {
+		t.Fatalf("bad signature = %d %s", response.Code, response.Body.String())
+	}
+	first := requestWebhook("delivery-1", body, sign(body))
+	if first.Code != http.StatusAccepted || len(dispatcher.ids) != 1 || !strings.Contains(first.Body.String(), `"duplicate":false`) {
+		t.Fatalf("first delivery = %d %s; IDs = %#v", first.Code, first.Body.String(), dispatcher.ids)
+	}
+	duplicate := requestWebhook("delivery-1", body, sign(body))
+	if duplicate.Code != http.StatusAccepted || len(dispatcher.ids) != 1 || !strings.Contains(duplicate.Body.String(), `"duplicate":true`) {
+		t.Fatalf("duplicate delivery = %d %s; IDs = %#v", duplicate.Code, duplicate.Body.String(), dispatcher.ids)
+	}
+	collisionBody := bytes.Replace(body, []byte(`"number":42`), []byte(`"number":43`), 2)
+	collision := requestWebhook("delivery-1", collisionBody, sign(collisionBody))
+	if collision.Code != http.StatusConflict || len(dispatcher.ids) != 1 {
+		t.Fatalf("collision = %d %s; IDs = %#v", collision.Code, collision.Body.String(), dispatcher.ids)
+	}
+	missingHeaders := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/webhooks/gitea/gitea-review", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(missingHeaders, request)
+	if missingHeaders.Code != http.StatusBadRequest {
+		t.Fatalf("missing headers = %d %s", missingHeaders.Code, missingHeaders.Body.String())
+	}
+}
+
 func TestWorkflowPublishLifecycleAndListContract(t *testing.T) {
 	database, err := store.Open("file:" + t.TempDir() + "/workflow-lifecycle.db")
 	if err != nil {
@@ -253,7 +327,7 @@ func TestExecutionListProvidesOnlySafeSummaryAndValidatesLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = database.CreateExecution(context.Background(), versionID, map[string]any{"token": "must-not-leak"}); err != nil {
+	if _, err = database.CreateExecution(context.Background(), versionID, map[string]any{"token": "must-not-leak", "pull_request": map[string]any{"owner": "dynamic", "repo": "service", "number": 73}, "ignored": map[string]any{"secret": "hidden"}}); err != nil {
 		t.Fatal(err)
 	}
 	router := New(workflow.DefaultCatalog(), database)
@@ -263,10 +337,10 @@ func TestExecutionListProvidesOnlySafeSummaryAndValidatesLimit(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("list status = %d: %s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"owner":"acme"`) || !strings.Contains(response.Body.String(), `"pull_request":42`) {
+	if !strings.Contains(response.Body.String(), `"owner":"dynamic"`) || !strings.Contains(response.Body.String(), `"repo":"service"`) || !strings.Contains(response.Body.String(), `"pull_request":73`) {
 		t.Fatalf("missing review context: %s", response.Body.String())
 	}
-	for _, forbidden := range []string{"token", "must-not-leak", "gitea-secret-key", "nodes", "error"} {
+	for _, forbidden := range []string{"token", "must-not-leak", "hidden", "ignored", "gitea-secret-key", "nodes", "error"} {
 		if strings.Contains(response.Body.String(), forbidden) {
 			t.Fatalf("execution summary exposed %q: %s", forbidden, response.Body.String())
 		}

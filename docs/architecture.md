@@ -213,8 +213,10 @@ they do not create comments or call an external destination.
   `critical`), a proposed event/status, and inline observations (`path`, `body`,
   `new_position`) derived from each validated finding. High or critical findings
   propose `REQUEST_CHANGES`; all other findings propose `COMMENT`.
-- `publish` consumes `formatted_review` and requires `config.integration`,
-  `owner`, `repo`, and positive `pull_request`. The integration must be active
+- `publish` consumes `formatted_review` and an optional typed `pull_request`
+  target. `fetch` accepts the canonical target from its trigger event and emits
+  that target with the fetched PR. Both prefer the dynamic target and fall back
+  to configured `owner`, `repo`, and positive `pull_request`. The integration must be active
   and Gitea. Its writer creates one native Gitea PR review at
   `pulls/{number}/reviews`, with the final event and inline comments. High and
   critical proposals are downgraded to `COMMENT` unless
@@ -240,6 +242,9 @@ or reconciliation of an uncertain external review result remain out of scope.
 When `FORGEREVIEW_REDIS_URL` is set, startup verifies Redis and starts a worker
 using its list-backed execution-ID queue. The worker atomically claims a queued
 SQLite execution before running it, making duplicate queue deliveries harmless.
+Before the worker starts, every still-queued SQLite execution ID is re-enqueued;
+the persisted selected trigger and input therefore survive process restarts and
+temporary enqueue failures.
 `GET /api/executions/:id` remains the status API and reports `queued`, `running`,
 `completed`, or `failed` plus completed node reports. If Redis is unavailable,
 startup fails unless local development explicitly sets
@@ -318,7 +323,8 @@ OpenAI-compatible adapter; both Ollama choices use the Ollama adapter. The
 OpenAI-compatible URL normalizer accepts a versioned base such as
 `https://openrouter.ai/api/v1` without appending a duplicate `/v1`.
 
-Selecting a card opens its inspector. The inspector edits its display name and
+The explicit card edit action opens its inspector; ordinary selection does not.
+The inspector edits its display name and
 the supported configuration fields: Gitea connection/PR coordinates for fetch
 and publish, reusable model selection and output limit for model, templates,
 file filters, group bounds, conditions and review validation/filter policies.

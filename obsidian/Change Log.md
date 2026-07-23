@@ -2,6 +2,21 @@
 
 ## 2026-07-22
 
+- Added typed manual/API/webhook triggers, selected-branch execution, encrypted
+  Gitea webhook registrations, signature and delivery-ID validation, durable
+  queued recovery, and dynamic PR context from trigger through fetch/publication.
+  Added authenticated API and Postman examples. See [[Architecture]] and
+  [[Decision Log]].
+
+- Simplified the Studio header into compact identity/status, visible publish and
+  save/run actions, and one accessible overflow menu. The Inspector now starts
+  closed, opens explicitly from card edit controls, closes on pane clicks, and
+  releases responsive canvas width. Card and keyboard deletion is immediate and
+  removes incident edges; viewers have no active card edit/delete affordances.
+  Stable React-context actions remain outside persisted card data, and manual
+  JSON moved into the trigger run modal. Added manual-trigger regression
+  coverage. See [[Architecture]], [[Feature Map]], and [[Decision Log]].
+
 - Overhauled integration setup and lifecycle UX. Gitea now validates, selects an
   organization, and discovers only its repositories before multi-selection;
   Ollama/OpenRouter validate into searchable discovered-model selection with no

@@ -9,9 +9,41 @@
 }
 
 .inspector header {
-    display: grid;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
     gap: 5px;
     margin-bottom: 22px;
+}
+
+.inspector header div {
+    display: grid;
+    gap: 5px;
+}
+
+.inspector header button {
+    @include control;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    color: #aeb9c8;
+    cursor: pointer;
+}
+
+.inspector header button:hover { color: #fff; background: #202630; }
+
+.inspector header button:focus-visible {
+    outline: 2px solid #70a5ff;
+    outline-offset: 2px;
+}
+
+.fields {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
 }
 
 .inspector header span,
@@ -115,6 +147,13 @@
 
 @media (max-width: $breakpoint-tablet) {
     .inspector {
-        display: none;
+        position: absolute;
+        z-index: 12;
+        top: 58px;
+        right: 0;
+        bottom: 0;
+        width: min(340px, 92vw);
+        border-left-color: #3b4655;
+        box-shadow: -18px 0 45px #0009;
     }
 }

@@ -9,6 +9,7 @@ import type {
   WorkflowDefinition,
   WorkflowSummary,
   WorkflowVersionSummary,
+  WebhookRegistration,
 } from "./types";
 
 export const apiURL =
@@ -160,7 +161,7 @@ export const publishWorkflow = (versionID: number) =>
       method: "POST",
     },
   );
-export const executeWorkflow = (versionID: number) =>
+export const executeWorkflow = (versionID: number, triggerNode: string, payload: Record<string, unknown>) =>
   request<{
     execution_id?: number;
     report?: import("./types").ExecutionReport;
@@ -169,9 +170,16 @@ export const executeWorkflow = (versionID: number) =>
   }>(`/api/workflow-versions/${versionID}/executions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source: "studio" }),
+    body: JSON.stringify({ trigger_node: triggerNode, payload }),
   });
 export const getExecution = (executionID: number) =>
   request<import("./types").ExecutionReport>(`/api/executions/${executionID}`);
 export const getExecutions = (limit = 10) =>
   request<ExecutionSummary[]>(`/api/executions?limit=${limit}`);
+export const getWebhookRegistrations = () =>
+  request<WebhookRegistration[]>("/api/webhook-registrations");
+export const saveWebhookRegistration = (registration: {
+  key: string; name: string; workflow_key: string; trigger_node_key: string; secret: string; active: boolean;
+}) => request<WebhookRegistration>("/api/webhook-registrations", {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(registration),
+});

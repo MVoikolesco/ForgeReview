@@ -4,6 +4,42 @@
     font-size: 13px;
 }
 
+.actions {
+    display: flex;
+    gap: 3px;
+    margin-left: 2px;
+}
+
+.actions button {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    color: #9dabbc;
+    background: transparent;
+    cursor: pointer;
+}
+
+.actions button:hover {
+    border-color: #3b4655;
+    color: #f4f7fb;
+    background: #222832;
+}
+
+.actions button:last-child:hover {
+    border-color: #7f3d4b;
+    color: #ffb5c1;
+    background: #351a21;
+}
+
+.actions button:focus-visible {
+    outline: 2px solid #70a5ff;
+    outline-offset: 1px;
+}
+
 .port {
     position: relative;
     display: flex;

@@ -6,6 +6,7 @@ import {
   canPublishVersion,
   hasErrorRoute,
   hydrateDefinition,
+  isManualTrigger,
   localCards,
   reviewTemplate,
   removeSelectedElements,
@@ -223,6 +224,15 @@ test("removing selected cards also removes their connected edges without touchin
   assert.equal(result.removedEdges, 3);
 });
 
+test("Studio manual execution only offers trigger cards in manual mode", () => {
+  const trigger = starterNodes.find((node) => node.id === "trigger");
+  assert.ok(trigger);
+  assert.equal(isManualTrigger(trigger.data), true);
+  assert.equal(isManualTrigger({ ...trigger.data, config: { mode: "api" } }), false);
+  assert.equal(isManualTrigger({ ...trigger.data, config: { mode: "webhook" } }), false);
+  assert.equal(isManualTrigger({ ...trigger.data, type: "fetch", config: { mode: "manual" } }), false);
+});
+
 test("repeated React Flow selection reports do not require another Studio state update", () => {
   assert.equal(selectionHasChanged(["transform"], ["transform"]), false);
   assert.equal(selectionHasChanged(["transform"], ["condition"]), true);
@@ -284,6 +294,7 @@ test("review template scopes group review through loop before one root publicati
       ["loop", "out-results", "consolidate", "in-comments"],
       ["consolidate", "out-review", "format", "in-review"],
       ["format", "out-formatted", "publish", "in-formatted_review"],
+      ["fetch", "out-pull_request", "publish", "in-pull_request"],
     ],
   );
   assert.deepEqual(

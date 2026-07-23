@@ -1,4 +1,6 @@
-import type { CardData, Integration, ModelProfile } from "../../lib/types";
+import { useState } from "react";
+import { X } from "lucide-react";
+import type { CardData, Integration, ModelProfile, WebhookRegistration } from "../../lib/types";
 import { configList, configNumber, configText } from "../../lib/workflow";
 import styles from "./CardInspector.module.scss";
 
@@ -9,6 +11,11 @@ export function CardInspector({
   hasErrorRoute,
   onChange,
   readOnly = false,
+  webhookRegistrations = [],
+  canAdministerWebhooks = false,
+  workflowKey,
+  onRegisterWebhook,
+  onClose,
 }: {
   selected: CardData;
   integrations: Integration[];
@@ -16,7 +23,16 @@ export function CardInspector({
   hasErrorRoute: boolean;
   onChange: (patch: Partial<CardData>) => void;
   readOnly?: boolean;
+  webhookRegistrations?: WebhookRegistration[];
+  canAdministerWebhooks?: boolean;
+  workflowKey: string;
+  onRegisterWebhook?: (input: { key: string; name: string; workflow_key: string; trigger_node_key: string; secret: string; active: boolean }) => Promise<void>;
+  onClose: () => void;
 }) {
+  const [webhookKey, setWebhookKey] = useState("");
+  const [webhookName, setWebhookName] = useState("");
+  const [webhookSecret, setWebhookSecret] = useState("");
+  const [webhookBusy, setWebhookBusy] = useState(false);
   const updateConfig = (key: string, value: unknown) =>
     !readOnly && onChange({ config: { ...selected.config, [key]: value } });
   const gitea = integrations.filter(
@@ -78,9 +94,15 @@ export function CardInspector({
       aria-label="Inspector do card selecionado"
     >
       <header>
-        <span>CONFIGURAÇÃO</span>
-        <b>{selected.name}</b>
+        <div>
+          <span>CONFIGURAÇÃO</span>
+          <b>{selected.name}</b>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Fechar Inspector" title="Fechar Inspector">
+          <X size={16} aria-hidden="true" />
+        </button>
       </header>
+      <fieldset className={styles.fields} disabled={readOnly}>
       <label>
         Nome do card
         <input
@@ -99,6 +121,42 @@ export function CardInspector({
       </dl>
       <section className={styles.config}>
         <strong>Parâmetros</strong>
+        {selected.type === "trigger" && (
+          <>
+            <label>
+              Modo de acionamento
+              <select value={configText(selected.config.mode) || "manual"} onChange={(event) => updateConfig("mode", event.target.value)}>
+                <option value="manual">Manual (Studio)</option>
+                <option value="api">API autenticada</option>
+                <option value="webhook">Webhook Gitea</option>
+              </select>
+            </label>
+            {(configText(selected.config.mode) || "manual") === "api" && (
+              <small>Após publicar, envie POST para <code>/api/workflows/{workflowKey}/triggers/{selected.key}/executions</code> com um objeto JSON.</small>
+            )}
+            {configText(selected.config.mode) === "webhook" && (
+              <section>
+                <small>Publique este trigger antes de registrar. O segredo é criptografado separadamente e nunca volta para o navegador.</small>
+                {webhookRegistrations.filter((item) => item.workflow_key === workflowKey && item.trigger_node_key === selected.key).map((item) => (
+                  <p key={item.key}><b>{item.name}</b> · <code>/webhooks/gitea/{item.key}</code> · {item.active ? "ativo" : "inativo"}</p>
+                ))}
+                {canAdministerWebhooks && (
+                  <>
+                    <label>Chave pública<input value={webhookKey} onChange={(event) => setWebhookKey(event.target.value)} placeholder="gitea-review" /></label>
+                    <label>Nome<input value={webhookName} onChange={(event) => setWebhookName(event.target.value)} placeholder="Gitea principal" /></label>
+                    <label>Segredo de assinatura<input type="password" autoComplete="new-password" value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} /></label>
+                    <button type="button" disabled={webhookBusy || !webhookKey || !webhookName || !webhookSecret} onClick={async () => {
+                      if (!onRegisterWebhook) return;
+                      setWebhookBusy(true);
+                      try { await onRegisterWebhook({ key: webhookKey, name: webhookName, workflow_key: workflowKey, trigger_node_key: selected.key, secret: webhookSecret, active: true }); setWebhookSecret(""); }
+                      finally { setWebhookBusy(false); }
+                    }}>{webhookBusy ? "Registrando..." : "Registrar webhook"}</button>
+                  </>
+                )}
+              </section>
+            )}
+          </>
+        )}
         {selected.type === "template" && (
           <label>
             Template
@@ -385,6 +443,7 @@ export function CardInspector({
         )}
         {![
           "template",
+          "trigger",
           "fetch",
           "model",
           "publish",
@@ -428,6 +487,7 @@ export function CardInspector({
         O backend valida cada conexão e configuração antes de executar uma
         versão.
       </p>
+      </fieldset>
     </aside>
   );
 }

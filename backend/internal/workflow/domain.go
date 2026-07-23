@@ -104,6 +104,16 @@ type ExecutionReviewContext struct {
 	PullRequest int    `json:"pull_request"`
 }
 
+type WebhookRegistration struct {
+	Key              string `json:"key"`
+	Name             string `json:"name"`
+	WorkflowKey      string `json:"workflow_key"`
+	TriggerNodeKey   string `json:"trigger_node_key"`
+	SecretCiphertext string `json:"-"`
+	Active           bool   `json:"active"`
+	SecretConfigured bool   `json:"secret_configured"`
+}
+
 func Validate(definition Definition, catalog Catalog) error {
 	if definition.Key == "" || definition.Name == "" {
 		return fmt.Errorf("workflow key and name are required")
@@ -136,6 +146,11 @@ func Validate(definition Definition, catalog Catalog) error {
 		}
 		if node.Type == "cache" {
 			if _, err := cacheSettingsFor(node); err != nil {
+				return err
+			}
+		}
+		if node.Type == "trigger" {
+			if _, err := TriggerMode(node); err != nil {
 				return err
 			}
 		}
@@ -191,6 +206,18 @@ func Validate(definition Definition, catalog Catalog) error {
 		}
 	}
 	return nil
+}
+
+// TriggerMode keeps definitions created before trigger modes compatible.
+func TriggerMode(node Node) (string, error) {
+	mode, _ := node.Config["mode"].(string)
+	if mode == "" {
+		return "manual", nil
+	}
+	if mode != "manual" && mode != "api" && mode != "webhook" {
+		return "", fmt.Errorf("trigger card %q config.mode must be \"manual\", \"api\", or \"webhook\"", node.Key)
+	}
+	return mode, nil
 }
 
 // validateSafeConfig prevents credentials and encrypted secret blobs from

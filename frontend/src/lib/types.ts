@@ -130,3 +130,12 @@ export type ExecutionSummary = {
   workflow: { key: string; name: string; version: number };
   review?: { owner: string; repo: string; pull_request: number };
 };
+
+export type WebhookRegistration = {
+  key: string;
+  name: string;
+  workflow_key: string;
+  trigger_node_key: string;
+  active: boolean;
+  secret_configured: boolean;
+};

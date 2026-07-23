@@ -126,6 +126,33 @@ func TestEnsureOfficialReviewWorkflowSeedsOnceWithoutChangingUserWorkflows(t *te
 	}
 }
 
+func TestEnsureOfficialReviewWorkflowAppendOnlyUpgradesUntouchedLegacySeed(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/official-upgrade.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	legacyID, err := database.Save(context.Background(), workflow.LegacyOfficialReviewDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Publish(context.Background(), legacyID, workflow.DefaultCatalog()); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, seeded, err := database.EnsureOfficialReviewWorkflow(context.Background(), workflow.DefaultCatalog())
+	if err != nil || !seeded || upgraded.Version != 2 || upgraded.Status != workflow.VersionStatusPublished {
+		t.Fatalf("official upgrade = %#v, %t, %v", upgraded, seeded, err)
+	}
+	items, err := database.ListDefinitions(context.Background())
+	if err != nil || len(items) != 1 || len(items[0].Versions) != 2 || items[0].Versions[0].Status != workflow.VersionStatusArchived || items[0].Versions[1].Status != workflow.VersionStatusPublished {
+		t.Fatalf("append-only versions = %#v, %v", items, err)
+	}
+	definition, err := database.Load(context.Background(), upgraded.ID)
+	if err != nil || len(definition.Edges) != len(workflow.OfficialReviewDefinition().Edges) || definition.Nodes[0].Config["mode"] != "webhook" {
+		t.Fatalf("upgraded definition = %#v, %v", definition, err)
+	}
+}
+
 func versionedDefinition(name string) workflow.Definition {
 	return workflow.Definition{Key: "review", Name: name, Nodes: []workflow.Node{{Key: "start", Type: "trigger", Name: "Start"}}}
 }

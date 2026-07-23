@@ -2,12 +2,19 @@ package httpapi
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"forgereview/backend/internal/auth"
@@ -60,6 +67,9 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 	})
 	router.Use(gin.Logger(), gin.Recovery())
 	router.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
+	router.POST("/webhooks/gitea/:registration", func(c *gin.Context) {
+		handleGiteaWebhook(c, workflows, adapters)
+	})
 	api := router.Group("/api")
 	discovery := integration.HTTPDiscoveryAdapter{}
 	api.POST("/auth/login", func(c *gin.Context) {
@@ -120,6 +130,52 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		api.Use(authenticate(manager))
 	}
 	api.GET("/cards", func(c *gin.Context) { c.JSON(http.StatusOK, catalog.All()) })
+	api.GET("/webhook-registrations", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+		items, err := workflows.WebhookRegistrations(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not list webhook registrations"})
+			return
+		}
+		c.JSON(http.StatusOK, items)
+	})
+	api.POST("/webhook-registrations", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+		var request struct {
+			Key            string `json:"key"`
+			Name           string `json:"name"`
+			WorkflowKey    string `json:"workflow_key"`
+			TriggerNodeKey string `json:"trigger_node_key"`
+			Secret         string `json:"secret"`
+			Active         *bool  `json:"active"`
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
+		decoder := json.NewDecoder(c.Request.Body)
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&request) != nil || decoder.Decode(&struct{}{}) != io.EOF || adapters.Secrets == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid webhook registration"})
+			return
+		}
+		versionID, definition, err := workflows.PublishedVersion(c.Request.Context(), request.WorkflowKey)
+		_ = versionID
+		if err != nil || triggerMode(definition, request.TriggerNodeKey) != "webhook" {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "registration requires a published webhook trigger"})
+			return
+		}
+		ciphertext, err := adapters.Secrets.Encrypt("webhook:"+request.Key, request.Secret)
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "webhook secret is required"})
+			return
+		}
+		active := true
+		if request.Active != nil {
+			active = *request.Active
+		}
+		item := workflow.WebhookRegistration{Key: request.Key, Name: request.Name, WorkflowKey: request.WorkflowKey, TriggerNodeKey: request.TriggerNodeKey, SecretCiphertext: ciphertext, Active: active, SecretConfigured: true}
+		if err = workflows.UpsertWebhookRegistration(c.Request.Context(), item); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "could not save webhook registration"})
+			return
+		}
+		c.JSON(http.StatusCreated, item)
+	})
 	api.POST("/integrations", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
 		var request struct {
 			Key    string          `json:"key"`
@@ -415,7 +471,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		decoder := json.NewDecoder(c.Request.Body)
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&profile); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "request body must contain one JSON object"})
 			return
 		}
 		if err := workflows.CreateModelProfile(c.Request.Context(), profile); err != nil {
@@ -509,19 +565,40 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load workflow"})
 			return
 		}
-		var input map[string]any
-		if err = c.ShouldBindJSON(&input); err != nil {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
+		var request map[string]any
+		decoder := json.NewDecoder(c.Request.Body)
+		if err = decoder.Decode(&request); err != nil || request == nil || decoder.Decode(&struct{}{}) != io.EOF {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		executionID, err := workflows.CreateExecution(c.Request.Context(), id, input)
+		triggerNode, _ := request["trigger_node"].(string)
+		input := map[string]any{}
+		if payload, supplied := request["payload"]; supplied {
+			var valid bool
+			input, valid = payload.(map[string]any)
+			if !valid || input == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "payload must be a JSON object"})
+				return
+			}
+		} else {
+			input = request
+			delete(input, "trigger_node")
+		}
+		if triggerNode == "" {
+			triggerNode = soleTrigger(definition, "manual")
+		}
+		if triggerMode(definition, triggerNode) != "manual" {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "execution requires a selected manual trigger"})
+			return
+		}
+		executionID, err := workflows.CreateTriggeredExecution(c.Request.Context(), id, triggerNode, input)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist execution"})
 			return
 		}
 		if adapters.Dispatcher != nil {
 			if err = adapters.Dispatcher.Enqueue(c.Request.Context(), executionID); err != nil {
-				_ = workflows.FailQueuedExecution(c.Request.Context(), executionID)
 				c.JSON(http.StatusServiceUnavailable, gin.H{"execution_id": executionID, "error": "could not dispatch execution"})
 				return
 			}
@@ -534,7 +611,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		}
 		runAdapters := adapters
 		runAdapters.Execution = workflow.ExecutionContext{ID: executionID, VersionID: id}
-		report, runErr := workflow.RunWithAdapters(c.Request.Context(), definition, catalog, input, runAdapters)
+		report, runErr := workflow.RunFromTriggerWithAdapters(c.Request.Context(), definition, catalog, triggerNode, input, runAdapters)
 		if err = workflows.CompleteExecution(c.Request.Context(), executionID, report); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist execution"})
 			return
@@ -544,6 +621,47 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 			return
 		}
 		c.JSON(http.StatusCreated, gin.H{"execution_id": executionID, "report": report})
+	})
+	api.POST("/workflows/:key/triggers/:node/executions", requireRoles(auth.RoleEditor, auth.RoleAdmin), func(c *gin.Context) {
+		if adapters.Dispatcher == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "durable execution queue is not configured"})
+			return
+		}
+		versionID, definition, err := workflows.PublishedVersion(c.Request.Context(), c.Param("key"))
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "published workflow not found"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load published workflow"})
+			return
+		}
+		triggerNode := c.Param("node")
+		if triggerMode(definition, triggerNode) != "api" {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "target is not an API trigger"})
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
+		input := map[string]any{}
+		decoder := json.NewDecoder(c.Request.Body)
+		if err = decoder.Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "request body must be a JSON object"})
+			return
+		}
+		if input == nil || decoder.Decode(&struct{}{}) != io.EOF {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "request body must contain one JSON object"})
+			return
+		}
+		executionID, err := workflows.CreateTriggeredExecution(c.Request.Context(), versionID, triggerNode, input)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist execution"})
+			return
+		}
+		if err = adapters.Dispatcher.Enqueue(c.Request.Context(), executionID); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"execution_id": executionID, "status": "queued", "error": "execution persisted but dispatch is unavailable"})
+			return
+		}
+		c.JSON(http.StatusAccepted, gin.H{"execution_id": executionID, "status": "queued"})
 	})
 	api.GET("/executions", func(c *gin.Context) {
 		limit := 10
@@ -580,6 +698,149 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		c.JSON(http.StatusOK, report)
 	})
 	return router
+}
+
+func triggerMode(definition workflow.Definition, key string) string {
+	for _, node := range definition.Nodes {
+		if node.Key == key && node.Type == "trigger" {
+			mode, err := workflow.TriggerMode(node)
+			if err == nil {
+				return mode
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+func soleTrigger(definition workflow.Definition, mode string) string {
+	result := ""
+	for _, node := range definition.Nodes {
+		if node.Type == "trigger" {
+			configured, _ := workflow.TriggerMode(node)
+			if configured == mode {
+				if result != "" {
+					return ""
+				}
+				result = node.Key
+			}
+		}
+	}
+	return result
+}
+
+const maxWebhookBody = 1 << 20
+
+func handleGiteaWebhook(c *gin.Context, workflows *store.SQLite, adapters workflow.Adapters) {
+	if adapters.Dispatcher == nil || adapters.Secrets == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "webhook execution is unavailable"})
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "content type must be application/json"})
+		return
+	}
+	delivery := strings.TrimSpace(c.GetHeader("X-Gitea-Delivery"))
+	event := strings.TrimSpace(c.GetHeader("X-Gitea-Event"))
+	signature := strings.TrimSpace(c.GetHeader("X-Gitea-Signature"))
+	if delivery == "" || len(delivery) > 200 || event != "pull_request" || len(signature) != 64 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "required Gitea headers are invalid"})
+		return
+	}
+	provided, err := hex.DecodeString(signature)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Gitea signature is invalid"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxWebhookBody)
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil || len(body) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "webhook body is invalid or too large"})
+		return
+	}
+	registration, err := workflows.WebhookRegistration(c.Request.Context(), c.Param("registration"))
+	if errors.Is(err, sql.ErrNoRows) || !registration.Active {
+		c.JSON(http.StatusNotFound, gin.H{"error": "webhook registration not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load webhook registration"})
+		return
+	}
+	secret, err := adapters.Secrets.Resolve(integration.Integration{Key: "webhook:" + registration.Key, SecretCiphertext: registration.SecretCiphertext})
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "webhook registration is unavailable"})
+		return
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(body)
+	if !hmac.Equal(mac.Sum(nil), provided) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Gitea signature is invalid"})
+		return
+	}
+	input, err := canonicalGiteaPullRequest(body, delivery)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "unsupported Gitea pull request payload"})
+		return
+	}
+	versionID, definition, err := workflows.PublishedVersion(c.Request.Context(), registration.WorkflowKey)
+	if err != nil || triggerMode(definition, registration.TriggerNodeKey) != "webhook" {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "registered webhook trigger is unavailable"})
+		return
+	}
+	digest := sha256.Sum256(body)
+	executionID, duplicate, err := workflows.CreateWebhookExecution(c.Request.Context(), registration.Key, delivery, hex.EncodeToString(digest[:]), versionID, registration.TriggerNodeKey, input)
+	if errors.Is(err, store.ErrWebhookDeliveryCollision) {
+		c.JSON(http.StatusConflict, gin.H{"error": "delivery ID was already used for a different payload"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist webhook execution"})
+		return
+	}
+	if !duplicate {
+		if err = adapters.Dispatcher.Enqueue(c.Request.Context(), executionID); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"execution_id": executionID, "status": "queued", "error": "execution persisted but dispatch is unavailable"})
+			return
+		}
+	}
+	c.JSON(http.StatusAccepted, gin.H{"execution_id": executionID, "status": "queued", "duplicate": duplicate})
+}
+
+func canonicalGiteaPullRequest(body []byte, delivery string) (map[string]any, error) {
+	var payload struct {
+		Action      string `json:"action"`
+		Number      int    `json:"number"`
+		PullRequest struct {
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		Repository struct {
+			Name  string `json:"name"`
+			Owner struct {
+				Login    string `json:"login"`
+				Username string `json:"username"`
+			} `json:"owner"`
+		} `json:"repository"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.DisallowUnknownFields()
+	// Gitea adds many fields, so decode normally while copying only allowlisted coordinates.
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	owner := payload.Repository.Owner.Login
+	if owner == "" {
+		owner = payload.Repository.Owner.Username
+	}
+	number := payload.PullRequest.Number
+	if number == 0 {
+		number = payload.Number
+	}
+	if owner == "" || payload.Repository.Name == "" || number < 1 || strings.TrimSpace(payload.Action) == "" {
+		return nil, fmt.Errorf("missing pull request coordinates")
+	}
+	return map[string]any{"event": "pull_request", "action": payload.Action, "delivery": delivery, "pull_request": map[string]any{"owner": owner, "repo": payload.Repository.Name, "number": number}}, nil
 }
 
 func authenticate(manager *auth.Manager) gin.HandlerFunc {

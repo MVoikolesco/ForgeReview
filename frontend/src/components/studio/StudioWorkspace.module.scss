@@ -2,125 +2,242 @@
 @use "../../styles/mixins" as *;
 
 .studio {
+    position: relative;
     display: grid;
-    grid-template-columns: 250px minmax(0, 1fr) 290px;
+    grid-template-columns: 250px minmax(0, 1fr);
     grid-template-rows: 58px calc(100vh - 58px);
     height: 100vh;
     background: $surface-root;
 }
 
+.studio.inspectorOpen {
+    grid-template-columns: 250px minmax(0, 1fr) 310px;
+}
+
 .topbar {
+    position: relative;
+    z-index: 20;
     display: flex;
     grid-column: 1 / -1;
     align-items: center;
-    gap: 28px;
-    padding: 0 18px;
+    gap: 18px;
+    padding: 0 16px;
     border-bottom: 1px solid $border-subtle;
     background: $surface-panel;
 }
 
-.topbar strong {
+.identity {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 12px;
+}
+
+.identity strong {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 7px;
+    color: #70a5ff;
+    font-size: 14px;
+}
+
+.identity span {
+    overflow: hidden;
+    max-width: 220px;
+    color: #eef2f8;
+    font-size: 12px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.status {
     display: flex;
     align-items: center;
-    gap: 9px;
-    color: #70a5ff;
+    gap: 6px;
 }
 
-.topbar strong small {
-    color: #707a88;
+.status em {
+    padding: 4px 7px;
+    border: 1px solid #303844;
+    border-radius: 999px;
     font-size: 10px;
-    letter-spacing: .11em;
-}
-
-.topbar>span {
-    color: #fff;
-    font-size: 15px;
-    font-weight: 700;
-}
-
-.topbar .unsaved {
-    color: #f2ca76;
-    font-size: 11px;
     font-style: normal;
     white-space: nowrap;
+    background: #171b22;
 }
 
-.topbar .valid,
-.topbar .invalid {
-    font-size: 11px;
-    font-style: normal;
-    white-space: nowrap;
-}
+.unsaved { color: #f2ca76; }
+.valid { color: #86dcb2; }
+.invalid { color: #f0a6b3; }
 
-.topbar .valid { color: #86dcb2; }
-.topbar .invalid { color: #f0a6b3; }
-
-.topbar>div {
+.actions {
     display: flex;
+    align-items: center;
     gap: 8px;
     margin-left: auto;
 }
 
 .topbar button,
-.topbar a {
+.topbar a,
+.overflow summary,
+.runModal button {
     @include control;
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
-    padding: 8px 12px;
+    min-height: 34px;
+    padding: 7px 11px;
     color: #dbe2ed;
     font-size: 12px;
     text-decoration: none;
     background: #171a20;
+    cursor: pointer;
 }
 
-.topbar .primary {
-    border-color: $brand-border;
+.topbar button:focus-visible,
+.topbar a:focus-visible,
+.overflow summary:focus-visible,
+.runModal button:focus-visible,
+.runModal input:focus-visible,
+.runModal select:focus-visible,
+.runModal textarea:focus-visible {
+    outline: 2px solid #70a5ff;
+    outline-offset: 2px;
+}
+
+.topbar button:disabled,
+.menu button:disabled,
+.runModal button:disabled {
+    cursor: not-allowed;
+    opacity: .45;
+}
+
+.primary {
+    border-color: $brand-border !important;
+    color: #fff !important;
+    background: $brand !important;
+}
+
+.publish {
+    border-color: #4e9f78 !important;
+    color: #e2f6e9 !important;
+    background: #173b2a !important;
+}
+
+.overflow {
+    position: relative;
+}
+
+.overflow summary {
+    list-style: none;
+}
+
+.overflow summary::-webkit-details-marker { display: none; }
+
+.overflow[open] summary {
+    border-color: #53657c;
+    background: #202630;
+}
+
+.menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    display: grid;
+    width: 230px;
+    padding: 7px;
+    border: 1px solid #384353;
+    border-radius: 9px;
+    background: #14181f;
+    box-shadow: 0 22px 55px #000b;
+}
+
+.menu button,
+.menu a {
+    justify-content: flex-start;
+    width: 100%;
+    min-height: 34px;
+    padding: 7px 9px;
+    border-color: transparent;
+    background: transparent;
+}
+
+.menu button:hover:not(:disabled),
+.menu a:hover {
     color: #fff;
-    background: $brand;
+    background: #222832;
 }
 
-.topbar .publish {
-    border-color: #4e9f78;
-    color: #e2f6e9;
-    background: #173b2a;
+.menu hr {
+    width: 100%;
+    margin: 5px 0;
+    border: 0;
+    border-top: 1px solid #303844;
 }
 
-.removeConfirm {
-    border-color: #a64f61 !important;
-    color: #ffe2e7 !important;
-    background: #55202c !important;
+.runModal {
+    width: min(620px, 100%) !important;
+}
+
+.runForm {
+    display: grid;
+    gap: 16px;
+    padding: 22px 24px;
+}
+
+.runForm label {
+    display: grid;
+    gap: 7px;
+    color: $text-secondary;
+    font-size: 12px;
+}
+
+.runForm select,
+.runForm textarea {
+    @include field;
+}
+
+.runForm textarea {
+    min-height: 150px;
+    resize: vertical;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.runForm p {
+    margin: 0;
+    color: #f0a6b3;
+    font-size: 12px;
 }
 
 @media (max-width: $breakpoint-tablet) {
-    .studio {
-        grid-template-columns: 210px 1fr;
+    .studio,
+    .studio.inspectorOpen {
+        grid-template-columns: 210px minmax(0, 1fr);
     }
+
+    .identity span { max-width: 140px; }
+    .status .valid { display: none; }
 }
 
 @media (max-width: $breakpoint-mobile) {
-    .studio {
-        grid-template-columns: 1fr;
+    .studio,
+    .studio.inspectorOpen {
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .topbar {
-        gap: 12px;
-        overflow-x: auto;
+        gap: 8px;
+        padding: 0 10px;
     }
 
-    .topbar>span,
-    .topbar .unsaved,
-    .topbar .valid,
-    .topbar .invalid,
-    .topbar a {
-        display: none;
-    }
-
-    .topbar>div {
-        margin-left: 0;
-    }
-
-    .topbar strong small {
-        display: none;
-    }
+    .identity span,
+    .status { display: none; }
+    .overflow summary span { display: none; }
+    .overflow summary { width: 34px; padding: 0; }
+    .topbar button { padding: 7px 9px; }
+    .menu { right: -104px; }
+    .runForm { padding: 18px; }
 }

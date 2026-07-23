@@ -5,6 +5,7 @@ type BaseCardShellProps = {
   accent: string;
   status: string;
   category: string;
+  actions?: ReactNode;
   children: ReactNode;
 };
 
@@ -20,6 +21,7 @@ export function BaseCardShell({
   accent,
   status,
   category,
+  actions,
   children,
 }: BaseCardShellProps) {
   return (
@@ -31,6 +33,7 @@ export function BaseCardShell({
         <i />
         <span>{category}</span>
         <em>{statusLabel[status] ?? status}</em>
+        {actions}
       </header>
       {children}
     </article>

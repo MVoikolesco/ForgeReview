@@ -17,6 +17,7 @@ import type { CardData } from "../../lib/types";
 import { useCallback, useMemo } from "react";
 import styles from "./WorkflowCanvas.module.scss";
 import { WorkflowCard } from "./WorkflowCard";
+import { WorkflowCardActionsProvider } from "./WorkflowCardActionsContext";
 
 const nodeTypes = { card: WorkflowCard };
 
@@ -27,9 +28,11 @@ type WorkflowCanvasProps = {
   onNodesChange: OnNodesChange<Node<CardData>>;
   onEdgesChange: OnEdgesChange;
   onConnect: (connection: Connection) => void;
-  onSelect: (data: CardData) => void;
   onSelectionChange: (nodes: Node<CardData>[], edges: Edge[]) => void;
   onRequestDelete: () => void;
+  onEditNode: (nodeID: string) => void;
+  onDeleteNode: (nodeID: string) => void;
+  onPaneClick: () => void;
   validationIssues: WorkflowValidationIssue[];
   onSelectValidationIssue: (issue: WorkflowValidationIssue) => void;
   readOnly?: boolean;
@@ -42,9 +45,11 @@ export function WorkflowCanvas({
   onNodesChange,
   onEdgesChange,
   onConnect,
-  onSelect,
   onSelectionChange,
   onRequestDelete,
+  onEditNode,
+  onDeleteNode,
+  onPaneClick,
   validationIssues,
   onSelectValidationIssue,
   readOnly = false,
@@ -68,6 +73,10 @@ export function WorkflowCanvas({
       onSelectionChange(selectedNodes as Node<CardData>[], selectedEdges),
     [onSelectionChange],
   );
+  const cardActions = useMemo(
+    () => ({ readOnly, onEdit: onEditNode, onDelete: onDeleteNode }),
+    [onDeleteNode, onEditNode, readOnly],
+  );
   return (
     <section
       className={styles.canvas}
@@ -80,24 +89,26 @@ export function WorkflowCanvas({
         }
       }}
     >
-      <ReactFlow
-        nodes={nodes}
-        edges={visibleEdges}
-        nodeTypes={nodeTypes}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
-        onNodeClick={(_, node) => onSelect(node.data)}
-        onSelectionChange={handleSelectionChange}
-        nodesDraggable={!readOnly}
-        nodesConnectable={!readOnly}
-        deleteKeyCode={null}
-        fitView
-      >
-        <Background gap={18} size={1} />
-        <MiniMap />
-        <Controls />
-      </ReactFlow>
+      <WorkflowCardActionsProvider value={cardActions}>
+        <ReactFlow
+          nodes={nodes}
+          edges={visibleEdges}
+          nodeTypes={nodeTypes}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
+          onPaneClick={onPaneClick}
+          onSelectionChange={handleSelectionChange}
+          nodesDraggable={!readOnly}
+          nodesConnectable={!readOnly}
+          deleteKeyCode={null}
+          fitView
+        >
+          <Background gap={18} size={1} />
+          <MiniMap />
+          <Controls />
+        </ReactFlow>
+      </WorkflowCardActionsProvider>
       <p className={styles.message} role="status">
         {message}
       </p>

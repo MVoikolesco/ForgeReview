@@ -75,6 +75,18 @@ func main() {
 			executionQueue = dispatch.NewInProcessQueue()
 		}
 		adapters.Dispatcher = executionQueue
+		queuedIDs, recoveryErr := workflows.QueuedExecutionIDs(context.Background())
+		if recoveryErr != nil {
+			log.Fatal(recoveryErr)
+		}
+		for _, executionID := range queuedIDs {
+			if recoveryErr = executionQueue.Enqueue(context.Background(), executionID); recoveryErr != nil {
+				log.Fatal(recoveryErr)
+			}
+		}
+		if len(queuedIDs) > 0 {
+			log.Printf("requeued %d durable SQLite execution(s)", len(queuedIDs))
+		}
 		go func() {
 			if workerErr := (dispatch.Worker{Queue: executionQueue, Store: workflows, Catalog: workflow.DefaultCatalog(), Adapters: adapters}).Run(context.Background()); workerErr != nil {
 				log.Printf("execution worker stopped: %v", workerErr)

@@ -221,16 +221,15 @@ workflow identity and only resolves duplicate node/edge keys where present.
 Editors and admins own these actions; viewers remain read-only. See
 [[Architecture]] and [[Feature Map]].
 
-## 2026-07-22: Confirmed Studio graph removal with advisory local validation
+## 2026-07-22: Direct Studio graph removal with advisory local validation
 
-The Studio intercepts React Flow's usual Delete/Backspace behavior and uses an
-in-app, focus-managed confirmation dialog instead of `window.confirm`. Removing
-a selected card filters all incident edges in the same state update; viewers
-cannot invoke this path. A catalog-aware client issue list blocks save, publish,
-and execution only for failures the current graph can determine, and links an
-issue back to its card where possible. The API remains the authority because it
-validates the persisted definition against current server rules. See
-[[Architecture]] and [[Feature Map]].
+The Studio intercepts React Flow's usual Delete/Backspace behavior and removes
+the current selection directly. Card-header delete follows the same no-dialog
+behavior and filters incident edges; viewers cannot invoke either path. A
+catalog-aware client issue list blocks save, publish, and execution only for
+failures the current graph can determine, and links an issue back to its card
+where possible. The API remains the authority because it validates the persisted
+definition against current server rules. See [[Architecture]] and [[Feature Map]].
 
 ## 2026-07-22: Stable controlled-canvas selection callbacks
 
@@ -240,6 +239,17 @@ preserves prior selection-ID state for repeated reports; derived error-edge
 props are memoized as well. This prevents a controlled hydration/update from
 continually triggering React state updates while retaining card and edge
 selection behavior. See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-22: Card actions stay outside persisted workflow data
+
+React Flow card edit/delete behavior is provided by a memoized React context,
+not callbacks placed in `CardData`. Ordinary selection updates only selection
+state; edit explicitly opens the Inspector and pane clicks close it. This keeps
+serialized workflow definitions deterministic and avoids callback identity
+changes feeding the controlled canvas. The hidden Inspector also releases its
+desktop grid column, while responsive widths use an overlay. Manual execution
+payload belongs to the run modal and is sent only with that execution request.
+See [[Architecture]] and [[Feature Map]].
 
 ## 2026-07-22: Scoped integration resource discovery
 
@@ -251,3 +261,17 @@ selection. LLM validation returns provider-discovered models and the normal UI
 only persists selected models as profiles, eliminating free-text model entry.
 This keeps credentials one-time and server-side while making the selection path
 explicit. See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-22: Typed trigger modes and canonical event input
+
+A trigger declares `manual`, authenticated `api`, or signed `webhook` mode; a
+missing mode remains compatible with historical manual workflows. Every
+execution persists the selected trigger node and the runner schedules only its
+reachable branch. API triggers target a published workflow and node under RBAC.
+Gitea webhook registrations use a distinct encrypted signing secret, exact-body
+HMAC-SHA-256 verification, and a delivery ledger that deduplicates identical
+deliveries and rejects ID collisions. Provider payloads are reduced to canonical
+owner/repository/PR coordinates before persistence. New review graphs pass that
+typed target from trigger to fetch and from fetch to publish, while old immutable
+versions retain fixed-coordinate fallback. See [[Architecture]] and
+[[Feature Map]].

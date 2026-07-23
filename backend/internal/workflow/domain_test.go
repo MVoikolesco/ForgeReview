@@ -93,7 +93,7 @@ func TestValidateRequiresExplicitTypedErrorRoute(t *testing.T) {
 
 func TestOfficialReviewDefinitionIsAValidFullGraphWithSafePublicationDefaults(t *testing.T) {
 	definition := OfficialReviewDefinition()
-	if definition.Key != OfficialReviewWorkflowKey || len(definition.Nodes) != 12 || len(definition.Edges) != 12 {
+	if definition.Key != OfficialReviewWorkflowKey || len(definition.Nodes) != 12 || len(definition.Edges) != 13 {
 		t.Fatalf("official definition shape = %#v", definition)
 	}
 	if err := Validate(definition, DefaultCatalog()); err != nil {
@@ -102,6 +102,9 @@ func TestOfficialReviewDefinitionIsAValidFullGraphWithSafePublicationDefaults(t 
 	configs := map[string]map[string]any{}
 	for _, node := range definition.Nodes {
 		configs[node.Key] = node.Config
+	}
+	if configs["trigger"]["mode"] != "webhook" {
+		t.Fatalf("trigger defaults = %#v", configs["trigger"])
 	}
 	if configs["model"]["model_profile"] != "" || configs["model"]["retry_limit"] != 0 || configs["model"]["retry_delay_ms"] != 0 {
 		t.Fatalf("model defaults = %#v", configs["model"])

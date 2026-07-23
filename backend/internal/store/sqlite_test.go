@@ -265,6 +265,30 @@ func TestPublicationRetryableAttemptCanBeClaimedAgain(t *testing.T) {
 	}
 }
 
+func TestQueuedExecutionRecoveryRetainsSelectedTriggerAndInput(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/queued-recovery.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	versionID, err := database.Save(context.Background(), workflow.Definition{Key: "recovery", Name: "Recovery", Nodes: []workflow.Node{{Key: "api", Type: "trigger", Name: "API", Config: map[string]any{"mode": "api"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionID, err := database.CreateTriggeredExecution(context.Background(), versionID, "api", map[string]any{"request": "durable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := database.QueuedExecutionIDs(context.Background())
+	if err != nil || len(queued) != 1 || queued[0] != executionID {
+		t.Fatalf("queued recovery IDs = %#v, %v", queued, err)
+	}
+	execution, claimed, err := database.ClaimExecution(context.Background(), executionID)
+	if err != nil || !claimed || execution.TriggerNodeKey != "api" || execution.Input["request"] != "durable" {
+		t.Fatalf("recovered execution = %#v, %t, %v", execution, claimed, err)
+	}
+}
+
 func publicationDefinition() workflow.Definition {
 	return workflow.Definition{Key: "publication", Name: "Publication", Nodes: []workflow.Node{
 		{Key: "start", Type: "trigger", Name: "Start"},

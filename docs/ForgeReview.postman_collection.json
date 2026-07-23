@@ -1,0 +1,73 @@
+{
+  "info": {
+    "name": "ForgeReview typed triggers",
+    "description": "Samples for authenticated API triggers and signed Gitea webhooks. See docs/trigger-modes.md.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8088" },
+    { "key": "email", "value": "" },
+    { "key": "password", "value": "" },
+    { "key": "workflow_key", "value": "official-gitea-pr-review" },
+    { "key": "api_trigger", "value": "api" },
+    { "key": "webhook_trigger", "value": "trigger" },
+    { "key": "webhook_registration", "value": "gitea-review" },
+    { "key": "webhook_secret", "value": "" },
+    { "key": "gitea_delivery", "value": "postman-delivery-1" }
+  ],
+  "item": [
+    {
+      "name": "Login",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\"email\":\"{{email}}\",\"password\":\"{{password}}\"}" },
+        "url": "{{base_url}}/api/auth/login",
+        "description": "Postman retains the HttpOnly session cookie for following requests."
+      }
+    },
+    {
+      "name": "Start published API trigger",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\"pull_request\":{\"owner\":\"acme\",\"repo\":\"api\",\"number\":42}}" },
+        "url": "{{base_url}}/api/workflows/{{workflow_key}}/triggers/{{api_trigger}}/executions"
+      }
+    },
+    {
+      "name": "Register published webhook trigger",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\"key\":\"{{webhook_registration}}\",\"name\":\"Gitea review\",\"workflow_key\":\"{{workflow_key}}\",\"trigger_node_key\":\"{{webhook_trigger}}\",\"secret\":\"{{webhook_secret}}\",\"active\":true}" },
+        "url": "{{base_url}}/api/webhook-registrations"
+      }
+    },
+    {
+      "name": "Deliver signed Gitea pull-request webhook",
+      "event": [{
+        "listen": "prerequest",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "const CryptoJS = require('crypto-js');",
+            "const body = pm.variables.replaceIn(pm.request.body.raw);",
+            "const signature = CryptoJS.HmacSHA256(body, pm.collectionVariables.get('webhook_secret')).toString(CryptoJS.enc.Hex);",
+            "pm.request.headers.upsert({ key: 'X-Gitea-Signature', value: signature });"
+          ]
+        }
+      }],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-Gitea-Event", "value": "pull_request" },
+          { "key": "X-Gitea-Delivery", "value": "{{gitea_delivery}}" }
+        ],
+        "body": { "mode": "raw", "raw": "{\"action\":\"synchronized\",\"number\":42,\"repository\":{\"name\":\"api\",\"owner\":{\"login\":\"acme\"}},\"pull_request\":{\"number\":42}}" },
+        "url": "{{base_url}}/webhooks/gitea/{{webhook_registration}}"
+      }
+    }
+  ]
+}

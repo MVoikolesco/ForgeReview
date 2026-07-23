@@ -153,15 +153,16 @@ type SecretManager interface {
 }
 
 type PullRequestRequest struct {
-	Owner  string
-	Repo   string
-	Number int
+	Owner  string `json:"owner"`
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
 }
 
 type PullRequest struct {
-	Metadata map[string]any   `json:"metadata"`
-	Diff     string           `json:"diff"`
-	Files    []map[string]any `json:"files"`
+	Metadata map[string]any     `json:"metadata"`
+	Diff     string             `json:"diff"`
+	Files    []map[string]any   `json:"files"`
+	Target   PullRequestRequest `json:"target"`
 }
 
 type GiteaPullRequestReader interface {

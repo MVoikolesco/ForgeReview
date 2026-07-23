@@ -46,6 +46,6 @@ func (w Worker) Process(ctx context.Context, id int64) error {
 	}
 	adapters := w.Adapters
 	adapters.Execution = workflow.ExecutionContext{ID: execution.ID, VersionID: execution.VersionID}
-	report, _ := workflow.RunWithAdapters(ctx, definition, w.Catalog, execution.Input, adapters)
+	report, _ := workflow.RunFromTriggerWithAdapters(ctx, definition, w.Catalog, execution.TriggerNodeKey, execution.Input, adapters)
 	return w.Store.CompleteExecution(ctx, id, report)
 }

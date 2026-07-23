@@ -19,11 +19,12 @@ import (
 type SQLite struct{ db *sql.DB }
 
 var (
-	ErrWorkflowVersionNotFound = errors.New("workflow version not found")
-	ErrWorkflowVersionNotDraft = errors.New("workflow version is not a draft")
-	ErrInvalidWorkflowVersion  = errors.New("workflow version is invalid")
-	ErrIntegrationNotFound     = errors.New("integration not found")
-	ErrIntegrationReferenced   = errors.New("integration has historical workflow references")
+	ErrWorkflowVersionNotFound  = errors.New("workflow version not found")
+	ErrWorkflowVersionNotDraft  = errors.New("workflow version is not a draft")
+	ErrInvalidWorkflowVersion   = errors.New("workflow version is invalid")
+	ErrIntegrationNotFound      = errors.New("integration not found")
+	ErrIntegrationReferenced    = errors.New("integration has historical workflow references")
+	ErrWebhookDeliveryCollision = errors.New("webhook delivery collision")
 )
 
 func Open(path string) (*SQLite, error) {
@@ -41,6 +42,10 @@ func Open(path string) (*SQLite, error) {
 		return nil, err
 	}
 	if err = store.migrateIntegrationSecrets(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err = store.ensureExecutionTriggerColumn(context.Background()); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -379,12 +384,26 @@ func (s *SQLite) EnsureOfficialReviewWorkflow(ctx context.Context, catalog workf
 	defer tx.Rollback()
 
 	var existing workflow.VersionSummary
-	err = tx.QueryRowContext(ctx, `SELECT id,version,status,created_at FROM workflow_versions WHERE workflow_key=? AND status=?`, definition.Key, workflow.VersionStatusPublished).Scan(&existing.ID, &existing.Version, &existing.Status, &existing.CreatedAt)
+	var existingPayload string
+	err = tx.QueryRowContext(ctx, `SELECT id,version,status,created_at,definition_json FROM workflow_versions WHERE workflow_key=? AND status=?`, definition.Key, workflow.VersionStatusPublished).Scan(&existing.ID, &existing.Version, &existing.Status, &existing.CreatedAt, &existingPayload)
 	if err == nil {
-		if err = tx.Commit(); err != nil {
+		var stored workflow.Definition
+		legacyJSON, _ := json.Marshal(workflow.LegacyOfficialReviewDefinition())
+		storedJSON := []byte(existingPayload)
+		if json.Unmarshal(storedJSON, &stored) != nil {
+			return workflow.VersionSummary{}, false, fmt.Errorf("decode existing official workflow")
+		}
+		normalized, _ := json.Marshal(stored)
+		if string(normalized) != string(legacyJSON) {
+			if err = tx.Commit(); err != nil {
+				return workflow.VersionSummary{}, false, err
+			}
+			return existing, false, nil
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE workflow_versions SET status=? WHERE id=?`, workflow.VersionStatusArchived, existing.ID); err != nil {
 			return workflow.VersionSummary{}, false, err
 		}
-		return existing, false, nil
+		err = sql.ErrNoRows // continue through the append-only seed path
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return workflow.VersionSummary{}, false, err
@@ -513,11 +532,15 @@ func (s *SQLite) Publish(ctx context.Context, id int64, catalog workflow.Catalog
 // CreateExecution persists an execution before it can be dispatched. Input is
 // retained for workers but never included in the execution status response.
 func (s *SQLite) CreateExecution(ctx context.Context, versionID int64, input map[string]any) (int64, error) {
+	return s.CreateTriggeredExecution(ctx, versionID, "", input)
+}
+
+func (s *SQLite) CreateTriggeredExecution(ctx context.Context, versionID int64, triggerNodeKey string, input map[string]any) (int64, error) {
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return 0, err
 	}
-	result, err := s.db.ExecContext(ctx, `INSERT INTO workflow_executions(workflow_version_id,status,metadata_json,execution_input_json) VALUES(?, 'queued', '{}', ?)`, versionID, string(payload))
+	result, err := s.db.ExecContext(ctx, `INSERT INTO workflow_executions(workflow_version_id,status,metadata_json,execution_input_json,trigger_node_key) VALUES(?, 'queued', '{}', ?, ?)`, versionID, string(payload), triggerNodeKey)
 	if err != nil {
 		return 0, err
 	}
@@ -537,7 +560,7 @@ func (s *SQLite) ClaimExecution(ctx context.Context, id int64) (workflow.Executi
 	}
 	var execution workflow.Execution
 	var input string
-	err = s.db.QueryRowContext(ctx, `SELECT workflow_version_id,execution_input_json FROM workflow_executions WHERE id=?`, id).Scan(&execution.VersionID, &input)
+	err = s.db.QueryRowContext(ctx, `SELECT workflow_version_id,trigger_node_key,execution_input_json FROM workflow_executions WHERE id=?`, id).Scan(&execution.VersionID, &execution.TriggerNodeKey, &input)
 	if err != nil {
 		return workflow.Execution{}, false, err
 	}
@@ -599,6 +622,109 @@ func (s *SQLite) CompleteExecution(ctx context.Context, id int64, report workflo
 func (s *SQLite) FailQueuedExecution(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE workflow_executions SET status='failed',finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'`, id)
 	return err
+}
+
+func (s *SQLite) QueuedExecutionIDs(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM workflow_executions WHERE status='queued' ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []int64{}
+	for rows.Next() {
+		var id int64
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (s *SQLite) PublishedVersion(ctx context.Context, workflowKey string) (int64, workflow.Definition, error) {
+	var id int64
+	var payload string
+	err := s.db.QueryRowContext(ctx, `SELECT id,definition_json FROM workflow_versions WHERE workflow_key=? AND status='published'`, workflowKey).Scan(&id, &payload)
+	if err != nil {
+		return 0, workflow.Definition{}, err
+	}
+	var definition workflow.Definition
+	if err = json.Unmarshal([]byte(payload), &definition); err != nil {
+		return 0, workflow.Definition{}, err
+	}
+	return id, definition, nil
+}
+
+func (s *SQLite) UpsertWebhookRegistration(ctx context.Context, item workflow.WebhookRegistration) error {
+	if strings.TrimSpace(item.Key) == "" || strings.TrimSpace(item.Name) == "" || strings.TrimSpace(item.WorkflowKey) == "" || strings.TrimSpace(item.TriggerNodeKey) == "" || strings.TrimSpace(item.SecretCiphertext) == "" {
+		return fmt.Errorf("webhook registration key, name, workflow, trigger, and secret are required")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO webhook_registrations(registration_key,name,workflow_key,trigger_node_key,secret_ciphertext,active) VALUES(?,?,?,?,?,?)
+		ON CONFLICT(registration_key) DO UPDATE SET name=excluded.name,workflow_key=excluded.workflow_key,trigger_node_key=excluded.trigger_node_key,secret_ciphertext=excluded.secret_ciphertext,active=excluded.active`, item.Key, item.Name, item.WorkflowKey, item.TriggerNodeKey, item.SecretCiphertext, item.Active)
+	return err
+}
+
+func (s *SQLite) WebhookRegistration(ctx context.Context, key string) (workflow.WebhookRegistration, error) {
+	var item workflow.WebhookRegistration
+	err := s.db.QueryRowContext(ctx, `SELECT registration_key,name,workflow_key,trigger_node_key,secret_ciphertext,active FROM webhook_registrations WHERE registration_key=?`, key).Scan(&item.Key, &item.Name, &item.WorkflowKey, &item.TriggerNodeKey, &item.SecretCiphertext, &item.Active)
+	item.SecretConfigured = item.SecretCiphertext != ""
+	return item, err
+}
+
+func (s *SQLite) WebhookRegistrations(ctx context.Context) ([]workflow.WebhookRegistration, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT registration_key,name,workflow_key,trigger_node_key,secret_ciphertext,active FROM webhook_registrations ORDER BY registration_key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []workflow.WebhookRegistration{}
+	for rows.Next() {
+		var item workflow.WebhookRegistration
+		if err = rows.Scan(&item.Key, &item.Name, &item.WorkflowKey, &item.TriggerNodeKey, &item.SecretCiphertext, &item.Active); err != nil {
+			return nil, err
+		}
+		item.SecretConfigured = item.SecretCiphertext != ""
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// CreateWebhookExecution atomically records delivery identity and durable input.
+// Equal retries return the original execution; reused IDs with different bodies collide.
+func (s *SQLite) CreateWebhookExecution(ctx context.Context, registrationKey, deliveryID, bodyHash string, versionID int64, triggerNodeKey string, input map[string]any) (int64, bool, error) {
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return 0, false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	defer tx.Rollback()
+	var existingHash string
+	var existingID int64
+	err = tx.QueryRowContext(ctx, `SELECT body_sha256,workflow_execution_id FROM webhook_deliveries WHERE registration_key=? AND delivery_id=?`, registrationKey, deliveryID).Scan(&existingHash, &existingID)
+	if err == nil {
+		if existingHash != bodyHash {
+			return 0, false, ErrWebhookDeliveryCollision
+		}
+		return existingID, true, tx.Commit()
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, false, err
+	}
+	result, err := tx.ExecContext(ctx, `INSERT INTO workflow_executions(workflow_version_id,status,metadata_json,execution_input_json,trigger_node_key) VALUES(?,'queued','{}',?,?)`, versionID, string(payload), triggerNodeKey)
+	if err != nil {
+		return 0, false, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, false, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO webhook_deliveries(registration_key,delivery_id,body_sha256,workflow_execution_id) VALUES(?,?,?,?)`, registrationKey, deliveryID, bodyHash, id); err != nil {
+		return 0, false, err
+	}
+	return id, false, tx.Commit()
 }
 
 func (s *SQLite) BeginPublication(ctx context.Context, attempt workflow.PublicationAttempt) (workflow.PublicationAttempt, bool, error) {
@@ -739,7 +865,7 @@ func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.RunReport, e
 // integration configuration. PR coordinates are derived only from the stored
 // immutable workflow version's fetch/publish card configuration.
 func (s *SQLite) ExecutionSummaries(ctx context.Context, limit int) ([]workflow.ExecutionSummary, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT e.id,e.status,e.started_at,COALESCE(e.finished_at,''),v.workflow_key,v.name,v.version,v.definition_json
+	rows, err := s.db.QueryContext(ctx, `SELECT e.id,e.status,e.started_at,COALESCE(e.finished_at,''),v.workflow_key,v.name,v.version,v.definition_json,e.execution_input_json
 		FROM workflow_executions e JOIN workflow_versions v ON v.id=e.workflow_version_id
 		ORDER BY e.started_at DESC,e.id DESC LIMIT ?`, limit)
 	if err != nil {
@@ -750,18 +876,43 @@ func (s *SQLite) ExecutionSummaries(ctx context.Context, limit int) ([]workflow.
 	items := []workflow.ExecutionSummary{}
 	for rows.Next() {
 		var item workflow.ExecutionSummary
-		var definitionJSON string
-		if err = rows.Scan(&item.ID, &item.Status, &item.StartedAt, &item.FinishedAt, &item.Workflow.Key, &item.Workflow.Name, &item.Workflow.Version, &definitionJSON); err != nil {
+		var definitionJSON, inputJSON string
+		if err = rows.Scan(&item.ID, &item.Status, &item.StartedAt, &item.FinishedAt, &item.Workflow.Key, &item.Workflow.Name, &item.Workflow.Version, &definitionJSON, &inputJSON); err != nil {
 			return nil, err
 		}
 		var definition workflow.Definition
 		if err = json.Unmarshal([]byte(definitionJSON), &definition); err != nil {
 			return nil, fmt.Errorf("decode execution workflow %d: %w", item.ID, err)
 		}
-		item.Review = reviewContext(definition)
+		item.Review = reviewContextFromInput(inputJSON)
+		if item.Review == nil {
+			item.Review = reviewContext(definition)
+		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func reviewContextFromInput(payload string) *workflow.ExecutionReviewContext {
+	var input map[string]any
+	if json.Unmarshal([]byte(payload), &input) != nil {
+		return nil
+	}
+	value, ok := input["pull_request"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	owner, _ := value["owner"].(string)
+	repo, _ := value["repo"].(string)
+	number := value["number"]
+	if number == nil {
+		number = value["pull_request"]
+	}
+	candidate, ok := configuredReviewContext(map[string]any{"owner": owner, "repo": repo, "pull_request": number})
+	if !ok {
+		return nil
+	}
+	return candidate
 }
 
 func reviewContext(definition workflow.Definition) *workflow.ExecutionReviewContext {
@@ -860,7 +1011,8 @@ CREATE TABLE IF NOT EXISTS workflow_executions (
  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  finished_at TEXT,
   metadata_json TEXT NOT NULL DEFAULT '{}',
-  execution_input_json TEXT NOT NULL DEFAULT '{}'
+  execution_input_json TEXT NOT NULL DEFAULT '{}',
+  trigger_node_key TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS workflow_node_runs (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -898,6 +1050,23 @@ CREATE TABLE IF NOT EXISTS sessions (
  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  expires_at TEXT NOT NULL,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS webhook_registrations (
+ registration_key TEXT PRIMARY KEY,
+ name TEXT NOT NULL,
+ workflow_key TEXT NOT NULL,
+ trigger_node_key TEXT NOT NULL,
+ secret_ciphertext TEXT NOT NULL,
+ active INTEGER NOT NULL DEFAULT 1,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+ registration_key TEXT NOT NULL REFERENCES webhook_registrations(registration_key),
+ delivery_id TEXT NOT NULL,
+ body_sha256 TEXT NOT NULL,
+ workflow_execution_id INTEGER NOT NULL REFERENCES workflow_executions(id),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(registration_key,delivery_id)
 );
 `
 
@@ -989,5 +1158,29 @@ func (s *SQLite) ensureExecutionInputColumn(ctx context.Context) error {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `ALTER TABLE workflow_executions ADD COLUMN execution_input_json TEXT NOT NULL DEFAULT '{}'`)
+	return err
+}
+
+func (s *SQLite) ensureExecutionTriggerColumn(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(workflow_executions)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "trigger_node_key" {
+			return nil
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE workflow_executions ADD COLUMN trigger_node_key TEXT NOT NULL DEFAULT ''`)
 	return err
 }

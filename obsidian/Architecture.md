@@ -116,7 +116,20 @@ token. See [[Decision Log]] and [[Feature Map]].
 
 Execution input remains in SQLite. When configured, Redis transports execution
 IDs to a worker which atomically claims queued executions; status APIs continue
-to read SQLite. The in-process queue is an explicit local/test fallback only.
+to read SQLite. Workers also recover persisted queued executions that missed a
+Redis wake-up. Each execution stores its selected trigger key, so only that
+trigger's reachable branch runs even when multiple branches later converge.
+Trigger modes are `manual`, authenticated `api`, or signed `webhook`; an absent
+mode remains legacy-compatible `manual`.
+
+Gitea webhook registrations bind an encrypted one-time signing secret to a
+published workflow and one webhook trigger. The public endpoint validates the
+exact raw body with HMAC-SHA-256, requires Gitea event/delivery headers, and uses
+a durable delivery ledger to return the original execution for identical
+retries while rejecting delivery-ID collisions. It persists only canonical PR
+coordinates as workflow input. `fetch` consumes that runtime target and passes
+the typed pull request to `publish`; immutable legacy workflows can still use
+fixed card coordinates. See [[Decision Log]] and [[Feature Map]].
 
 Redis also backs the workflow `cache` card through a separate explicit adapter;
 it is not coupled to the execution-ID queue. Cache values cross the adapter as
@@ -152,9 +165,10 @@ accepts that token and can fail terminally, continue, or emit a configured
  fallback result. See [[Decision Log]] and [[Feature Map]].
 
 Studio uses controlled React Flow state for selection and removal: native
-delete keys are disabled, while Delete/Backspace request an accessible modal
-confirmation for the selected cards/edges. Removal filters incident edges with
-removed cards before committing the local state. The frontend also derives a
+delete keys are disabled, while Studio handles Delete/Backspace directly for
+the selected cards/edges. Card-header deletion also removes incident edges in
+the same local update. Edit/delete callbacks are supplied through a memoized
+React context rather than persisted `CardData`. The frontend also derives a
 catalog-aware validation issue list before save/publish/run; it is advisory and
 the backend's `workflow.Validate` remains the final persistence authority. See
 [[Feature Map]] and [[Decision Log]].
@@ -163,3 +177,11 @@ React Flow selection handlers and derived error-edge props are memoized. The
 selection handler ignores identical ID reports before setting Studio state, so a
 controlled canvas hydration or graph update cannot re-register a listener and
 create a render/update loop. See [[Decision Log]].
+
+The Studio Inspector is conditional and absent from the default grid. Card
+selection remains independent from editing; only the card edit action or a
+linked validation issue opens it, while a pane click closes it. The canvas grid
+claims the released width and the Inspector becomes a responsive overlay below
+the desktop breakpoint. Manual trigger JSON is entered only in the focused run
+modal, not stored in card data or displayed in the global header. See
+[[Feature Map]] and [[Decision Log]].

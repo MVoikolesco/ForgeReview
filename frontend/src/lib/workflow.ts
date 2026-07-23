@@ -22,6 +22,11 @@ export const categoryAccent = (category: string) =>
     Infraestrutura: "#8e9aaa",
   })[category] || "#8e9aaa";
 
+export const isManualTrigger = (card: Pick<CardData, "type" | "config">) =>
+  card.type === "trigger" && [undefined, "", "manual"].includes(
+    card.config.mode as string | undefined,
+  );
+
 export const localCards: CardType[] = [
   {
     key: "trigger",
@@ -306,9 +311,14 @@ export function validateStudioWorkflow(
           issues.push({ nodeKey: node.key, message: `"${node.name}" precisa de ${key} entre 0 e ${max}.` });
       }
     }
-    if (["fetch", "publish"].includes(node.type) &&
-      (!nonEmptyText(node.config.integration) || !nonEmptyText(node.config.owner) || !nonEmptyText(node.config.repo) || !positiveInteger(node.config.pull_request)))
-      issues.push({ nodeKey: node.key, message: `Configure conexão, organização, repositório e número positivo do PR em "${node.name}".` });
+    if (["fetch", "publish"].includes(node.type)) {
+      const hasDynamicTarget = definition.edges.some((edge) => edge.to_node === node.key &&
+        ((node.type === "fetch" && edge.to_port === "event") || (node.type === "publish" && edge.to_port === "pull_request")));
+      if (!nonEmptyText(node.config.integration) || (!hasDynamicTarget && (!nonEmptyText(node.config.owner) || !nonEmptyText(node.config.repo) || !positiveInteger(node.config.pull_request))))
+        issues.push({ nodeKey: node.key, message: `Configure a conexão e um destino dinâmico ou fixo de PR em "${node.name}".` });
+    }
+    if (node.type === "trigger" && !["manual", "api", "webhook"].includes(configText(node.config.mode) || "manual"))
+      issues.push({ nodeKey: node.key, message: `Selecione um modo de trigger válido em "${node.name}".` });
     if (node.type === "loop" && (!positiveInteger(node.config.max_iterations) || (node.config.concurrency !== undefined && node.config.concurrency !== 1)))
       issues.push({ nodeKey: node.key, message: `"${node.name}" requer máximo de iterações positivo e concorrência 1.` });
     if (node.type === "group" && (!positiveInteger(node.config.max_files) || !positiveInteger(node.config.max_characters)))
@@ -472,7 +482,7 @@ export function reviewTemplate(
   });
   return {
     nodes: [
-      node("trigger", "trigger", "Webhook / manual", 40, 280),
+      node("trigger", "trigger", "Webhook Gitea", 40, 280, { mode: "webhook" }),
       node("fetch", "fetch", "Buscar dados do PR", 315, 280, {
         owner: "",
         repo: "",
@@ -533,6 +543,7 @@ export function reviewTemplate(
       ["loop", "out-results", "consolidate", "in-comments"],
       ["consolidate", "out-review", "format", "in-review"],
       ["format", "out-formatted", "publish", "in-formatted_review"],
+      ["fetch", "out-pull_request", "publish", "in-pull_request"],
     ].map(([source, sourceHandle, target, targetHandle]) => ({
       id: `${source}-${target}`,
       source,

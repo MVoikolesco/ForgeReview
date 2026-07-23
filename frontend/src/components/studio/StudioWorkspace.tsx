@@ -14,6 +14,7 @@ import {
   CirclePlay,
   Copy,
   Download,
+  MoreHorizontal,
   Save,
   Settings2,
   ShieldCheck,
@@ -31,8 +32,10 @@ import {
   getModelProfiles,
   getWorkflows,
   getWorkflowVersion,
+  getWebhookRegistrations,
   publishWorkflow,
   saveWorkflow,
+  saveWebhookRegistration,
 } from "../../lib/api";
 import type {
   CardData,
@@ -41,6 +44,7 @@ import type {
   Integration,
   ModelProfile,
   WorkflowMetadata,
+  WebhookRegistration,
 } from "../../lib/types";
 import {
   canConnect,
@@ -48,6 +52,7 @@ import {
   defaultWorkflowMetadata,
   hasErrorRoute,
   hydrateDefinition,
+  isManualTrigger,
   localCards,
   removeSelectedElements,
   reviewTemplate,
@@ -77,7 +82,7 @@ export function StudioWorkspace() {
     useNodesState<Node<CardData>>(starterNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(starterEdges);
   const [cards, setCards] = useState<CardType[]>(localCards);
-  const [selected, setSelected] = useState<CardData>(starterNodes[0].data);
+  const [inspectedNodeID, setInspectedNodeID] = useState<string>();
   const [message, setMessage] = useState("Fluxo local pronto para validar.");
   const [busy, setBusy] = useState(false);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
@@ -90,11 +95,22 @@ export function StudioWorkspace() {
    const [workflowKeys, setWorkflowKeys] = useState<string[]>([]);
    const [selectedNodeIDs, setSelectedNodeIDs] = useState<string[]>([]);
    const [selectedEdgeIDs, setSelectedEdgeIDs] = useState<string[]>([]);
-   const [confirmRemoval, setConfirmRemoval] = useState(false);
+   const [showManualRun, setShowManualRun] = useState(false);
+   const [manualTriggerID, setManualTriggerID] = useState("");
+   const [manualPayload, setManualPayload] = useState("");
+   const [webhookRegistrations, setWebhookRegistrations] = useState<WebhookRegistration[]>([]);
    const definition = useMemo(() => toDefinition(nodes, edges, metadata), [nodes, edges, metadata]);
    const validationIssues = useMemo(
      () => validateStudioWorkflow(definition, cards),
      [definition, cards],
+   );
+   const inspectedCard = useMemo(
+     () => nodes.find((node) => node.id === inspectedNodeID)?.data,
+     [inspectedNodeID, nodes],
+   );
+   const manualTriggers = useMemo(
+     () => nodes.filter((node) => isManualTrigger(node.data)),
+     [nodes],
    );
 
   const loadIntegrations = async () => {
@@ -124,7 +140,7 @@ export function StudioWorkspace() {
         setCards(catalog);
         setNodes(hydrated.nodes);
         setEdges(hydrated.edges);
-        setSelected(hydrated.nodes[0]?.data ?? starterNodes[0].data);
+        setInspectedNodeID(undefined);
         setMetadata({
           key: definition.key,
           name: definition.name,
@@ -153,6 +169,9 @@ export function StudioWorkspace() {
       })
       .catch(() => undefined);
   }, []);
+  useEffect(() => {
+    if (user?.role === "admin") void getWebhookRegistrations().then(setWebhookRegistrations).catch(() => undefined);
+  }, [user?.role]);
 
   const addCard = (card: CardType) => {
     const key = `${card.key}-${Date.now().toString(36)}`;
@@ -179,7 +198,6 @@ export function StudioWorkspace() {
         data,
       },
     ]);
-    setSelected(data);
     setDirty(true);
   };
   const loadReviewTemplate = () => {
@@ -192,7 +210,7 @@ export function StudioWorkspace() {
     }
     setNodes(template.nodes);
     setEdges(template.edges);
-    setSelected(template.nodes[0].data);
+    setInspectedNodeID(undefined);
     setDirty(true);
     setMessage(
       "Template de review carregado. Configure Gitea, modelo e dados do PR nos cards selecionados.",
@@ -216,11 +234,11 @@ export function StudioWorkspace() {
     setEdges((all) => addEdge({ ...connection, animated: true }, all));
     setDirty(true);
   }, [nodes, setEdges]);
-  const patchSelected = (patch: Partial<CardData>) => {
-    setSelected((current) => ({ ...current, ...patch }));
+  const patchInspected = (patch: Partial<CardData>) => {
+    if (!inspectedNodeID) return;
     setNodes((all) =>
       all.map((node) =>
-        node.id === selected.key
+        node.id === inspectedNodeID
           ? { ...node, data: { ...node.data, ...patch } }
           : node,
       ),
@@ -283,11 +301,28 @@ export function StudioWorkspace() {
       setBusy(false);
     }
   };
-  const saveAndRun = async () => {
+  const saveAndRun = async (triggerNodeID: string) => {
     if (validationIssues.length) {
       setMessage("Corrija os ajustes indicados antes de executar.");
       return;
     }
+    const trigger = nodes.find((node) => node.id === triggerNodeID)?.data;
+    if (!trigger || !isManualTrigger(trigger)) {
+      setMessage("Selecione um trigger manual para executar pelo Studio.");
+      return;
+    }
+    let testPayload: Record<string, unknown> = {};
+    if (manualPayload.trim()) {
+      try {
+        const parsed = JSON.parse(manualPayload) as unknown;
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error();
+        testPayload = parsed as Record<string, unknown>;
+      } catch {
+        setMessage("O payload de teste precisa ser um objeto JSON válido.");
+        return;
+      }
+    }
+    setShowManualRun(false);
     setBusy(true);
     setMessage("Salvando versão do workflow...");
     try {
@@ -300,7 +335,7 @@ export function StudioWorkspace() {
           data: { ...node.data, status: "running" },
         })),
       );
-      const started = await executeWorkflow(saved.version_id);
+      const started = await executeWorkflow(saved.version_id, trigger.key, testPayload);
       let report = started.report;
       if (started.status === "queued" && started.execution_id)
         for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -338,6 +373,13 @@ export function StudioWorkspace() {
     setShowConnections(true);
     void loadIntegrations();
   };
+  const openManualRun = () => {
+    const preferred = manualTriggers.some((node) => node.id === inspectedNodeID)
+      ? inspectedNodeID
+      : manualTriggers[0]?.id;
+    setManualTriggerID(preferred ?? "");
+    setShowManualRun(true);
+  };
   const openTransfer = (mode: "clone" | "import" | "export") => {
     if (mode !== "clone") return setTransfer(mode);
     void getWorkflows()
@@ -351,7 +393,7 @@ export function StudioWorkspace() {
     const hydrated = hydrateDefinition(definition, cards);
     setNodes(hydrated.nodes);
     setEdges(hydrated.edges);
-    setSelected(hydrated.nodes[0]?.data ?? starterNodes[0].data);
+    setInspectedNodeID(undefined);
     setMetadata({ key: definition.key, name: definition.name, description: definition.description });
     setOpenedVersionID(undefined);
     setDirty(true);
@@ -378,14 +420,41 @@ export function StudioWorkspace() {
       setDirty(true);
     onEdgesChange(...args);
   }, [canEdit, onEdgesChange]);
-  const requestRemoval = useCallback(() => {
+  const removeSelection = useCallback(() => {
     if (!canEdit) return;
     if (!selectedNodeIDs.length && !selectedEdgeIDs.length) {
       setMessage("Selecione um ou mais cards ou conexões para remover.");
       return;
     }
-    setConfirmRemoval(true);
-  }, [canEdit, selectedEdgeIDs.length, selectedNodeIDs.length]);
+    const removed = removeSelectedElements(nodes, edges, selectedNodeIDs, selectedEdgeIDs);
+    setNodes(removed.nodes);
+    setEdges(removed.edges);
+    setInspectedNodeID((current) => current && selectedNodeIDs.includes(current) ? undefined : current);
+    setSelectedNodeIDs([]);
+    setSelectedEdgeIDs([]);
+    setDirty(true);
+    setMessage(`${selectedNodeIDs.length} card(s) e ${removed.removedEdges} conexão(ões) removidos.`);
+  }, [canEdit, edges, nodes, selectedEdgeIDs, selectedNodeIDs, setEdges, setNodes]);
+  const deleteNode = useCallback((nodeID: string) => {
+    if (!canEdit) return;
+    setNodes((all) => all.filter((node) => node.id !== nodeID));
+    setEdges((all) => all.filter((edge) => edge.source !== nodeID && edge.target !== nodeID));
+    setInspectedNodeID((current) => current === nodeID ? undefined : current);
+    setSelectedNodeIDs((all) => all.filter((id) => id !== nodeID));
+    setDirty(true);
+    setMessage("Card e conexões vinculadas removidos.");
+  }, [canEdit, setEdges, setNodes]);
+  const editNode = useCallback((nodeID: string) => {
+    setInspectedNodeID(nodeID);
+  }, []);
+  const closeInspector = useCallback(() => {
+    setInspectedNodeID(undefined);
+  }, []);
+  const clearCanvasEditing = useCallback(() => {
+    setInspectedNodeID(undefined);
+    setSelectedNodeIDs([]);
+    setSelectedEdgeIDs([]);
+  }, []);
   const handleSelectionChange = useCallback((selectedNodes: Node<CardData>[], selectedEdges: Edge[]) => {
     const nextNodeIDs = selectedNodes.map((node) => node.id);
     const nextEdgeIDs = selectedEdges.map((edge) => edge.id);
@@ -395,27 +464,11 @@ export function StudioWorkspace() {
     setSelectedEdgeIDs((current) =>
       selectionHasChanged(current, nextEdgeIDs) ? nextEdgeIDs : current,
     );
-    if (selectedNodes[0]) {
-      setSelected((current) =>
-        current.key === selectedNodes[0].data.key ? current : selectedNodes[0].data,
-      );
-    }
   }, []);
-  const removeSelection = () => {
-    const removed = removeSelectedElements(nodes, edges, selectedNodeIDs, selectedEdgeIDs);
-    setNodes(removed.nodes);
-    setEdges(removed.edges);
-    setSelected(removed.nodes[0]?.data ?? starterNodes[0].data);
-    setSelectedNodeIDs([]);
-    setSelectedEdgeIDs([]);
-    setConfirmRemoval(false);
-    setDirty(true);
-    setMessage(`${selectedNodeIDs.length} card(s) e ${removed.removedEdges} conexão(ões) removidos.`);
-  };
   const selectValidationIssue = (issue: WorkflowValidationIssue) => {
     const node = issue.nodeKey && nodes.find((item) => item.id === issue.nodeKey);
     if (node) {
-      setSelected(node.data);
+      setInspectedNodeID(node.id);
       setSelectedNodeIDs([node.id]);
       setSelectedEdgeIDs([]);
       setMessage(`Ajuste destacado: ${issue.message}`);
@@ -423,6 +476,18 @@ export function StudioWorkspace() {
       setMessage(issue.message);
     }
   };
+  const registerWebhook = useCallback(async (registration: {
+    key: string; name: string; workflow_key: string; trigger_node_key: string; secret: string; active: boolean;
+  }) => {
+    try {
+      const saved = await saveWebhookRegistration(registration);
+      setWebhookRegistrations((all) => [...all.filter((item) => item.key !== saved.key), saved]);
+      setMessage(`Webhook ${saved.name} registrado sem expor o segredo.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível registrar o webhook.");
+      throw error;
+    }
+  }, []);
   useEffect(() => {
     if (!dirty) return;
     const warnBeforeExit = (event: BeforeUnloadEvent) => {
@@ -433,43 +498,38 @@ export function StudioWorkspace() {
     return () => window.removeEventListener("beforeunload", warnBeforeExit);
   }, [dirty]);
   return (
-    <main className={styles.studio}>
+    <main className={`${styles.studio} ${inspectedCard ? styles.inspectorOpen : ""}`}>
       <header className={styles.topbar}>
-        <strong>
-          <Braces size={20} /> ForgeReview <small>WORKFLOW STUDIO</small>
-        </strong>
-         <span>{openedVersionID ? `Versão salva ${openedVersionID}` : "Fluxo de verificação"}</span>
-         {dirty && <em className={styles.unsaved}>Alterações não salvas</em>}
-         <em className={validationIssues.length ? styles.invalid : styles.valid}>
-           {validationIssues.length ? `${validationIssues.length} ajuste(s) pendente(s)` : "Validação local pronta"}
-         </em>
-        <div>
-          <button disabled={!canEdit} onClick={loadReviewTemplate}>
-            <BookOpen size={14} /> Template review
-          </button>
-          <button disabled={user?.role !== "admin"} onClick={openConnections}>
-            <Settings2 size={14} /> Integrações
-          </button>
-          <Link href="/pipelines">Pipelines</Link>
-          <Link href="/integrations">Gerenciar integrações</Link>
-          <button disabled={!canEdit || busy} onClick={() => openTransfer("clone")}><Copy size={14} /> Clonar</button>
-          <button disabled={!canEdit || busy} onClick={() => openTransfer("import")}><Upload size={14} /> Importar</button>
-          <button disabled={!canEdit || busy} onClick={() => openTransfer("export")}><Download size={14} /> Exportar</button>
-           <button
-             disabled={busy || !canEdit}
-             onClick={() => setMessage(validationIssues.length ? "Há ajustes locais pendentes no workflow." : "Validação local concluída. O backend confirmará ao salvar.")}
-           >
-             <ShieldCheck size={14} /> Validar{validationIssues.length ? ` (${validationIssues.length})` : ""}
-           </button>
-           <button disabled={busy || !canEdit} onClick={requestRemoval}>
-             <Trash2 size={14} /> Remover seleção
-           </button>
-          <button
-            disabled={busy || !canEdit}
-            onClick={() => void saveDraft()}
-          >
-            <Save size={14} /> Salvar novo rascunho
-          </button>
+        <div className={styles.identity}>
+          <strong><Braces size={18} aria-hidden="true" /> ForgeReview</strong>
+          <span>{openedVersionID ? `Versão ${openedVersionID}` : metadata.name}</span>
+        </div>
+        <div className={styles.status} aria-label="Status do workflow">
+          {dirty && <em className={styles.unsaved}>Não salvo</em>}
+          <em className={validationIssues.length ? styles.invalid : styles.valid}>
+            {validationIssues.length ? `${validationIssues.length} ajuste(s)` : "Válido"}
+          </em>
+        </div>
+        <div className={styles.actions}>
+          <details className={styles.overflow}>
+            <summary aria-label="Abrir ações do Studio" title="Mais ações">
+              <MoreHorizontal size={18} aria-hidden="true" />
+              <span>Ações</span>
+            </summary>
+            <div className={styles.menu}>
+              <button disabled={!canEdit} onClick={loadReviewTemplate}><BookOpen size={14} /> Template review</button>
+              <button disabled={user?.role !== "admin"} onClick={openConnections}><Settings2 size={14} /> Nova integração</button>
+              <Link href="/pipelines">Pipelines</Link>
+              <Link href="/integrations">Gerenciar integrações</Link>
+              <hr />
+              <button disabled={!canEdit || busy} onClick={() => openTransfer("clone")}><Copy size={14} /> Clonar workflow</button>
+              <button disabled={!canEdit || busy} onClick={() => openTransfer("import")}><Upload size={14} /> Importar JSON</button>
+              <button disabled={!canEdit || busy} onClick={() => openTransfer("export")}><Download size={14} /> Exportar JSON</button>
+              <button disabled={busy || !canEdit} onClick={() => setMessage(validationIssues.length ? "Há ajustes locais pendentes no workflow." : "Validação local concluída. O backend confirmará ao salvar.")}><ShieldCheck size={14} /> Validar workflow</button>
+              <button disabled={busy || !canEdit} onClick={() => void saveDraft()}><Save size={14} /> Salvar rascunho</button>
+              {canEdit && <button disabled={busy} onClick={removeSelection}><Trash2 size={14} /> Excluir seleção</button>}
+            </div>
+          </details>
           <button
             className={styles.publish}
             disabled={busy || !canEdit}
@@ -480,9 +540,9 @@ export function StudioWorkspace() {
           <button
             className={styles.primary}
             disabled={busy || !canEdit}
-            onClick={() => void saveAndRun()}
+            onClick={openManualRun}
           >
-            <CirclePlay size={14} /> {busy ? "Executando" : "Salvar e executar"}
+            <CirclePlay size={14} /> {busy ? "Executando" : "Salvar / executar"}
           </button>
         </div>
       </header>
@@ -494,21 +554,30 @@ export function StudioWorkspace() {
         onNodesChange={trackNodeChanges}
         onEdgesChange={trackEdgeChanges}
         onConnect={connect}
-        onSelect={setSelected}
         onSelectionChange={handleSelectionChange}
-        onRequestDelete={requestRemoval}
+        onRequestDelete={removeSelection}
+        onEditNode={editNode}
+        onDeleteNode={deleteNode}
+        onPaneClick={clearCanvasEditing}
         validationIssues={validationIssues}
         onSelectValidationIssue={selectValidationIssue}
         readOnly={!canEdit}
       />
-      <CardInspector
-        selected={selected}
-        integrations={integrations}
-        modelProfiles={modelProfiles}
-        hasErrorRoute={hasErrorRoute(edges, selected.key)}
-        onChange={(patch) => canEdit && patchSelected(patch)}
-        readOnly={!canEdit}
-      />
+      {inspectedCard && (
+        <CardInspector
+          selected={inspectedCard}
+          integrations={integrations}
+          modelProfiles={modelProfiles}
+          hasErrorRoute={hasErrorRoute(edges, inspectedCard.key)}
+          onChange={(patch) => canEdit && patchInspected(patch)}
+          onClose={closeInspector}
+          readOnly={!canEdit}
+          webhookRegistrations={webhookRegistrations}
+          canAdministerWebhooks={user?.role === "admin"}
+          workflowKey={metadata.key}
+          onRegisterWebhook={registerWebhook}
+        />
+      )}
       {showConnections && (
         <ConnectionWizard
           items={integrations}
@@ -521,15 +590,29 @@ export function StudioWorkspace() {
         />
       )}
       {transfer && <WorkflowTransferModal mode={transfer} definition={definition} cards={cards} workflowKeys={workflowKeys} onClose={() => setTransfer(undefined)} onApply={applyTransferredDefinition} />}
-      {confirmRemoval && (
+      {showManualRun && (
         <ModalShell
-          title="Remover seleção?"
-          eyebrow="AÇÃO DESTRUTIVA"
-          description={`${selectedNodeIDs.length} card(s) e ${selectedEdgeIDs.length} conexão(ões) estão selecionados. Cards removidos também removem todas as conexões ligadas.`}
-          onClose={() => setConfirmRemoval(false)}
-          footer={<><button type="button" onClick={() => setConfirmRemoval(false)}>Cancelar</button><button type="button" className={styles.removeConfirm} onClick={removeSelection}>Remover</button></>}
+          title="Executar workflow"
+          eyebrow="TRIGGER MANUAL"
+          description="O Studio salva um novo rascunho e inicia a execução pelo trigger selecionado. O payload não é persistido no navegador."
+          onClose={() => setShowManualRun(false)}
+          className={styles.runModal}
+          footer={<><button type="button" onClick={() => setShowManualRun(false)}>Cancelar</button><button type="button" className={styles.primary} disabled={!manualTriggerID || busy} onClick={() => void saveAndRun(manualTriggerID)}><CirclePlay size={14} /> Salvar e executar</button></>}
         >
-          <p>Revise a seleção no canvas. Esta ação só acontece depois desta confirmação e marca o workflow como não salvo.</p>
+          <div className={styles.runForm}>
+            <label>
+              Trigger manual
+              <select value={manualTriggerID} onChange={(event) => setManualTriggerID(event.target.value)}>
+                <option value="">Selecione um trigger</option>
+                {manualTriggers.map((node) => <option key={node.id} value={node.id}>{node.data.name}</option>)}
+              </select>
+            </label>
+            {!manualTriggers.length && <p role="alert">Este workflow não possui um trigger em modo manual.</p>}
+            <label>
+              Payload JSON opcional
+              <textarea aria-label="Payload JSON opcional do trigger manual" value={manualPayload} onChange={(event) => setManualPayload(event.target.value)} placeholder='{"pull_request":{"owner":"acme","repo":"api","number":42}}' spellCheck={false} />
+            </label>
+          </div>
         </ModalShell>
       )}
     </main>

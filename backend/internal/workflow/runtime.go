@@ -46,9 +46,10 @@ type RunReport struct {
 // Execution is the worker-only execution payload. Its input is not included in
 // the public execution-status response.
 type Execution struct {
-	ID        int64
-	VersionID int64
-	Input     map[string]any
+	ID             int64
+	VersionID      int64
+	TriggerNodeKey string
+	Input          map[string]any
 }
 
 // Adapters are the explicit boundary for controlled external card execution.
@@ -113,12 +114,48 @@ func Run(ctx context.Context, definition Definition, catalog Catalog, input map[
 // configured active integration, an injected adapter, and an encrypted-secret
 // resolver; local card behavior is unchanged.
 func RunWithAdapters(ctx context.Context, definition Definition, catalog Catalog, input map[string]any, adapters Adapters) (RunReport, error) {
+	trigger := ""
+	for _, node := range definition.Nodes {
+		if node.Type == "trigger" {
+			trigger = node.Key
+			break
+		}
+	}
+	return RunFromTriggerWithAdapters(ctx, definition, catalog, trigger, input, adapters)
+}
+
+// RunFromTriggerWithAdapters activates only the selected trigger and nodes
+// reachable from it. Other zero-input triggers and their branches stay idle.
+func RunFromTriggerWithAdapters(ctx context.Context, definition Definition, catalog Catalog, triggerNodeKey string, input map[string]any, adapters Adapters) (RunReport, error) {
 	if err := Validate(definition, catalog); err != nil {
 		return RunReport{}, err
 	}
-	runner := newScopedRunner(definition, catalog, input, adapters)
+	if triggerNodeKey == "" {
+		for _, node := range definition.Nodes {
+			if node.Type == "trigger" {
+				triggerNodeKey = node.Key
+				break
+			}
+		}
+	}
+	active := map[string]bool{}
+	if triggerNodeKey == "" {
+		for _, node := range definition.Nodes {
+			active[node.Key] = true
+		}
+	} else {
+		selected, ok := nodeFor(definition.Nodes, triggerNodeKey)
+		if !ok || selected.Type != "trigger" {
+			return RunReport{}, fmt.Errorf("selected trigger %q does not exist", triggerNodeKey)
+		}
+		active = reachableNodes(definition, triggerNodeKey)
+	}
+	runner := newScopedRunner(definition, catalog, input, adapters, active)
 	ready := make([]nodeScope, 0)
 	for _, node := range definition.Nodes {
+		if !active[node.Key] || (triggerNodeKey != "" && node.Type == "trigger" && node.Key != triggerNodeKey) {
+			continue
+		}
 		card, _ := catalog.Get(node.Type)
 		if len(card.Inputs) == 0 || (node.Type == "cache" && node.Config["mode"] != "write") {
 			ready = append(ready, nodeScope{NodeKey: node.Key, ScopeKey: rootScope})
@@ -136,11 +173,29 @@ func RunWithAdapters(ctx context.Context, definition Definition, catalog Catalog
 		}
 	}
 	for _, node := range definition.Nodes {
-		if !runner.scopeOnly[node.Key] && !runner.ran(nodeScope{NodeKey: node.Key, ScopeKey: rootScope}) {
+		if active[node.Key] && !runner.scopeOnly[node.Key] && !runner.ran(nodeScope{NodeKey: node.Key, ScopeKey: rootScope}) {
 			return RunReport{Status: "blocked", Runs: runner.report.Runs}, fmt.Errorf("workflow has blocked nodes")
 		}
 	}
 	return runner.report, nil
+}
+
+func reachableNodes(definition Definition, start string) map[string]bool {
+	edges := map[string][]string{}
+	for _, edge := range definition.Edges {
+		edges[edge.FromNode] = append(edges[edge.FromNode], edge.ToNode)
+	}
+	active, queue := map[string]bool{}, []string{start}
+	for len(queue) > 0 {
+		key := queue[0]
+		queue = queue[1:]
+		if active[key] {
+			continue
+		}
+		active[key] = true
+		queue = append(queue, edges[key]...)
+	}
+	return active
 }
 
 const rootScope = "root"
@@ -162,9 +217,10 @@ type scopedRunner struct {
 	adapters  Adapters
 	report    RunReport
 	results   map[string][]any
+	active    map[string]bool
 }
 
-func newScopedRunner(definition Definition, catalog Catalog, input map[string]any, adapters Adapters) *scopedRunner {
+func newScopedRunner(definition Definition, catalog Catalog, input map[string]any, adapters Adapters, active map[string]bool) *scopedRunner {
 	runner := &scopedRunner{
 		nodes:     make(map[string]Node, len(definition.Nodes)),
 		inboxes:   map[string]map[string]map[string][]Token{},
@@ -177,12 +233,18 @@ func newScopedRunner(definition Definition, catalog Catalog, input map[string]an
 		adapters:  adapters,
 		report:    RunReport{Status: "completed"},
 		results:   map[string][]any{},
+		active:    active,
 	}
 	for _, node := range definition.Nodes {
 		runner.nodes[node.Key] = node
 		runner.incoming[node.Key] = map[string]int{}
 	}
 	for _, edge := range definition.Edges {
+		// Inactive trigger branches must not contribute required or collecting
+		// input counts when multiple trigger branches converge downstream.
+		if !active[edge.FromNode] || !active[edge.ToNode] {
+			continue
+		}
 		runner.edges[edge.FromNode] = append(runner.edges[edge.FromNode], edge)
 		runner.incoming[edge.ToNode][edge.ToPort]++
 	}
@@ -673,6 +735,9 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 	}
 	switch node.Type {
 	case "trigger":
+		if len(input) > 0 {
+			return map[string]any{"event": input}, nil
+		}
 		if value, ok := node.Config["event"]; ok {
 			return map[string]any{"event": value}, nil
 		}
@@ -768,7 +833,7 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		if err != nil {
 			return nil, err
 		}
-		request, err := pullRequestRequest(node)
+		request, err := pullRequestRequestFromInputs(node, inputs)
 		if err != nil {
 			return nil, err
 		}
@@ -776,6 +841,7 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		if err != nil {
 			return nil, fmt.Errorf("fetch card %q: %w", node.Key, err)
 		}
+		pullRequest.Target = request
 		return map[string]any{"pull_request": pullRequest, "files": pullRequest.Files}, nil
 	case "model":
 		prompt, ok := firstForPort(inputs, "prompt").(string)
@@ -915,7 +981,10 @@ func publishReview(ctx context.Context, node Node, inputs map[string][]any, adap
 	if !ok {
 		return nil, fmt.Errorf("publish card %q requires a formatted_review input", node.Key)
 	}
-	request, err := pullRequestRequestForCard(node, "publish")
+	request, err := runtimePullRequestRequest(firstForPort(inputs, "pull_request"))
+	if err != nil {
+		request, err = pullRequestRequestForCard(node, "publish")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1014,6 +1083,33 @@ func resolveSecret(item integration.Integration, adapters Adapters, card, nodeKe
 
 func pullRequestRequest(node Node) (integration.PullRequestRequest, error) {
 	return pullRequestRequestForCard(node, "fetch")
+}
+
+func runtimePullRequestRequest(value any) (integration.PullRequestRequest, error) {
+	switch item := value.(type) {
+	case integration.PullRequest:
+		if item.Target.Owner != "" && item.Target.Repo != "" && item.Target.Number > 0 {
+			return item.Target, nil
+		}
+	case map[string]any:
+		if nested, ok := item["pull_request"].(map[string]any); ok {
+			item = nested
+		}
+		owner, _ := item["owner"].(string)
+		repo, _ := item["repo"].(string)
+		number, ok := integer(item["number"])
+		if owner != "" && repo != "" && ok && number > 0 {
+			return integration.PullRequestRequest{Owner: owner, Repo: repo, Number: number}, nil
+		}
+	}
+	return integration.PullRequestRequest{}, fmt.Errorf("runtime pull request target is unavailable")
+}
+
+func pullRequestRequestFromInputs(node Node, inputs map[string][]any) (integration.PullRequestRequest, error) {
+	if request, err := runtimePullRequestRequest(firstForPort(inputs, "event")); err == nil {
+		return request, nil
+	}
+	return pullRequestRequest(node)
 }
 
 func pullRequestRequestForCard(node Node, card string) (integration.PullRequestRequest, error) {

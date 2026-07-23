@@ -59,7 +59,13 @@
   writer adapter, and durable execution-bound idempotency record.
 - Async execution: configured Redis dispatches persisted execution IDs to a
   worker; execution status remains queryable while queued, running, completed,
-  or failed. Synchronous starts remain available without a dispatcher.
+  or failed. Persisted queued work is recoverable when a Redis wake-up is missed.
+- Typed triggers: each trigger can be manual, authenticated API, or signed Gitea
+  webhook. Manual execution targets a selected card and accepts an optional JSON
+  test payload; API execution targets a published workflow and trigger under
+  editor/admin RBAC; webhook delivery is HMAC-verified and idempotent. Only the
+  selected trigger branch runs, and canonical PR context flows dynamically into
+  fetch and publication without requiring fixed PR coordinates.
 - Workflow version lifecycle: saves remain new drafts; workflow lists expose
   version number, creation time, and draft/published/archived state. Publishing
   a valid draft atomically archives its workflow's previous published version.
@@ -87,13 +93,20 @@
   error handle while route is selected; error paths are distinct on the canvas.
   `error_control` handles routed typed errors as terminal fail, continue, or a
    fallback output, including inside loop child scopes.
-- Studio graph management: editors/admins can select cards and edges and use
-  the Studio removal control or Delete/Backspace to open an accessible
-  confirmation dialog; deleting cards also deletes their connected edges.
-  Viewers can inspect/select the canvas but cannot alter it. Before save,
+- Studio graph management: editors/admins get accessible edit/delete controls
+  in each card header. Edit alone opens the otherwise-hidden Inspector; delete,
+  the overflow removal action, and Delete/Backspace remove immediately, with
+  incident edges removed alongside cards. Pane clicks close editing without
+  coupling ordinary selection to the Inspector. Viewers receive no active card
+  edit/delete controls. Before save,
   publish, or execution, Studio displays local validation status and lists locally knowable identity, graph,
   configuration, route, port, and contract issues and focuses the related card
   when possible; backend validation remains authoritative.
+- Studio header and manual run: workflow identity and status remain compact,
+  while publish and save/run stay visible. Template, navigation, integration,
+  transfer, validation, selection removal, and draft-save actions share one
+  overflow menu. Optional manual-trigger JSON is entered in a focus-managed run
+  modal and is never embedded in persisted card data.
 - Reusable model profiles: integrations retain provider transport and encrypted
   credentials; profiles select the model and reference an active LLM connection.
   Model cards select profiles, and the runner resolves the profile in memory

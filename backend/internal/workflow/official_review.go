@@ -16,7 +16,7 @@ func OfficialReviewDefinition() Definition {
 		Name:        "Official Gitea PR Review",
 		Description: "Seeded full pull-request review pipeline with one native Gitea review publication.",
 		Nodes: []Node{
-			{Key: "trigger", Type: "trigger", Name: "Webhook / manual", Position: Position{X: 40, Y: 280}},
+			{Key: "trigger", Type: "trigger", Name: "Webhook Gitea", Position: Position{X: 40, Y: 280}, Config: map[string]any{"mode": "webhook"}},
 			{Key: "fetch", Type: "fetch", Name: "Buscar dados do PR", Position: Position{X: 315, Y: 280}, Config: map[string]any{"integration": "", "owner": "", "repo": "", "pull_request": 0}},
 			{Key: "filter", Type: "filter", Name: "Filtrar arquivos", Position: Position{X: 610, Y: 125}, Config: map[string]any{"include_extensions": []string{".go", ".ts", ".tsx", ".php"}, "ignore_generated": true}},
 			{Key: "group", Type: "group", Name: "Agrupar arquivos", Position: Position{X: 900, Y: 125}, Config: map[string]any{"max_files": 8, "max_characters": 12000, "group_by_extension": true}},
@@ -42,6 +42,17 @@ func OfficialReviewDefinition() Definition {
 			{Key: "loop-consolidate", FromNode: "loop", FromPort: "results", ToNode: "consolidate", ToPort: "comments"},
 			{Key: "consolidate-format", FromNode: "consolidate", FromPort: "review", ToNode: "format", ToPort: "review"},
 			{Key: "format-publish", FromNode: "format", FromPort: "formatted", ToNode: "publish", ToPort: "formatted_review"},
+			{Key: "fetch-publish-target", FromNode: "fetch", FromPort: "pull_request", ToNode: "publish", ToPort: "pull_request"},
 		},
 	}
+}
+
+// legacyOfficialReviewDefinition identifies only the untouched seed shipped
+// before webhook targets. It is used for an append-only startup upgrade.
+func LegacyOfficialReviewDefinition() Definition {
+	definition := OfficialReviewDefinition()
+	definition.Nodes[0].Name = "Webhook / manual"
+	definition.Nodes[0].Config = nil
+	definition.Edges = definition.Edges[:len(definition.Edges)-1]
+	return definition
 }
