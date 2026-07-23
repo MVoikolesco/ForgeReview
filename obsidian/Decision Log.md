@@ -1,5 +1,12 @@
 # Decision Log
 
+## 2026-07-23: Serializable Studio-only editing history
+
+Undo/redo stores cloned workflow definitions rather than React Flow UI state.
+Selection, menus, viewport, and execution reports are excluded, keeping history
+safe and semantic. The card editor is a focus-managed modal independent from
+selection. See [[Architecture]] and [[Feature Map]].
+
 ## 2026-07-23: Bounded durable retry and serialized provider calls
 
 Only transient worker failures retry, with a maximum of three durable attempts

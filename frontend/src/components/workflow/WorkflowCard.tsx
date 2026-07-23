@@ -40,8 +40,12 @@ export function WorkflowCard({ id, data }: NodeProps) {
           </button>
         </span>
       )}
-    >
+      >
       <h2 className={styles.title}>{card.name}</h2>
+      <div className={styles.execution} aria-label={`Execução: ${card.status}`}>
+        <span style={{ width: card.status === "completed" ? "100%" : card.status === "partial" ? "70%" : card.status === "failed" ? "100%" : card.status === "running" ? "45%" : "0%" }} />
+      </div>
+      <p className={styles.summary}>{card.inputs.length} entrada{card.inputs.length === 1 ? "" : "s"} · {cardOutputPorts(card).length} saída{cardOutputPorts(card).length === 1 ? "" : "s"}</p>
       {card.inputs.map((port) => (
         <div className={styles.port} key={port.key}>
           <Handle

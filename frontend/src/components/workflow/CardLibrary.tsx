@@ -1,17 +1,25 @@
-import { Database, GitBranch, Layers3, LockKeyhole, Plus } from "lucide-react";
+"use client";
+
+import { Database, GitBranch, Layers3, LockKeyhole, Plus, Search } from "lucide-react";
+import { useState } from "react";
 import type { CardType } from "../../lib/types";
+import { searchCards } from "../../lib/studio";
 import styles from "./CardLibrary.module.scss";
 
 export function CardLibrary({
   cards,
   onAdd,
+  onDragStart,
   readOnly = false,
 }: {
   cards: CardType[];
   onAdd: (card: CardType) => void;
+  onDragStart?: (card: CardType) => void;
   readOnly?: boolean;
 }) {
-  const categories = [...new Set(cards.map((card) => card.category))];
+  const [query, setQuery] = useState("");
+  const filteredCards = searchCards(cards, query);
+  const categories = [...new Set(filteredCards.map((card) => card.category))];
   const icon = (category: string) =>
     category === "Dados" ? (
       <Database size={14} />
@@ -26,18 +34,29 @@ export function CardLibrary({
         <b>Cards</b>
         <small>Adicione ao canvas</small>
       </div>
+      <label className={styles.search}>
+        <Search size={14} aria-hidden="true" />
+        <span className="sr-only">Buscar cards</span>
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cards" />
+      </label>
       {categories.map((category) => (
         <section key={category}>
           <h2>
             {icon(category)} {category}
           </h2>
-          {cards
+          {filteredCards
             .filter((card) => card.category === category)
             .map((card) => (
               <button
                 key={card.key}
                 title={card.available === false ? card.unavailable_reason || "Card indisponível" : card.description}
                 onClick={() => onAdd(card)} disabled={readOnly || card.available === false}
+                draggable={!readOnly && card.available !== false}
+                onDragStart={(event) => {
+                  event.dataTransfer.setData("application/forgereview-card", card.key);
+                  event.dataTransfer.effectAllowed = "move";
+                  onDragStart?.(card);
+                }}
                 aria-describedby={card.available === false ? `card-${card.key}-availability` : undefined}
               >
                 <i /> <span>{card.name}</span>

@@ -475,11 +475,13 @@ export function validateStudioWorkflow(
       node.type === "loop" &&
       (!positiveInteger(node.config.max_iterations) ||
         (node.config.concurrency !== undefined &&
-          node.config.concurrency !== 1))
+          (!Number.isInteger(node.config.concurrency) ||
+            (node.config.concurrency as number) < 1 ||
+            (node.config.concurrency as number) > 4)))
     )
       issues.push({
         nodeKey: node.key,
-        message: `"${node.name}" requer máximo de iterações positivo e concorrência 1.`,
+        message: `"${node.name}" requer máximo de iterações positivo e concorrência entre 1 e 4.`,
       });
     if (
       node.type === "group" &&

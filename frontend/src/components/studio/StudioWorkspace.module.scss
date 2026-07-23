@@ -10,9 +10,6 @@
     background: $surface-root;
 }
 
-.studio.inspectorOpen {
-    grid-template-columns: 250px minmax(0, 1fr) 310px;
-}
 
 .actionArea {
     display: flex;

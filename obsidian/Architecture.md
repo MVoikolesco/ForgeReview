@@ -1,5 +1,10 @@
 # Architecture
 
+Studio's client-only history contains cloned workflow definitions, not selection,
+viewport, menu, or execution-report state. Library drops use React Flow
+`screenToFlowPosition`; the contextual inspector is a shared focus-managed modal.
+Cards show only safe node status as execution progress. See [[Feature Map]].
+
 The new application separates `backend/` (Gin, SQLite and workflow domain) from
 `frontend/` (Next.js Studio). The workflow catalog is backend-controlled and
 definitions connect typed card ports. See `docs/architecture.md`.

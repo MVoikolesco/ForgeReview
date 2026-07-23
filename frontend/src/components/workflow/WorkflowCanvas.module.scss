@@ -38,6 +38,17 @@
     font-size: 11px;
     background: #12161ddd;
 }
+.toolbar { position: absolute; z-index: 6; top: 16px; left: 16px; display: flex; gap: 6px; padding: 5px; border: 1px solid #303a48; border-radius: 8px; background: #12161ddd; }
+.toolbar label { display: flex; align-items: center; gap: 6px; padding: 0 6px; color: #91a0b2; }
+.toolbar input { width: min(180px, 28vw); border: 0; outline: 0; color: #e4eaf3; font: inherit; font-size: 12px; background: transparent; }
+.toolbar button { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid #303a48; border-radius: 5px; color: #cbd5e2; background: #1a2029; cursor: pointer; }
+.toolbar button:hover, .toolbar button:focus-visible { border-color: #5a83bd; color: #fff; }
+.contextMenu { position: fixed; z-index: 20; display: grid; min-width: 180px; padding: 6px; border: 1px solid #3d4a5c; border-radius: 8px; background: #141a22; box-shadow: 0 18px 44px #000b; }
+.contextMenu button { padding: 8px 10px; border: 0; border-radius: 5px; color: #dce5f0; text-align: left; background: transparent; cursor: pointer; }
+.contextMenu button:hover:not(:disabled), .contextMenu button:focus-visible { background: #273140; }
+.contextMenu button:disabled { opacity: .5; cursor: not-allowed; }
+.contextMenu hr { width: 100%; border: 0; border-top: 1px solid #303a48; }
+@media (max-width: 600px) { .toolbar { top: 10px; left: 10px; } .toolbar input { width: 110px; } }
 
 .validation {
     position: absolute;

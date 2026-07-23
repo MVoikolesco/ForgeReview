@@ -1,5 +1,9 @@
 # Feature Map
 
+- Studio interaction completion: searchable accessible card addition and drag/drop,
+  contextual canvas tools, safe status progress, modal card editing, semantic
+  undo/redo, and bounded loop concurrency (1–4). See [[Architecture]].
+
 - POC: preserved under `POC/`.
 - Local identity and RBAC: login, logout, and current-user endpoints use
   bcrypt-backed SQLite users and signed, revocable HttpOnly sessions. Explicit

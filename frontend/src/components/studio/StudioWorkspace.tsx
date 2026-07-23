@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   apiURL,
   executePublishedWorkflow,
@@ -67,6 +67,7 @@ import {
   validateStudioWorkflow,
   type WorkflowValidationIssue,
 } from "../../lib/workflow";
+import { isEditableTarget, pushHistory, redoHistory, undoHistory, type StudioHistory } from "../../lib/studio";
 import { useCurrentUser } from "../auth/AuthGate";
 import { ModalShell } from "../common/ModalShell";
 import { ConnectionWizard } from "../integrations/ConnectionWizard";
@@ -105,6 +106,9 @@ export function StudioWorkspace() {
   const [workflowKeys, setWorkflowKeys] = useState<string[]>([]);
   const [selectedNodeIDs, setSelectedNodeIDs] = useState<string[]>([]);
   const [selectedEdgeIDs, setSelectedEdgeIDs] = useState<string[]>([]);
+  const [history, setHistory] = useState<StudioHistory>({ past: [], future: [] });
+  const [canvasSearch, setCanvasSearch] = useState("");
+  const [focusedNodeID, setFocusedNodeID] = useState<string>();
   const [showManualRun, setShowManualRun] = useState(false);
   const [manualTriggerID, setManualTriggerID] = useState("");
   const [manualPayload, setManualPayload] = useState("");
@@ -117,6 +121,9 @@ export function StudioWorkspace() {
     () => toDefinition(nodes, edges, metadata),
     [nodes, edges, metadata],
   );
+  const currentDefinition = useRef(definition);
+  useEffect(() => { currentDefinition.current = definition; }, [definition]);
+  const remember = useCallback(() => setHistory((current) => pushHistory(current, currentDefinition.current)), []);
   const validationIssues = useMemo(
     () => validateStudioWorkflow(definition, cards),
     [definition, cards],
@@ -209,7 +216,8 @@ export function StudioWorkspace() {
         .catch(() => undefined);
   }, [user?.role]);
 
-  const addCard = (card: CardType) => {
+  const addCard = (card: CardType, position?: { x: number; y: number }) => {
+    remember();
     const key = `${card.key}-${Date.now().toString(36)}`;
     const data: CardData = {
       key,
@@ -227,7 +235,7 @@ export function StudioWorkspace() {
       {
         id: key,
         type: "card",
-        position: {
+        position: position ?? {
           x: 210 + (all.length % 4) * 280,
           y: 90 + Math.floor(all.length / 4) * 250,
         },
@@ -270,13 +278,15 @@ export function StudioWorkspace() {
         );
         return;
       }
+      remember();
       setEdges((all) => addEdge({ ...connection, animated: false }, all));
       setDirty(true);
     },
-    [nodes, setEdges],
+    [nodes, remember, setEdges],
   );
   const patchInspected = (patch: Partial<CardData>) => {
     if (!inspectedNodeID) return;
+    remember();
     setNodes((all) =>
       all.map((node) =>
         node.id === inspectedNodeID
@@ -311,6 +321,30 @@ export function StudioWorkspace() {
       setBusy(false);
     }
   };
+  const restoreHistory = useCallback((next: import("../../lib/types").WorkflowDefinition) => {
+    const hydrated = hydrateDefinition(next, cards);
+    setNodes(hydrated.nodes); setEdges(hydrated.edges);
+    setMetadata({ key: next.key, name: next.name, description: next.description }); setDirty(true);
+  }, [cards, setEdges, setNodes]);
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if (isEditableTarget(event.target)) return;
+      const mod = event.ctrlKey || event.metaKey;
+      if (mod && event.key.toLowerCase() === "s") { event.preventDefault(); if (canEdit) void saveDraft(); return; }
+      if (mod && ["z", "y"].includes(event.key.toLowerCase())) {
+        event.preventDefault();
+        const redo = event.key.toLowerCase() === "y" || event.shiftKey;
+        const result = redo ? redoHistory(history, currentDefinition.current) : undoHistory(history, currentDefinition.current);
+        if (result) { setHistory(result.history); restoreHistory(result.definition); }
+        return;
+      }
+      if ((mod && event.key.toLowerCase() === "k") || event.key === "/") { event.preventDefault(); document.querySelector<HTMLInputElement>("[data-canvas-search]")?.focus(); return; }
+      if (event.key === "?") { setMessage("Atalhos: ⌘/Ctrl+Z desfaz, ⌘/Ctrl+Y refaz, ⌘/Ctrl+S salva, ⌘/Ctrl+K ou / busca, F foca seleção e Esc fecha."); return; }
+      if (event.key === "Escape") { setInspectedNodeID(undefined); setSelectedNodeIDs([]); setSelectedEdgeIDs([]); document.querySelectorAll("details[open]").forEach((item) => item.removeAttribute("open")); return; }
+      if (event.key.toLowerCase() === "f" && selectedNodeIDs[0]) setFocusedNodeID(selectedNodeIDs[0]);
+    };
+    window.addEventListener("keydown", shortcut); return () => window.removeEventListener("keydown", shortcut);
+  }, [canEdit, history, restoreHistory, selectedNodeIDs]);
   const publishCurrent = async () => {
     if (validationIssues.length) {
       setMessage("Corrija os ajustes indicados antes de publicar.");
@@ -783,6 +817,17 @@ export function StudioWorkspace() {
           onPaneClick={clearCanvasEditing}
           validationIssues={validationIssues}
           onSelectValidationIssue={selectValidationIssue}
+          onAddCardAt={(key, position) => { const card = cards.find((item) => item.key === key); if (card) addCard(card, position); }}
+          onDuplicateNode={(nodeID) => {
+            if (!canEdit) return;
+            const source = nodes.find((node) => node.id === nodeID); if (!source) return;
+            remember(); const id = `${source.data.type}-${Date.now().toString(36)}`;
+            setNodes((all) => [...all, { ...source, id, position: { x: source.position.x + 44, y: source.position.y + 44 }, data: { ...source.data, key: id, name: `${source.data.name} (cópia)`, config: structuredClone(source.data.config), status: "idle" } }]);
+            setSelectedNodeIDs([id]); setDirty(true);
+          }}
+          searchQuery={canvasSearch}
+          onSearchQueryChange={(query) => { setCanvasSearch(query); const match = nodes.find((node) => node.data.name.toLowerCase().includes(query.toLowerCase())); if (query && match) { setFocusedNodeID(match.id); setSelectedNodeIDs([match.id]); } }}
+          focusNodeID={focusedNodeID}
           readOnly={!canEdit}
         />
         {inspectedCard && (

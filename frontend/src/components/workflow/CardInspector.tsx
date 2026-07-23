@@ -1,4 +1,3 @@
-import { X } from "lucide-react";
 import { useState } from "react";
 import type {
   CardData,
@@ -8,6 +7,7 @@ import type {
 } from "../../lib/types";
 import { configList, configNumber, configText } from "../../lib/workflow";
 import { ToggleSwitch } from "../common/ToggleSwitch";
+import { ModalShell } from "../common/ModalShell";
 import styles from "./CardInspector.module.scss";
 
 export function CardInspector({
@@ -115,24 +115,7 @@ export function CardInspector({
     </label>
   );
   return (
-    <aside
-      className={styles.inspector}
-      aria-label="Inspector do card selecionado"
-    >
-      <header>
-        <div>
-          <span>CONFIGURAÇÃO</span>
-          <b>{selected.name}</b>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Fechar Inspector"
-          title="Fechar Inspector"
-        >
-          <X size={16} aria-hidden="true" />
-        </button>
-      </header>
+    <ModalShell title={selected.name} eyebrow="CONFIGURAÇÃO DO CARD" onClose={onClose} className={styles.inspector}>
       <fieldset className={styles.fields} disabled={readOnly}>
         <label>
           Nome do card
@@ -392,11 +375,8 @@ export function CardInspector({
               {numberField("max_iterations", "Máximo de iterações", 20)}
               <label>
                 Concorrência
-                <input value="1" disabled />
-                <small>
-                  A execução por grupo é sequencial nesta fase para preservar a
-                  ordem e a rastreabilidade dos resultados.
-                </small>
+                <input type="number" min="1" max="4" value={configNumber(selected.config.concurrency, 1)} onChange={(event) => updateConfig("concurrency", Math.max(1, Math.min(4, event.target.valueAsNumber || 1)))} />
+                <small>De 1 a 4 escopos filhos; os resultados continuam ordenados pela entrada.</small>
               </label>
               <p>
                 Use <code>item</code> para os cards do grupo e conecte apenas
@@ -577,6 +557,6 @@ export function CardInspector({
           versão.
         </p>
       </fieldset>
-    </aside>
+    </ModalShell>
   );
 }

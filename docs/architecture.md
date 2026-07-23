@@ -9,6 +9,15 @@ the execution input remains in SQLite.
 
 ## Workflow contract
 
+## Studio interaction model
+
+Studio keeps client-only serializable definition history for semantic graph edits.
+Selection, menus, viewport movement, and safe execution-status updates are not
+history entries. The searchable card library supports accessible click-add and
+native drag/drop converted with React Flow's `screenToFlowPosition`. Card editing
+uses a focus-managed responsive modal, independent of canvas selection. Card
+progress uses only safe node status, and loop concurrency is bounded from 1 to 4.
+
 A workflow version stores a graph of nodes and typed edges. A card type is
 registered by the backend and supplies its ports and capabilities; a saved
 workflow only selects a registered type and its configuration. The initial

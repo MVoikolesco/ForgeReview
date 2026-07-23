@@ -1,5 +1,12 @@
 # Change Log
 
+## 2026-07-23: Studio interaction completion
+
+- Added serializable semantic history helpers and keyboard commands, searchable
+  drag/click card addition, canvas search/focus/minimap/context controls, a
+  responsive Inspector modal, loop concurrency 1–4, and safe status progress.
+  See [[Architecture]], [[Feature Map]], and [[Decision Log]].
+
 ## 2026-07-23: Retry/DLQ and bounded loop execution
 
 - Added classified worker retry/DLQ lifecycle, stale-running recovery, audited
