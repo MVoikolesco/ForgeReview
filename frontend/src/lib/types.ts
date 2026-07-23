@@ -95,9 +95,10 @@ export type ExecutionReport = {
 	runs: Array<{
 	  node_key: string;
 	  scope_key?: string;
-    status: "running" | "completed" | "failed" | "partial";
-    error?: string;
-  }>;
+     status: "running" | "completed" | "failed" | "partial";
+   }>;
+  /** Present only when a compatible safe report could not be fully decoded. */
+  contractIssue?: string;
 };
 
 export type ExecutionEvent = {

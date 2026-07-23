@@ -485,6 +485,7 @@ export function StudioWorkspace() {
             )
           : await executeWorkflow(targetVersionID, trigger.key, testPayload);
       let report = started.report;
+      let contractIssue = report?.contractIssue;
       let eventSource: EventSource | undefined;
       if (started.status === "queued" && started.execution_id) {
         eventSource = new EventSource(
@@ -516,11 +517,11 @@ export function StudioWorkspace() {
           try {
             const pending = await getExecution(started.execution_id);
             applyReport(pending);
+            contractIssue ||= pending.contractIssue;
             if (pending.status !== "queued" && pending.status !== "running") {
               report = pending;
               break;
             }
-            eventSource.close();
           } catch (error) {
             if (
               error instanceof Error &&
@@ -530,6 +531,7 @@ export function StudioWorkspace() {
               throw error;
           }
         }
+        eventSource?.close();
         if (!report) {
           setNodes((all) =>
             all.map((node) =>
@@ -545,7 +547,9 @@ export function StudioWorkspace() {
       }
       if (report) applyReport(report);
       setMessage(
-        report
+        contractIssue
+          ? contractIssue
+          : report
           ? `Execução ${started.execution_id} ${report.status === "completed" ? "concluída" : report.status}.`
           : `Execução ${started.execution_id} enviada à fila.`,
       );

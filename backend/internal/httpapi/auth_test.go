@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -138,29 +139,59 @@ func TestSessionCookieSurvivesRepeatedAuthenticatedExecutionPolls(t *testing.T) 
 	}
 	dispatcher := &recordingDispatcher{}
 	router := NewWithAuth(workflow.DefaultCatalog(), db, manager, workflow.Adapters{Dispatcher: dispatcher})
-	login := httptest.NewRecorder()
-	router.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewBufferString(`{"email":"editor@example.test","password":"a secure editor password"}`)))
-	if login.Code != http.StatusOK {
-		t.Fatalf("login = %d %s", login.Code, login.Body.String())
+	server := httptest.NewServer(router)
+	defer server.Close()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	cookies := login.Result().Cookies()
-	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].MaxAge < 1 || cookies[0].Expires.IsZero() {
-		t.Fatalf("session cookie is not persistent and protected: %#v", cookies)
+	client := &http.Client{Jar: jar}
+	login, err := client.Post(server.URL+"/api/auth/login", "application/json", bytes.NewBufferString(`{"email":"editor@example.test","password":"a secure editor password"}`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	start := httptest.NewRecorder()
-	startRequest := httptest.NewRequest(http.MethodPost, "/api/workflow-versions/"+strconv.FormatInt(versionID, 10)+"/executions", bytes.NewBufferString(`{"trigger_node":"manual","payload":{}}`))
-	startRequest.AddCookie(cookies[0])
-	router.ServeHTTP(start, startRequest)
-	if start.Code != http.StatusAccepted || len(dispatcher.ids) != 1 {
-		t.Fatalf("start = %d %s", start.Code, start.Body.String())
+	if login.StatusCode != http.StatusOK {
+		t.Fatalf("login = %d", login.StatusCode)
 	}
-	for attempt := 0; attempt < 2; attempt++ {
-		poll := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/api/executions/"+strconv.FormatInt(dispatcher.ids[0], 10), nil)
-		request.AddCookie(cookies[0])
-		router.ServeHTTP(poll, request)
-		if poll.Code != http.StatusOK {
-			t.Fatalf("poll %d = %d %s", attempt+1, poll.Code, poll.Body.String())
+	login.Body.Close()
+	cookies := jar.Cookies(login.Request.URL)
+	if len(cookies) != 1 || cookies[0].Name != auth.CookieName || cookies[0].Value == "" {
+		t.Fatalf("cookie jar did not retain the login session: %#v", cookies)
+	}
+	start, err := http.NewRequest(http.MethodPost, server.URL+"/api/workflow-versions/"+strconv.FormatInt(versionID, 10)+"/executions", bytes.NewBufferString(`{"trigger_node":"manual","payload":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start.Header.Set("Content-Type", "application/json")
+	started, err := client.Do(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.StatusCode != http.StatusAccepted || len(dispatcher.ids) != 1 {
+		t.Fatalf("start = %d; IDs = %#v", started.StatusCode, dispatcher.ids)
+	}
+	started.Body.Close()
+	for attempt := 0; attempt < 3; attempt++ {
+		poll, err := client.Get(server.URL + "/api/executions/" + strconv.FormatInt(dispatcher.ids[0], 10))
+		if err != nil {
+			t.Fatal(err)
 		}
+		if poll.StatusCode != http.StatusOK {
+			poll.Body.Close()
+			t.Fatalf("poll %d = %d", attempt+1, poll.StatusCode)
+		}
+		if attempt == 0 && !strings.Contains(readBody(t, poll), `"runs":[]`) {
+			t.Fatalf("queued report must provide an empty runs array")
+		}
+		poll.Body.Close()
 	}
+}
+
+func readBody(t *testing.T, response *http.Response) string {
+	t.Helper()
+	var body bytes.Buffer
+	if _, err := body.ReadFrom(response.Body); err != nil {
+		t.Fatal(err)
+	}
+	return body.String()
 }

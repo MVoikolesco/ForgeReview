@@ -5,6 +5,13 @@ browser origins. It defaults to `http://localhost:3010`; wildcards and malformed
 origins stop startup. `FORGEREVIEW_TRUSTED_PROXIES` is empty by default. Supply
 only the IPs/CIDRs of reverse proxies that terminate requests.
 
+Sessions default to an `HttpOnly`, API-host-scoped `SameSite=Lax` cookie with
+explicit expiry and `Max-Age`, which supports local HTTP on separate ports. A
+Studio and API on different sites require the explicit credentialed CORS origin,
+`FORGEREVIEW_SESSION_COOKIE_SAME_SITE=none`, and
+`FORGEREVIEW_SESSION_COOKIE_SECURE=true`. `None` without `Secure` fails startup;
+do not rely on forwarded proxy headers to choose this setting.
+
 Administrators can manage users at `/admin`. Disabling a user or changing a role
 revokes every existing session. The API refuses self-demotion/self-disable and
 any change that would remove the final active administrator. `GET /api/audit-log`
@@ -28,6 +35,11 @@ identity/status/scope. Events are stored before delivery and replay from
 excluded. Sensitive execution input/node details are retained separately for
 seven days. Reprocess creates a new execution; it is not a resume. Cancellation
 is available only before external publication starts.
+
+The status endpoint always emits `runs` as an array, including queued reports
+with no node progress. Studio normalizes incomplete reports without exposing
+unsafe fields, retains the visible lifecycle status, and displays a contract
+warning rather than failing during polling.
 
 ## Retry and dead-letter handling
 

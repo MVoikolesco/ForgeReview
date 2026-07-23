@@ -69,6 +69,22 @@ test("terminal execution progress replaces stale running state and each run rese
   );
 });
 
+test("queued and running reports without runs preserve visible card state", () => {
+  const running = applyExecutionReport(starterNodes, {
+    status: "running",
+    runs: [{ node_key: "trigger", status: "running" }],
+  });
+  for (const report of [
+    { status: "queued", runs: [] },
+    { status: "running", runs: [] },
+  ]) {
+    assert.equal(
+      applyExecutionReport(running, report).find((node) => node.id === "trigger")?.data.status,
+      "running",
+    );
+  }
+});
+
 test("saved definitions hydrate canvas cards, edges, and configuration", () => {
   const hydrated = hydrateDefinition(
     {

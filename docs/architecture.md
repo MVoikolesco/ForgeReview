@@ -72,8 +72,8 @@ session records only when a complete identity reset is intended), then restart
 with the chosen explicit bootstrap email and password. Existing workflows and
 integrations are not bootstrap credentials and must not be used as one.
 
-The browser receives an `HttpOnly`, `SameSite=Lax` session cookie with explicit
-`Expires` and `Max-Age` attributes. Its opaque
+The browser receives an `HttpOnly`, host-scoped `SameSite=Lax` session cookie
+with explicit `Expires` and `Max-Age` attributes. Its opaque
 session nonce is stored in SQLite, while its user ID, expiry, and nonce are
 HMAC-SHA-256 signed with `FORGEREVIEW_SESSION_SIGNING_KEY` (minimum 32
 characters). Sessions expire after eight hours by default (or the positive Go
@@ -82,9 +82,13 @@ This supports local HTTP hosting without browser token persistence. Gin runs in
 release mode unless `FORGEREVIEW_GIN_MODE=debug` is explicit and trusts no
 forwarded proxy headers by default. Deployments behind a reverse proxy must set
 `FORGEREVIEW_TRUSTED_PROXIES` to only its IP addresses/CIDRs; invalid values fail
-startup. Deployments
-behind HTTPS should terminate TLS at the reverse proxy and set the cookie secure
-attribute there before exposing the instance beyond localhost.
+startup. For a Studio and API on different sites, configure the complete Studio
+origin in `FORGEREVIEW_CORS_ALLOWED_ORIGINS` and set
+`FORGEREVIEW_SESSION_COOKIE_SAME_SITE=none` together with
+`FORGEREVIEW_SESSION_COOKIE_SECURE=true`; the server rejects `None` without
+`Secure`. Cookies remain scoped to the API host, so the frontend host does not
+need (and must not receive) the session cookie. Reverse-proxy trust controls
+client-address headers only; it does not infer cookie security.
 
 `POST /api/auth/login`, `POST /api/auth/logout`, and `GET /api/auth/me` provide
 the session lifecycle. All application APIs require a session. Viewers may read

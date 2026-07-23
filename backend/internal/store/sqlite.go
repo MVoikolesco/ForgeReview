@@ -1285,7 +1285,7 @@ func (s *SQLite) ReconcilePublication(ctx context.Context, key string, receipt *
 }
 
 func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.ExecutionStatus, error) {
-	var report workflow.ExecutionStatus
+	report := workflow.ExecutionStatus{Runs: []workflow.ExecutionNodeState{}}
 	if err := s.db.QueryRowContext(ctx, `SELECT id,status,started_at,COALESCE(finished_at,'') FROM workflow_executions WHERE id=?`, id).Scan(&report.ID, &report.Status, &report.StartedAt, &report.FinishedAt); err != nil {
 		return workflow.ExecutionStatus{}, err
 	}

@@ -65,6 +65,10 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		panic(fmt.Sprintf("invalid FORGEREVIEW_TRUSTED_PROXIES: %v", err))
 	}
 	origins := corsOrigins()
+	cookie, err := sessionCookieSettings()
+	if err != nil {
+		panic(fmt.Sprintf("invalid session cookie configuration: %v", err))
+	}
 	router.Use(func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
 		if origin != "" && origins[origin] {
@@ -102,18 +106,18 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 			return
 		}
-		setSessionCookie(c, token, expires)
+		setSessionCookie(c, token, expires, cookie)
 		c.JSON(http.StatusOK, user)
 	})
 	api.POST("/auth/logout", func(c *gin.Context) {
 		if token, err := c.Cookie(auth.CookieName); err == nil {
 			manager.Logout(c.Request.Context(), token)
 		}
-		clearSessionCookie(c)
+		clearSessionCookie(c, cookie)
 		c.Status(http.StatusNoContent)
 	})
-	api.GET("/auth/me", authenticate(manager), func(c *gin.Context) { c.JSON(http.StatusOK, c.MustGet("user")) })
-	api.GET("/users", authenticate(manager), requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+	api.GET("/auth/me", authenticate(manager, cookie), func(c *gin.Context) { c.JSON(http.StatusOK, c.MustGet("user")) })
+	api.GET("/users", authenticate(manager, cookie), requireRoles(auth.RoleAdmin), func(c *gin.Context) {
 		users, err := workflows.Users(c.Request.Context())
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not list users"})
@@ -121,7 +125,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		}
 		c.JSON(http.StatusOK, users)
 	})
-	api.POST("/users", authenticate(manager), requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+	api.POST("/users", authenticate(manager, cookie), requireRoles(auth.RoleAdmin), func(c *gin.Context) {
 		var request struct {
 			Email    string    `json:"email"`
 			Password string    `json:"password"`
@@ -139,7 +143,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		_ = workflows.Audit(c.Request.Context(), currentUser(c).ID, "user.created", fmt.Sprintf("user:%d", user.ID), map[string]any{"role": user.Role})
 		c.JSON(http.StatusCreated, user)
 	})
-	api.PATCH("/users/:id", authenticate(manager), requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+	api.PATCH("/users/:id", authenticate(manager, cookie), requireRoles(auth.RoleAdmin), func(c *gin.Context) {
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil || id < 1 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
@@ -174,7 +178,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		_ = workflows.Audit(c.Request.Context(), actor.ID, "user.updated", fmt.Sprintf("user:%d", user.ID), map[string]any{"role": user.Role, "active": user.Active})
 		c.JSON(http.StatusOK, user)
 	})
-	api.GET("/audit-log", authenticate(manager), requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+	api.GET("/audit-log", authenticate(manager, cookie), requireRoles(auth.RoleAdmin), func(c *gin.Context) {
 		entries, err := workflows.AuditEntries(c.Request.Context(), 100)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not list audit log"})
@@ -182,7 +186,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		}
 		c.JSON(http.StatusOK, entries)
 	})
-	api.POST("/publications/:key/reconcile", authenticate(manager), requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+	api.POST("/publications/:key/reconcile", authenticate(manager, cookie), requireRoles(auth.RoleAdmin), func(c *gin.Context) {
 		var request struct {
 			IntegrationKey string `json:"integration_key"`
 			Owner          string `json:"owner"`
@@ -230,7 +234,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		// contracts. Production startup always uses NewWithAuth.
 		api.Use(func(c *gin.Context) { c.Set("user", auth.User{ID: 0, Role: auth.RoleAdmin}); c.Next() })
 	} else {
-		api.Use(authenticate(manager))
+		api.Use(authenticate(manager, cookie))
 	}
 	api.GET("/cards", func(c *gin.Context) { c.JSON(http.StatusOK, catalog.All()) })
 	api.GET("/webhook-registrations", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
@@ -1131,7 +1135,7 @@ func canonicalGiteaPullRequest(body []byte, delivery string) (map[string]any, er
 	return map[string]any{"event": "pull_request", "action": payload.Action, "delivery": delivery, "pull_request": map[string]any{"owner": owner, "repo": payload.Repository.Name, "number": number}}, nil
 }
 
-func authenticate(manager *auth.Manager) gin.HandlerFunc {
+func authenticate(manager *auth.Manager, cookie sessionCookieConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token, err := c.Cookie(auth.CookieName)
 		if err != nil {
@@ -1141,7 +1145,7 @@ func authenticate(manager *auth.Manager) gin.HandlerFunc {
 		}
 		user, err := manager.Authenticate(c.Request.Context(), token)
 		if err != nil {
-			clearSessionCookie(c)
+			clearSessionCookie(c, cookie)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
 			c.Abort()
 			return
@@ -1163,16 +1167,47 @@ func requireRoles(roles ...auth.Role) gin.HandlerFunc {
 		c.Abort()
 	}
 }
-func setSessionCookie(c *gin.Context, token string, expires time.Time) {
+
+type sessionCookieConfig struct {
+	Secure   bool
+	SameSite http.SameSite
+}
+
+func sessionCookieSettings() (sessionCookieConfig, error) {
+	secure := false
+	if raw := strings.TrimSpace(os.Getenv("FORGEREVIEW_SESSION_COOKIE_SECURE")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return sessionCookieConfig{}, errors.New("FORGEREVIEW_SESSION_COOKIE_SECURE must be true or false")
+		}
+		secure = value
+	}
+	sameSite := http.SameSiteLaxMode
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("FORGEREVIEW_SESSION_COOKIE_SAME_SITE"))) {
+	case "", "lax":
+	case "strict":
+		sameSite = http.SameSiteStrictMode
+	case "none":
+		if !secure {
+			return sessionCookieConfig{}, errors.New("SameSite=None requires FORGEREVIEW_SESSION_COOKIE_SECURE=true")
+		}
+		sameSite = http.SameSiteNoneMode
+	default:
+		return sessionCookieConfig{}, errors.New("FORGEREVIEW_SESSION_COOKIE_SAME_SITE must be lax, strict, or none")
+	}
+	return sessionCookieConfig{Secure: secure, SameSite: sameSite}, nil
+}
+
+func setSessionCookie(c *gin.Context, token string, expires time.Time, config sessionCookieConfig) {
 	remaining := time.Until(expires)
 	maxAge := int((remaining + time.Second - 1) / time.Second)
 	if maxAge < 1 {
 		maxAge = 1
 	}
-	http.SetCookie(c.Writer, &http.Cookie{Name: auth.CookieName, Value: token, Path: "/", Expires: expires.UTC(), MaxAge: maxAge, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(c.Writer, &http.Cookie{Name: auth.CookieName, Value: token, Path: "/", Expires: expires.UTC(), MaxAge: maxAge, HttpOnly: true, Secure: config.Secure, SameSite: config.SameSite})
 }
-func clearSessionCookie(c *gin.Context) {
-	http.SetCookie(c.Writer, &http.Cookie{Name: auth.CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+func clearSessionCookie(c *gin.Context, config sessionCookieConfig) {
+	http.SetCookie(c.Writer, &http.Cookie{Name: auth.CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: config.Secure, SameSite: config.SameSite})
 }
 
 func currentUser(c *gin.Context) auth.User { return c.MustGet("user").(auth.User) }

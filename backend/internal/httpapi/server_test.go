@@ -50,6 +50,19 @@ func TestCORSAndTrustedProxyConfigurationFailSafely(t *testing.T) {
 	}
 }
 
+func TestSessionCookieConfigurationRequiresSecureCrossSiteCookies(t *testing.T) {
+	t.Setenv("FORGEREVIEW_SESSION_COOKIE_SAME_SITE", "none")
+	t.Setenv("FORGEREVIEW_SESSION_COOKIE_SECURE", "false")
+	if _, err := sessionCookieSettings(); err == nil {
+		t.Fatal("insecure cross-site cookie accepted")
+	}
+	t.Setenv("FORGEREVIEW_SESSION_COOKIE_SECURE", "true")
+	config, err := sessionCookieSettings()
+	if err != nil || !config.Secure || config.SameSite != http.SameSiteNoneMode {
+		t.Fatalf("cross-site cookie configuration = %#v, %v", config, err)
+	}
+}
+
 func TestUserAdminConstraintsRevokeSessionsAndAuditSafely(t *testing.T) {
 	db, err := store.Open("file:" + t.TempDir() + "/users.db")
 	if err != nil {

@@ -238,8 +238,21 @@ func TestDeleteWorkflowVersionOnlyRemovesEligibleVersionAndAuditsIt(t *testing.T
 	if _, err = database.Load(context.Background(), published); err != nil {
 		t.Fatalf("published version removed = %v", err)
 	}
-	audit, err := database.AuditEntries(context.Background(), 1)
-	if err != nil || len(audit) != 1 || audit[0].Action != "workflow_version.deleted" || audit[0].Target != "workflow_version:"+strconv.FormatInt(draft, 10) || audit[0].ActorID != admin.ID {
+	replacement, err := database.Save(context.Background(), versionedDefinition("Replacement"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Publish(context.Background(), replacement, workflow.DefaultCatalog()); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.DeleteWorkflowVersion(context.Background(), published, admin.ID); err != nil {
+		t.Fatalf("delete archived = %v", err)
+	}
+	if _, err = database.Load(context.Background(), published); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("deleted archived load = %v", err)
+	}
+	audit, err := database.AuditEntries(context.Background(), 2)
+	if err != nil || len(audit) != 2 || audit[0].Action != "workflow_version.deleted" || audit[0].Target != "workflow_version:"+strconv.FormatInt(published, 10) || audit[1].Action != "workflow_version.deleted" || audit[1].Target != "workflow_version:"+strconv.FormatInt(draft, 10) || audit[0].ActorID != admin.ID || audit[1].ActorID != admin.ID {
 		t.Fatalf("deletion audit = %#v, %v", audit, err)
 	}
 }

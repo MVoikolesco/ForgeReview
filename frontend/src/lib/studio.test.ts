@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { pushHistory, redoHistory, searchCards, selectedCardSearchResult, studioLoadTarget, undoHistory } from "./studio";
 import { placeCardEditor } from "./popover";
+import { normalizeExecutionReport } from "./api";
 
 const definition = (key: string) => ({ key, name: key, description: "", nodes: [], edges: [] });
 test("serializable Studio history supports undo and redo without UI state", () => {
@@ -42,4 +43,13 @@ test("Studio resolves explicit versions, named published workflows, and the offi
   assert.deepEqual(studioLoadTarget("42", "other"), { kind: "version", versionID: 42 });
   assert.deepEqual(studioLoadTarget(null, "review"), { kind: "published", workflowKey: "review" });
   assert.deepEqual(studioLoadTarget(null, null), { kind: "published", workflowKey: "official-gitea-pr-review" });
+});
+
+test("incomplete queued and running reports retain safe status without iterable crashes", () => {
+  for (const status of ["queued", "running"]) {
+    const report = normalizeExecutionReport({ status, runs: null });
+    assert.equal(report.status, status);
+    assert.deepEqual(report.runs, []);
+    assert.match(report.contractIssue || "", /progresso incompleto/);
+  }
 });

@@ -12,6 +12,7 @@ import type {
   WorkflowVersionSummary,
   WebhookRegistration,
 } from "./types";
+import type { ExecutionReport } from "./types";
 
 export const apiURL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8088";
@@ -60,6 +61,69 @@ export const normalizeCard = (card: CardType): CardType => ({
   outputs: Array.isArray(card.outputs) ? card.outputs : [],
   error_output: card.error_output,
 });
+
+const executionRunStatuses = new Set(["running", "completed", "failed", "partial"]);
+
+/** Keeps Studio usable when a compatible server report omits safe progress. */
+export const normalizeExecutionReport = (value: unknown): ExecutionReport => {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new APIError("O servidor retornou um relatório de execução inválido.");
+  const report = value as Record<string, unknown>;
+  if (typeof report.status !== "string" || !report.status.trim())
+    throw new APIError("O servidor retornou um relatório de execução inválido.");
+  const runs = Array.isArray(report.runs) ? report.runs : [];
+  let incomplete = !Array.isArray(report.runs);
+  const safeRuns: ExecutionReport["runs"] = [];
+  for (const run of runs) {
+    if (!run || typeof run !== "object" || Array.isArray(run)) {
+      incomplete = true;
+      continue;
+    }
+    const item = run as Record<string, unknown>;
+    if (typeof item.node_key !== "string" || !item.node_key || typeof item.status !== "string" || !executionRunStatuses.has(item.status)) {
+      incomplete = true;
+      continue;
+    }
+    safeRuns.push({
+      node_key: item.node_key,
+      status: item.status as ExecutionReport["runs"][number]["status"],
+      ...(typeof item.scope_key === "string" && item.scope_key ? { scope_key: item.scope_key } : {}),
+    });
+  }
+  return {
+    ...(typeof report.execution_id === "number" ? { execution_id: report.execution_id } : {}),
+    status: report.status,
+    runs: safeRuns,
+    ...(incomplete ? { contractIssue: "A execução foi aceita, mas o servidor retornou progresso incompleto. O status seguro continua visível; atualize o Studio ou contate o administrador." } : {}),
+  };
+};
+
+export type ExecutionStart = {
+  execution_id?: number;
+  report?: ExecutionReport;
+  error?: string;
+  status?: string;
+};
+
+const normalizeExecutionStart = (value: unknown): ExecutionStart => {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new APIError("O servidor retornou uma resposta de execução inválida.");
+  const result = value as Record<string, unknown>;
+  if ("report" in result && result.report !== undefined)
+    return {
+      ...(typeof result.execution_id === "number" ? { execution_id: result.execution_id } : {}),
+      ...(typeof result.status === "string" ? { status: result.status } : {}),
+      ...(typeof result.error === "string" ? { error: result.error } : {}),
+      report: normalizeExecutionReport(result.report),
+    };
+  if (typeof result.execution_id !== "number" || typeof result.status !== "string")
+    throw new APIError("O servidor retornou uma resposta de execução inválida.");
+  return {
+    execution_id: result.execution_id,
+    status: result.status,
+    ...(typeof result.error === "string" ? { error: result.error } : {}),
+  };
+};
 
 export const getCards = async () =>
   (await request<CardType[]>("/api/cards")).map(normalizeCard);
@@ -212,33 +276,23 @@ export const executeWorkflow = (
   triggerNode: string,
   payload: Record<string, unknown>,
 ) =>
-  request<{
-    execution_id?: number;
-    report?: import("./types").ExecutionReport;
-    error?: string;
-    status?: string;
-  }>(`/api/workflow-versions/${versionID}/executions`, {
+  request<unknown>(`/api/workflow-versions/${versionID}/executions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ trigger_node: triggerNode, payload }),
-  });
+  }).then(normalizeExecutionStart);
 export const executePublishedWorkflow = (
   versionID: number,
   triggerNode: string,
   payload: Record<string, unknown>,
 ) =>
-  request<{
-    execution_id?: number;
-    report?: import("./types").ExecutionReport;
-    error?: string;
-    status?: string;
-  }>(`/api/published-workflow-versions/${versionID}/executions`, {
+  request<unknown>(`/api/published-workflow-versions/${versionID}/executions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ trigger_node: triggerNode, payload }),
-  });
+  }).then(normalizeExecutionStart);
 export const getExecution = (executionID: number) =>
-  request<import("./types").ExecutionReport>(`/api/executions/${executionID}`);
+  request<unknown>(`/api/executions/${executionID}`).then(normalizeExecutionReport);
 export const getExecutions = (limit = 10) =>
   request<ExecutionSummary[]>(`/api/executions?limit=${limit}`);
 export const getWebhookRegistrations = () =>

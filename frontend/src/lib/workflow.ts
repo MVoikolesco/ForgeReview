@@ -33,8 +33,12 @@ export function applyExecutionReport(
   nodes: Node<CardData>[],
   report: ExecutionReport,
 ) {
+  const runs = Array.isArray(report.runs) ? report.runs : [];
+  // A queued report legitimately has no node progress. Keep the last safe card
+  // state rather than erasing it when an older server omits the runs field.
+  if (!runs.length) return nodes;
   const statuses = new Map<string, CardData["status"]>();
-  for (const run of report.runs) {
+  for (const run of runs) {
     const current = statuses.get(run.node_key);
     // Poll responses can overlap. A later stale running record must never
     // replace observed terminal progress for the same card.
