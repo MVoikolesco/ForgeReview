@@ -1,5 +1,15 @@
 # Change Log
 
+## 2026-07-23: Studio header action regression
+
+- Restored the Studio overflow's Pipelines entry for editors/admins and its
+  integration-management entry for admins, alongside the retained template,
+  transfer, validation, draft-save, and selection-removal controls. Shared
+  header edge padding is now substantially smaller and navigation collapses
+  before compact desktop/tablet widths so Studio publish/run actions remain
+  reachable. Added role-aware management-action regression coverage. See
+  [[Feature Map]] and [[Architecture]].
+
 ## 2026-07-23: Studio shared navigation alignment
 
 - Migrated Studio to the compact shared AppShell header. It now uses the same
@@ -14,8 +24,8 @@
 
 - Added the shared role-aware AppShell, semantic responsive breadcrumbs, active
   route state, mobile Escape-close menu, and page action slots. Migrated the
-  dashboard, pipelines, integrations, and administration; Studio keeps its dense
-  toolbar with a compact return affordance.
+  dashboard, pipelines, integrations, and administration; Studio was later
+  aligned to the compact shared header variant.
 - Redesigned Dashboard and Administration as operational surfaces with explicit
   readiness, lifecycle, activity, loading/error/empty states, user controls, and
   audit panels. Added pure navigation/breadcrumb tests. See [[Architecture]] and

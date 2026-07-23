@@ -20,6 +20,15 @@ export function visibleNavigation(role: CurrentUser["role"] | undefined) {
   );
 }
 
+export function studioManagementActions(role: CurrentUser["role"] | undefined) {
+  return [
+    { href: "/pipelines", label: "Pipelines" },
+    ...(role === "admin"
+      ? [{ href: "/integrations", label: "Gerenciar integrações" }]
+      : []),
+  ];
+}
+
 export function breadcrumbs(pathname: string, current: string) {
   const item = navigationItems.find((entry) => entry.href === pathname);
   return item?.href === "/"

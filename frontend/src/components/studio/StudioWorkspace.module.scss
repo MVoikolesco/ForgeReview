@@ -207,6 +207,10 @@
     .status .valid { display: none; }
 }
 
+@media (max-width: 900px) {
+    .identity { display: none; }
+}
+
 @media (max-width: $breakpoint-mobile) {
     .studio,
     .studio.inspectorOpen {
@@ -217,8 +221,9 @@
     .status { display: none; }
     .overflow summary span { display: none; }
     .overflow summary { width: 34px; padding: 0; }
-    .actionArea { gap: 8px; }
-    .actionArea button { padding: 7px 9px; }
+    .actionArea { gap: 6px; }
+    .actionArea button { min-width: 34px; padding: 7px 9px; }
+    .actionLabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .menu { right: -104px; }
     .runForm { padding: 18px; }
 }

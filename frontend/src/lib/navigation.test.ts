@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { breadcrumbs, visibleNavigation } from "./navigation";
+import { breadcrumbs, studioManagementActions, visibleNavigation } from "./navigation";
 
 test("navigation only exposes privileged destinations to their roles", () => {
   assert.deepEqual(
@@ -21,5 +21,18 @@ test("breadcrumbs retain a semantic overview return", () => {
   assert.deepEqual(breadcrumbs("/integrations", "Integrações"), [
     { label: "Visão geral", href: "/" },
     { label: "Integrações" },
+  ]);
+});
+
+test("Studio overflow restores management destinations within each role's access", () => {
+  assert.deepEqual(studioManagementActions("viewer"), [
+    { href: "/pipelines", label: "Pipelines" },
+  ]);
+  assert.deepEqual(studioManagementActions("editor"), [
+    { href: "/pipelines", label: "Pipelines" },
+  ]);
+  assert.deepEqual(studioManagementActions("admin"), [
+    { href: "/pipelines", label: "Pipelines" },
+    { href: "/integrations", label: "Gerenciar integrações" },
   ]);
 });

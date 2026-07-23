@@ -21,6 +21,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   executeWorkflow,
@@ -64,6 +65,7 @@ import {
   validateStudioWorkflow,
   type WorkflowValidationIssue,
 } from "../../lib/workflow";
+import { studioManagementActions } from "../../lib/navigation";
 import { ModalShell } from "../common/ModalShell";
 import { ConnectionWizard } from "../integrations/ConnectionWizard";
 import { WorkflowTransferModal } from "./WorkflowTransferModal";
@@ -513,9 +515,11 @@ export function StudioWorkspace() {
               <MoreHorizontal size={18} aria-hidden="true" />
               <span>Ações</span>
             </summary>
-            <div className={styles.menu}>
+            <div className={styles.menu} aria-label="Ações do Studio">
               <button disabled={!canEdit} onClick={loadReviewTemplate}><BookOpen size={14} /> Template review</button>
-              <button disabled={user?.role !== "admin"} onClick={openConnections}><Settings2 size={14} /> Nova integração</button>
+              {user?.role === "admin" && <button onClick={openConnections}><Settings2 size={14} /> Nova integração</button>}
+              {studioManagementActions(user?.role).map((item) => <Link key={item.href} href={item.href}>{item.label}</Link>)}
+              <hr />
               <button disabled={!canEdit || busy} onClick={() => openTransfer("clone")}><Copy size={14} /> Clonar workflow</button>
               <button disabled={!canEdit || busy} onClick={() => openTransfer("import")}><Upload size={14} /> Importar JSON</button>
               <button disabled={!canEdit || busy} onClick={() => openTransfer("export")}><Download size={14} /> Exportar JSON</button>
@@ -529,14 +533,14 @@ export function StudioWorkspace() {
             disabled={busy || !canEdit}
             onClick={() => void publishCurrent()}
           >
-            <Upload size={14} /> Publicar
+            <Upload size={14} /> <span className={styles.actionLabel}>Publicar</span>
           </button>
           <button
             className={styles.primary}
             disabled={busy || !canEdit}
              onClick={() => openManualRun("draft")}
            >
-             <CirclePlay size={14} /> {busy ? "Executando" : "Salvar e executar"}
+              <CirclePlay size={14} /> <span className={styles.actionLabel}>{busy ? "Executando" : "Salvar e executar"}</span>
            </button>
            {openedVersionPublished && !dirty && <button className={styles.publish} disabled={busy || !canEdit} onClick={() => openManualRun("published")}><CirclePlay size={14} /> Executar publicada</button>}
         </div>

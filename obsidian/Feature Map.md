@@ -119,10 +119,13 @@
   configuration, route, port, and contract issues and focuses the related card
   when possible; backend validation remains authoritative.
 - Studio header and manual run: workflow identity and status remain compact,
-  while publish and save/run stay visible. Template, navigation, integration,
-  transfer, validation, selection removal, and draft-save actions share one
-  overflow menu. Optional manual-trigger JSON is entered in a focus-managed run
-  modal and is never embedded in persisted card data.
+  while publish and save/run stay visible. Template, role-appropriate Pipelines
+  and integration management, transfer, validation, selection removal, and
+  draft-save actions share one accessible overflow menu. The shared header uses
+  reduced responsive edge padding and collapses navigation before compact
+  desktop/tablet widths to preserve the Studio controls. Optional manual-trigger
+  JSON is entered in a focus-managed run modal and is never embedded in
+  persisted card data.
 - Reusable model profiles: integrations retain provider transport and encrypted
   credentials; profiles select the model and reference an active LLM connection.
   Model cards select profiles, and the runner resolves the profile in memory
