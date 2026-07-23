@@ -40,10 +40,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ? undefined
       : ((await response.json()) as T & { error?: string });
   if (!response.ok)
-    throw new APIError(
+    {
+      const error = new APIError(
       payload?.error || "Não foi possível concluir a operação.",
       response.status,
     );
+      if (response.status === 401 && path !== "/api/auth/login")
+        window.dispatchEvent(new CustomEvent("forgereview:session-expired"));
+      throw error;
+    }
   return payload as T;
 }
 
@@ -168,6 +173,17 @@ export const executeWorkflow = (versionID: number, triggerNode: string, payload:
     error?: string;
     status?: string;
   }>(`/api/workflow-versions/${versionID}/executions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ trigger_node: triggerNode, payload }),
+  });
+export const executePublishedWorkflow = (versionID: number, triggerNode: string, payload: Record<string, unknown>) =>
+  request<{
+    execution_id?: number;
+    report?: import("./types").ExecutionReport;
+    error?: string;
+    status?: string;
+  }>(`/api/published-workflow-versions/${versionID}/executions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ trigger_node: triggerNode, payload }),

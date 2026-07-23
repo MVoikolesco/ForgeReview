@@ -6,3 +6,5 @@ export function loginErrorMessage(reason: unknown): string {
   if (reason instanceof APIError && reason.status === undefined) return "O servidor ForgeReview não está disponível. Confirme que o backend está em execução.";
   return "Não foi possível autenticar neste momento. Tente novamente.";
 }
+
+export const sessionExpiredMessage = "Sua sessão expirou. Entre novamente para continuar.";

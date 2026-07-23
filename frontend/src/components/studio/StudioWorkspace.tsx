@@ -26,6 +26,7 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   executeWorkflow,
+  executePublishedWorkflow,
   getCards,
   getExecution,
   getIntegrations,
@@ -57,6 +58,7 @@ import {
   localCards,
   removeSelectedElements,
   reviewTemplate,
+  resetExecutionStatuses,
   selectionHasChanged,
   starterEdges,
   starterNodes,
@@ -99,6 +101,8 @@ export function StudioWorkspace() {
    const [showManualRun, setShowManualRun] = useState(false);
    const [manualTriggerID, setManualTriggerID] = useState("");
    const [manualPayload, setManualPayload] = useState("");
+    const [runTarget, setRunTarget] = useState<"draft" | "published">("draft");
+    const [openedVersionPublished, setOpenedVersionPublished] = useState(false);
    const [webhookRegistrations, setWebhookRegistrations] = useState<WebhookRegistration[]>([]);
    const definition = useMemo(() => toDefinition(nodes, edges, metadata), [nodes, edges, metadata]);
    const validationIssues = useMemo(
@@ -135,8 +139,8 @@ export function StudioWorkspace() {
     }
     setBusy(true);
     setMessage(`Abrindo versão salva ${versionID}...`);
-    void Promise.all([getCards(), getWorkflowVersion(versionID)])
-      .then(([catalog, definition]) => {
+     void Promise.all([getCards(), getWorkflowVersion(versionID), getWorkflows()])
+       .then(([catalog, definition, workflows]) => {
         const hydrated = hydrateDefinition(definition, catalog);
         setCards(catalog);
         setNodes(hydrated.nodes);
@@ -147,7 +151,8 @@ export function StudioWorkspace() {
           name: definition.name,
           description: definition.description,
         });
-        setOpenedVersionID(versionID);
+         setOpenedVersionID(versionID);
+         setOpenedVersionPublished(workflows.some((workflow) => workflow.versions.some((version) => version.version_id === versionID && version.status === "published")));
         setDirty(false);
         setMessage(
           `Versão salva ${versionID} aberta. Alterações serão salvas como um novo rascunho; a versão original permanece imutável.`,
@@ -292,7 +297,7 @@ export function StudioWorkspace() {
       setBusy(false);
     }
   };
-  const saveAndRun = async (triggerNodeID: string) => {
+   const saveAndRun = async (triggerNodeID: string) => {
     if (validationIssues.length) {
       setMessage("Corrija os ajustes indicados antes de executar.");
       return;
@@ -315,28 +320,35 @@ export function StudioWorkspace() {
     }
     setShowManualRun(false);
     setBusy(true);
-    setMessage("Salvando versão do workflow...");
-    try {
-      const saved = await saveWorkflow(definition);
-      setDirty(false);
-      setMessage("Executando versão salva...");
-      setNodes((all) => all.map((node) => ({ ...node, data: { ...node.data, status: "idle" } })));
-      const started = await executeWorkflow(saved.version_id, trigger.key, testPayload);
-      let report = started.report;
-      if (started.status === "queued" && started.execution_id)
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          try {
-            const pending = await getExecution(started.execution_id);
-            applyReport(pending);
+     setMessage(runTarget === "published" ? "Executando versão publicada..." : "Salvando versão do workflow...");
+     try {
+       const targetVersionID = runTarget === "published" ? openedVersionID : (await saveWorkflow(definition)).version_id;
+       if (!targetVersionID) throw new Error("Nenhuma versão publicada está aberta para executar.");
+       if (runTarget === "draft") setDirty(false);
+       setNodes(resetExecutionStatuses);
+       const started = runTarget === "published"
+         ? await executePublishedWorkflow(targetVersionID, trigger.key, testPayload)
+         : await executeWorkflow(targetVersionID, trigger.key, testPayload);
+       let report = started.report;
+       if (started.status === "queued" && started.execution_id) {
+         for (let attempt = 0; attempt < 120; attempt += 1) {
+           await new Promise((resolve) => setTimeout(resolve, 300));
+           try {
+             const pending = await getExecution(started.execution_id);
+             applyReport(pending);
             if (pending.status !== "queued" && pending.status !== "running") {
               report = pending;
               break;
             }
-          } catch {
-            /* continue polling */
-          }
-        }
+           } catch (error) {
+             if (error instanceof Error && "status" in error && error.status === 401) throw error;
+           }
+         }
+         if (!report) {
+           setNodes((all) => all.map((node) => node.data.status === "running" ? { ...node, data: { ...node.data, status: "idle" } } : node));
+           setMessage(`Execução ${started.execution_id} continua na fila; o acompanhamento ao vivo foi encerrado.`);
+         }
+       }
       if (report) applyReport(report);
       setMessage(
         report
@@ -360,11 +372,12 @@ export function StudioWorkspace() {
     setShowConnections(true);
     void loadIntegrations();
   };
-  const openManualRun = () => {
+   const openManualRun = (target: "draft" | "published") => {
     const preferred = manualTriggers.some((node) => node.id === inspectedNodeID)
       ? inspectedNodeID
       : manualTriggers[0]?.id;
-    setManualTriggerID(preferred ?? "");
+     setManualTriggerID(preferred ?? "");
+     setRunTarget(target);
     setShowManualRun(true);
   };
   const openTransfer = (mode: "clone" | "import" | "export") => {
@@ -517,7 +530,7 @@ export function StudioWorkspace() {
               {canEdit && <button disabled={busy} onClick={removeSelection}><Trash2 size={14} /> Excluir seleção</button>}
             </div>
           </details>
-          <button
+           <button
             className={styles.publish}
             disabled={busy || !canEdit}
             onClick={() => void publishCurrent()}
@@ -527,10 +540,11 @@ export function StudioWorkspace() {
           <button
             className={styles.primary}
             disabled={busy || !canEdit}
-            onClick={openManualRun}
-          >
-            <CirclePlay size={14} /> {busy ? "Executando" : "Salvar / executar"}
-          </button>
+             onClick={() => openManualRun("draft")}
+           >
+             <CirclePlay size={14} /> {busy ? "Executando" : "Salvar e executar"}
+           </button>
+           {openedVersionPublished && !dirty && <button className={styles.publish} disabled={busy || !canEdit} onClick={() => openManualRun("published")}><CirclePlay size={14} /> Executar publicada</button>}
         </div>
       </header>
       <CardLibrary cards={cards} onAdd={addCard} readOnly={!canEdit} />
@@ -581,10 +595,10 @@ export function StudioWorkspace() {
         <ModalShell
           title="Executar workflow"
           eyebrow="TRIGGER MANUAL"
-          description="O Studio salva um novo rascunho e inicia a execução pelo trigger selecionado. O payload não é persistido no navegador."
+           description={runTarget === "published" ? "Executa a versão publicada aberta, sem salvar um rascunho. O payload não é persistido no navegador." : "Salva um novo rascunho e inicia a execução pelo trigger selecionado. O payload não é persistido no navegador."}
           onClose={() => setShowManualRun(false)}
           className={styles.runModal}
-          footer={<><button type="button" onClick={() => setShowManualRun(false)}>Cancelar</button><button type="button" className={styles.primary} disabled={!manualTriggerID || busy} onClick={() => void saveAndRun(manualTriggerID)}><CirclePlay size={14} /> Salvar e executar</button></>}
+           footer={<><button type="button" onClick={() => setShowManualRun(false)}>Cancelar</button><button type="button" className={styles.primary} disabled={!manualTriggerID || busy} onClick={() => void saveAndRun(manualTriggerID)}><CirclePlay size={14} /> {runTarget === "published" ? "Executar publicada" : "Salvar e executar"}</button></>}
         >
           <div className={styles.runForm}>
             <label>

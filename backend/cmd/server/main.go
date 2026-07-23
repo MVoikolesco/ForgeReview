@@ -11,9 +11,16 @@ import (
 	"forgereview/backend/internal/integration"
 	"forgereview/backend/internal/store"
 	"forgereview/backend/internal/workflow"
+
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
+	if os.Getenv("FORGEREVIEW_GIN_MODE") == "debug" {
+		gin.SetMode(gin.DebugMode)
+	} else {
+		gin.SetMode(gin.ReleaseMode)
+	}
 	secrets, err := integration.NewEncryptedSecretsFromEnvironment()
 	if err != nil {
 		log.Fatal(err)

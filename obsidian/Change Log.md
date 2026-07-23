@@ -2,6 +2,14 @@
 
 ## 2026-07-23
 
+- Fixed authenticated execution polling: login cookies now have explicit expiry
+  metadata and repeated status reads retain the session. Protected-request 401s
+  return Studio to login instead of silently leaving execution feedback frozen.
+  Draft save-and-run and opened-published-version run are distinct manual-only
+  actions; terminal node progress replaces stale running state and timed-out
+  live polling clears animation. Gin now defaults to release mode and trusts no
+  proxy headers without explicit configuration. See [[Architecture]].
+
 - Added persisted live node progress, intermediate Studio polling feedback,
   active-path edge animation, and sober card status treatments. Native Gitea
   review bodies now include status, elapsed time, model, optional provider token

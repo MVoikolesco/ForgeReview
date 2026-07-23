@@ -63,12 +63,17 @@ session records only when a complete identity reset is intended), then restart
 with the chosen explicit bootstrap email and password. Existing workflows and
 integrations are not bootstrap credentials and must not be used as one.
 
-The browser receives an `HttpOnly`, `SameSite=Lax` session cookie. Its opaque
+The browser receives an `HttpOnly`, `SameSite=Lax` session cookie with explicit
+`Expires` and `Max-Age` attributes. Its opaque
 session nonce is stored in SQLite, while its user ID, expiry, and nonce are
 HMAC-SHA-256 signed with `FORGEREVIEW_SESSION_SIGNING_KEY` (minimum 32
 characters). Sessions expire after eight hours by default (or the positive Go
 duration in `FORGEREVIEW_SESSION_TTL`) and logout deletes the server-side nonce.
-This supports local HTTP hosting without browser token persistence. Deployments
+This supports local HTTP hosting without browser token persistence. Gin runs in
+release mode unless `FORGEREVIEW_GIN_MODE=debug` is explicit and trusts no
+forwarded proxy headers by default. Deployments behind a reverse proxy must set
+`FORGEREVIEW_TRUSTED_PROXIES` to only its IP addresses/CIDRs; invalid values fail
+startup. Deployments
 behind HTTPS should terminate TLS at the reverse proxy and set the cookie secure
 attribute there before exposing the instance beyond localhost.
 
@@ -110,10 +115,13 @@ Only admins may create, edit, disable, or delete connections and users.
   archive the previous published version for that key. It returns the published
   version summary. A missing version returns `404`, a non-draft returns `409`,
   and an invalid persisted definition returns `422` without changing statuses.
-- `POST /api/workflow-versions/:id/executions`: create an execution for a
-  stored definition. Without a dispatcher it runs synchronously and returns a
+- `POST /api/workflow-versions/:id/executions`: create an execution for a draft
+  definition (Studio save-and-run). Without a dispatcher it runs synchronously and returns a
   completed report. With a dispatcher it enqueues the execution ID and returns
   `202 Accepted` with `{execution_id,status:"queued"}`.
+- `POST /api/published-workflow-versions/:id/executions`: execute an opened
+  published version without saving a draft. Draft and archived versions return
+  `409`; both Studio routes require a selected manual trigger.
 - `GET /api/executions/:id`: load persisted node states, input references and
   output tokens.
 - `GET /api/executions?limit=10`: return at most 1–100 dashboard-safe execution

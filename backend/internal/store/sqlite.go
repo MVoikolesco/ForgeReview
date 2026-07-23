@@ -454,6 +454,13 @@ func (s *SQLite) Load(ctx context.Context, id int64) (workflow.Definition, error
 	return definition, nil
 }
 
+// VersionStatus returns the immutable lifecycle state for a saved version.
+func (s *SQLite) VersionStatus(ctx context.Context, id int64) (string, error) {
+	var status string
+	err := s.db.QueryRowContext(ctx, `SELECT status FROM workflow_versions WHERE id=?`, id).Scan(&status)
+	return status, err
+}
+
 // ListDefinitions returns workflow keys with their version lifecycle metadata.
 func (s *SQLite) ListDefinitions(ctx context.Context) ([]workflow.DefinitionSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT workflow_key,name,description,id,version,status,created_at FROM workflow_versions ORDER BY workflow_key,version`)

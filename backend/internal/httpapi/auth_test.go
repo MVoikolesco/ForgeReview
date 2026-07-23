@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -115,5 +116,51 @@ func TestAPITriggerRequiresAuthenticationAndQueuesSelectedPublishedTrigger(t *te
 	execution, claimed, err := db.ClaimExecution(context.Background(), dispatcher.ids[0])
 	if err != nil || !claimed || execution.TriggerNodeKey != "api" || execution.Input["pull_request"] == nil {
 		t.Fatalf("persisted selected trigger = %#v, %t, %v", execution, claimed, err)
+	}
+}
+
+func TestSessionCookieSurvivesRepeatedAuthenticatedExecutionPolls(t *testing.T) {
+	db, err := store.Open("file:" + t.TempDir() + "/execution-polls.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	manager, err := auth.New(db, auth.Config{SigningKey: strings.Repeat("k", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.CreateUser(context.Background(), "editor@example.test", "a secure editor password", auth.RoleEditor); err != nil {
+		t.Fatal(err)
+	}
+	versionID, err := db.Save(context.Background(), workflow.Definition{Key: "polls", Name: "Polls", Nodes: []workflow.Node{{Key: "manual", Type: "trigger", Name: "Manual", Config: map[string]any{"mode": "manual"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := &recordingDispatcher{}
+	router := NewWithAuth(workflow.DefaultCatalog(), db, manager, workflow.Adapters{Dispatcher: dispatcher})
+	login := httptest.NewRecorder()
+	router.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewBufferString(`{"email":"editor@example.test","password":"a secure editor password"}`)))
+	if login.Code != http.StatusOK {
+		t.Fatalf("login = %d %s", login.Code, login.Body.String())
+	}
+	cookies := login.Result().Cookies()
+	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].MaxAge < 1 || cookies[0].Expires.IsZero() {
+		t.Fatalf("session cookie is not persistent and protected: %#v", cookies)
+	}
+	start := httptest.NewRecorder()
+	startRequest := httptest.NewRequest(http.MethodPost, "/api/workflow-versions/"+strconv.FormatInt(versionID, 10)+"/executions", bytes.NewBufferString(`{"trigger_node":"manual","payload":{}}`))
+	startRequest.AddCookie(cookies[0])
+	router.ServeHTTP(start, startRequest)
+	if start.Code != http.StatusAccepted || len(dispatcher.ids) != 1 {
+		t.Fatalf("start = %d %s", start.Code, start.Body.String())
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		poll := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/executions/"+strconv.FormatInt(dispatcher.ids[0], 10), nil)
+		request.AddCookie(cookies[0])
+		router.ServeHTTP(poll, request)
+		if poll.Code != http.StatusOK {
+			t.Fatalf("poll %d = %d %s", attempt+1, poll.Code, poll.Body.String())
+		}
 	}
 }

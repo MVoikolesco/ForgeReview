@@ -11,6 +11,7 @@ import {
   isManualTrigger,
   localCards,
   reviewTemplate,
+  resetExecutionStatuses,
   removeSelectedElements,
   selectionHasChanged,
   starterEdges,
@@ -37,6 +38,13 @@ test("execution reports update card state and animate only edges entering runnin
   assert.equal(nodes.find((node) => node.id === "transform")?.data.status, "running");
   assert.equal(edgeIsActivelyPropagating(starterEdges[0], nodes), true);
   assert.equal(edgeIsActivelyPropagating(starterEdges[1], nodes), false);
+});
+
+test("terminal execution progress replaces stale running state and each run resets cards", () => {
+  const running = applyExecutionReport(starterNodes, { status: "running", runs: [{ node_key: "trigger", status: "running" }] });
+  const terminal = applyExecutionReport(running, { status: "completed", runs: [{ node_key: "trigger", status: "completed" }, { node_key: "trigger", status: "running" }] });
+  assert.equal(terminal.find((node) => node.id === "trigger")?.data.status, "completed");
+  assert.ok(resetExecutionStatuses(terminal).every((node) => node.data.status === "idle"));
 });
 
 test("saved definitions hydrate canvas cards, edges, and configuration", () => {

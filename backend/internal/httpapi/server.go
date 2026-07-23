@@ -53,6 +53,9 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		adapters = adapterSets[0]
 	}
 	router := gin.New()
+	if err := router.SetTrustedProxies(trustedProxies()); err != nil {
+		panic(fmt.Sprintf("invalid FORGEREVIEW_TRUSTED_PROXIES: %v", err))
+	}
 	router.Use(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "http://localhost:3010")
 		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
@@ -550,80 +553,14 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not publish workflow"})
 		}
 	})
+	// A Studio save-and-run operates on the newly created draft. Published
+	// versions use the separate endpoint below so an archived or draft version
+	// cannot accidentally be presented as the deployed pipeline.
 	api.POST("/workflow-versions/:id/executions", requireRoles(auth.RoleEditor, auth.RoleAdmin), func(c *gin.Context) {
-		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid version id"})
-			return
-		}
-		definition, err := workflows.Load(c.Request.Context(), id)
-		if err == sql.ErrNoRows {
-			c.JSON(http.StatusNotFound, gin.H{"error": "workflow version not found"})
-			return
-		}
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load workflow"})
-			return
-		}
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
-		var request map[string]any
-		decoder := json.NewDecoder(c.Request.Body)
-		if err = decoder.Decode(&request); err != nil || request == nil || decoder.Decode(&struct{}{}) != io.EOF {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		triggerNode, _ := request["trigger_node"].(string)
-		input := map[string]any{}
-		if payload, supplied := request["payload"]; supplied {
-			var valid bool
-			input, valid = payload.(map[string]any)
-			if !valid || input == nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "payload must be a JSON object"})
-				return
-			}
-		} else {
-			input = request
-			delete(input, "trigger_node")
-		}
-		if triggerNode == "" {
-			triggerNode = soleTrigger(definition, "manual")
-		}
-		if triggerMode(definition, triggerNode) != "manual" {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "execution requires a selected manual trigger"})
-			return
-		}
-		executionID, err := workflows.CreateTriggeredExecution(c.Request.Context(), id, triggerNode, input)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist execution"})
-			return
-		}
-		if adapters.Dispatcher != nil {
-			if err = adapters.Dispatcher.Enqueue(c.Request.Context(), executionID); err != nil {
-				c.JSON(http.StatusServiceUnavailable, gin.H{"execution_id": executionID, "error": "could not dispatch execution"})
-				return
-			}
-			c.JSON(http.StatusAccepted, gin.H{"execution_id": executionID, "status": "queued"})
-			return
-		}
-		if _, claimed, claimErr := workflows.ClaimExecution(c.Request.Context(), executionID); claimErr != nil || !claimed {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not start execution"})
-			return
-		}
-		runAdapters := adapters
-		runAdapters.Execution = workflow.ExecutionContext{ID: executionID, VersionID: id}
-		runAdapters.Progress = workflow.ProgressObserverFunc(func(progressCtx context.Context, run workflow.NodeRun) error {
-			return workflows.SaveNodeProgress(progressCtx, executionID, run)
-		})
-		report, runErr := workflow.RunFromTriggerWithAdapters(c.Request.Context(), definition, catalog, triggerNode, input, runAdapters)
-		if err = workflows.CompleteExecution(c.Request.Context(), executionID, report); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist execution"})
-			return
-		}
-		if runErr != nil {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"execution_id": executionID, "report": report, "error": runErr.Error()})
-			return
-		}
-		c.JSON(http.StatusCreated, gin.H{"execution_id": executionID, "report": report})
+		handleVersionExecution(c, workflows, catalog, adapters, workflow.VersionStatusDraft)
+	})
+	api.POST("/published-workflow-versions/:id/executions", requireRoles(auth.RoleEditor, auth.RoleAdmin), func(c *gin.Context) {
+		handleVersionExecution(c, workflows, catalog, adapters, workflow.VersionStatusPublished)
 	})
 	api.POST("/workflows/:key/triggers/:node/executions", requireRoles(auth.RoleEditor, auth.RoleAdmin), func(c *gin.Context) {
 		if adapters.Dispatcher == nil {
@@ -701,6 +638,91 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		c.JSON(http.StatusOK, report)
 	})
 	return router
+}
+
+func handleVersionExecution(c *gin.Context, workflows *store.SQLite, catalog workflow.Catalog, adapters workflow.Adapters, requiredStatus string) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid version id"})
+		return
+	}
+	status, err := workflows.VersionStatus(c.Request.Context(), id)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workflow version not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load workflow version"})
+		return
+	}
+	if status != requiredStatus {
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("execution requires a %s workflow version", requiredStatus)})
+		return
+	}
+	definition, err := workflows.Load(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load workflow"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
+	var request map[string]any
+	decoder := json.NewDecoder(c.Request.Body)
+	if err = decoder.Decode(&request); err != nil || request == nil || decoder.Decode(&struct{}{}) != io.EOF {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "request body must contain one JSON object"})
+		return
+	}
+	triggerNode, _ := request["trigger_node"].(string)
+	input := map[string]any{}
+	if payload, supplied := request["payload"]; supplied {
+		var valid bool
+		input, valid = payload.(map[string]any)
+		if !valid || input == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "payload must be a JSON object"})
+			return
+		}
+	} else {
+		input = request
+		delete(input, "trigger_node")
+	}
+	if triggerNode == "" {
+		triggerNode = soleTrigger(definition, "manual")
+	}
+	if triggerMode(definition, triggerNode) != "manual" {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "execution requires a selected manual trigger"})
+		return
+	}
+	executionID, err := workflows.CreateTriggeredExecution(c.Request.Context(), id, triggerNode, input)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist execution"})
+		return
+	}
+	if adapters.Dispatcher != nil {
+		if err = adapters.Dispatcher.Enqueue(c.Request.Context(), executionID); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"execution_id": executionID, "error": "could not dispatch execution"})
+			return
+		}
+		c.JSON(http.StatusAccepted, gin.H{"execution_id": executionID, "status": "queued"})
+		return
+	}
+	if _, claimed, claimErr := workflows.ClaimExecution(c.Request.Context(), executionID); claimErr != nil || !claimed {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not start execution"})
+		return
+	}
+	runAdapters := adapters
+	runAdapters.Execution = workflow.ExecutionContext{ID: executionID, VersionID: id}
+	runAdapters.Progress = workflow.ProgressObserverFunc(func(progressCtx context.Context, run workflow.NodeRun) error {
+		return workflows.SaveNodeProgress(progressCtx, executionID, run)
+	})
+	report, runErr := workflow.RunFromTriggerWithAdapters(c.Request.Context(), definition, catalog, triggerNode, input, runAdapters)
+	if err = workflows.CompleteExecution(c.Request.Context(), executionID, report); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist execution"})
+		return
+	}
+	if runErr != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"execution_id": executionID, "report": report, "error": runErr.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"execution_id": executionID, "report": report})
 }
 
 func triggerMode(definition workflow.Definition, key string) string {
@@ -879,12 +901,30 @@ func requireRoles(roles ...auth.Role) gin.HandlerFunc {
 	}
 }
 func setSessionCookie(c *gin.Context, token string, expires time.Time) {
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(auth.CookieName, token, int(time.Until(expires).Seconds()), "/", "", false, true)
+	remaining := time.Until(expires)
+	maxAge := int((remaining + time.Second - 1) / time.Second)
+	if maxAge < 1 {
+		maxAge = 1
+	}
+	http.SetCookie(c.Writer, &http.Cookie{Name: auth.CookieName, Value: token, Path: "/", Expires: expires.UTC(), MaxAge: maxAge, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 }
 func clearSessionCookie(c *gin.Context) {
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(auth.CookieName, "", -1, "/", "", false, true)
+	http.SetCookie(c.Writer, &http.Cookie{Name: auth.CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+}
+
+func trustedProxies() []string {
+	raw := strings.TrimSpace(os.Getenv("FORGEREVIEW_TRUSTED_PROXIES"))
+	if raw == "" {
+		return nil // Gin's safe default: never trust forwarded client-address headers.
+	}
+	items := strings.Split(raw, ",")
+	proxies := make([]string, 0, len(items))
+	for _, item := range items {
+		if item = strings.TrimSpace(item); item != "" {
+			proxies = append(proxies, item)
+		}
+	}
+	return proxies
 }
 func sessionTTL() time.Duration {
 	if raw := os.Getenv("FORGEREVIEW_SESSION_TTL"); raw != "" {

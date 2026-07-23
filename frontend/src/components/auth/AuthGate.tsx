@@ -2,7 +2,7 @@
 
 import { Eye, EyeOff, KeyRound, LoaderCircle, LogIn, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { createContext, FormEvent, useContext, useEffect, useState } from "react";
-import { loginErrorMessage } from "../../lib/auth";
+import { loginErrorMessage, sessionExpiredMessage } from "../../lib/auth";
 import { getCurrentUser, login, logout, type CurrentUser } from "../../lib/api";
 import styles from "./AuthGate.module.scss";
 
@@ -18,6 +18,14 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     void getCurrentUser().then(setUser).catch(() => undefined).finally(() => setReady(true));
+  }, []);
+  useEffect(() => {
+    const expireSession = () => {
+      setUser(undefined);
+      setError(sessionExpiredMessage);
+    };
+    window.addEventListener("forgereview:session-expired", expireSession);
+    return () => window.removeEventListener("forgereview:session-expired", expireSession);
   }, []);
 
   if (!ready) return <main className={styles.loading} aria-live="polite"><LoaderCircle aria-hidden="true" /><span>Verificando sessão local…</span></main>;

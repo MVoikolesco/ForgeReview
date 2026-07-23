@@ -28,13 +28,17 @@ export const isManualTrigger = (card: Pick<CardData, "type" | "config">) =>
     card.config.mode as string | undefined,
   );
 
-const statusPriority = { completed: 1, partial: 2, failed: 3, running: 4 } as const;
+const terminalStatusPriority = { completed: 1, partial: 2, failed: 3 } as const;
 
 export function applyExecutionReport(nodes: Node<CardData>[], report: ExecutionReport) {
   const statuses = new Map<string, CardData["status"]>();
   for (const run of report.runs) {
     const current = statuses.get(run.node_key);
-    if (!current || statusPriority[run.status] > (statusPriority[current as keyof typeof statusPriority] ?? 0)) {
+    // Poll responses can overlap. A later stale running record must never
+    // replace observed terminal progress for the same card.
+    if (!current || current === "running" || (run.status !== "running" &&
+      terminalStatusPriority[run.status as keyof typeof terminalStatusPriority] >
+        (terminalStatusPriority[current as keyof typeof terminalStatusPriority] ?? 0))) {
       statuses.set(run.node_key, run.status);
     }
   }
@@ -43,6 +47,9 @@ export function applyExecutionReport(nodes: Node<CardData>[], report: ExecutionR
     data: { ...node.data, status: statuses.get(node.id) ?? "idle" },
   }));
 }
+
+export const resetExecutionStatuses = (nodes: Node<CardData>[]) =>
+  nodes.map((node) => ({ ...node, data: { ...node.data, status: "idle" as const } }));
 
 export const edgeIsActivelyPropagating = (edge: Edge, nodes: Node<CardData>[]) =>
   nodes.some((node) => node.id === edge.target && node.data.status === "running");

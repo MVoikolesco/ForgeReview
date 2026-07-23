@@ -10,7 +10,8 @@ the trimmed, lowercase email in `FORGEREVIEW_BOOTSTRAP_ADMIN_EMAIL` using
 `FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD`; Compose requires both values. Startup
 fails when either is absent on first run, while later environment changes are
 ignored once any user exists and cannot overwrite an account. Sessions use a
-short-lived HMAC-signed, HttpOnly/SameSite-Lax cookie plus a revocable SQLite
+short-lived HMAC-signed, HttpOnly/SameSite-Lax cookie with explicit expiry and
+Max-Age plus a revocable SQLite
 nonce; no browser token persistence is used. See [[Decision Log]] and
 [[Feature Map]].
 
@@ -64,6 +65,10 @@ published version is discoverable through `GET /api/workflows` and loadable at
 
 Docker Compose exposes the new frontend on port 3010 and backend on port 8088;
 SQLite and Redis use named volumes.
+
+Gin runs in release mode by default and trusts no proxy headers unless operators
+explicitly configure `FORGEREVIEW_TRUSTED_PROXIES` with their reverse-proxy IPs
+or CIDRs.
 
 The controlled PR-review path after `fetch`/`model` is local to the workflow
 runner: `filter` → `group` → `validate` → `response_filter` → `consolidate` →
@@ -164,7 +169,10 @@ the Pipelines workspace reads grouped safe workflow summaries and owns list
 publication feedback without replacing the current lifecycle list. React Flow
 cards use a shared card shell, and the
 connection flow uses a shared modal shell. Styling is colocated SCSS modules
-backed by `src/styles` tokens, themes, globals, and mixins. See [[Decision Log]]
+backed by `src/styles` tokens, themes, globals, and mixins. Studio keeps draft
+save-and-run separate from executing an opened published version; both support
+only manual triggers. A 401 from a protected client request returns the user to
+the login state instead of silently continuing a poll. See [[Decision Log]]
 and [[Feature Map]].
 
 Every card except `error_control` has a conditional `error` output contract in
