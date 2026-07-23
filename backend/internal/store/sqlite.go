@@ -38,14 +38,16 @@ type ExecutionMetrics struct {
 }
 
 var (
-	ErrWorkflowVersionNotFound  = errors.New("workflow version not found")
-	ErrWorkflowVersionNotDraft  = errors.New("workflow version is not a draft")
-	ErrInvalidWorkflowVersion   = errors.New("workflow version is invalid")
-	ErrIntegrationNotFound      = errors.New("integration not found")
-	ErrIntegrationReferenced    = errors.New("integration has historical workflow references")
-	ErrWebhookDeliveryCollision = errors.New("webhook delivery collision")
-	ErrUserNotFound             = errors.New("user not found")
-	ErrLastActiveAdmin          = errors.New("cannot remove the last active admin")
+	ErrWorkflowVersionNotFound        = errors.New("workflow version not found")
+	ErrWorkflowVersionNotDraft        = errors.New("workflow version is not a draft")
+	ErrInvalidWorkflowVersion         = errors.New("workflow version is invalid")
+	ErrIntegrationNotFound            = errors.New("integration not found")
+	ErrIntegrationReferenced          = errors.New("integration has historical workflow references")
+	ErrWorkflowVersionNotDeletable    = errors.New("published workflow version cannot be deleted")
+	ErrWorkflowVersionDeletionBlocked = errors.New("workflow version deletion is blocked by retained dependencies")
+	ErrWebhookDeliveryCollision       = errors.New("webhook delivery collision")
+	ErrUserNotFound                   = errors.New("user not found")
+	ErrLastActiveAdmin                = errors.New("cannot remove the last active admin")
 )
 
 func Open(path string) (*SQLite, error) {
@@ -998,6 +1000,65 @@ func (s *SQLite) PublishedVersion(ctx context.Context, workflowKey string) (int6
 		return 0, workflow.Definition{}, err
 	}
 	return id, definition, nil
+}
+
+// DeleteWorkflowVersion removes one non-published immutable version only when
+// retained execution, publication, webhook, and audit evidence does not refer
+// to it. Historical evidence is never deleted.
+func (s *SQLite) DeleteWorkflowVersion(ctx context.Context, id, actorID int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var workflowKey, status string
+	if err = tx.QueryRowContext(ctx, `SELECT workflow_key,status FROM workflow_versions WHERE id=?`, id).Scan(&workflowKey, &status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrWorkflowVersionNotFound
+		}
+		return err
+	}
+	if status == workflow.VersionStatusPublished {
+		return ErrWorkflowVersionNotDeletable
+	}
+	var count int
+	reasons := []string{}
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM workflow_executions WHERE workflow_version_id=?`, id).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		reasons = append(reasons, "execution history")
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM publication_attempts WHERE workflow_version_id=?`, id).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		reasons = append(reasons, "publication attempts")
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM webhook_registrations WHERE workflow_key=?`, workflowKey).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		reasons = append(reasons, "webhook registrations")
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_log WHERE target=?`, fmt.Sprintf("workflow_version:%d", id)).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		reasons = append(reasons, "audit history")
+	}
+	if len(reasons) > 0 {
+		return fmt.Errorf("%w: %s", ErrWorkflowVersionDeletionBlocked, strings.Join(reasons, ", "))
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM workflow_versions WHERE id=?`, id); err != nil {
+		return err
+	}
+	if actorID > 0 {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO audit_log(actor_id,action,target,metadata_json) VALUES(?,?,?,?)`, actorID, "workflow_version.deleted", fmt.Sprintf("workflow_version:%d", id), `{}`); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *SQLite) UpsertWebhookRegistration(ctx context.Context, item workflow.WebhookRegistration) error {

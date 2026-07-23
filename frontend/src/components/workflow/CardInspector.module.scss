@@ -2,10 +2,18 @@
 @use "../../styles/mixins" as *;
 
 .inspector {
+    position: fixed;
+    z-index: 30;
+    top: var(--editor-y, 50%);
+    left: var(--editor-x, 50%);
+    width: min(380px, calc(100vw - 24px));
+    max-height: min(680px, calc(100vh - 24px));
     overflow: auto;
     padding: 18px;
-    border-left: 1px solid $border-subtle;
+    border: 1px solid #445978;
+    border-radius: 12px;
     background: $surface-panel;
+    box-shadow: 0 24px 70px #000c, 0 0 0 1px #78a9ff1c;
 }
 
 .inspector header {
@@ -36,6 +44,15 @@
 
 .inspector header button:focus-visible {
     outline: 2px solid #70a5ff;
+    outline-offset: 2px;
+}
+
+.inspector:focus-visible,
+.inspector input:focus-visible,
+.inspector select:focus-visible,
+.inspector textarea:focus-visible,
+.inspector button:focus-visible {
+    outline: 2px solid #83aeff;
     outline-offset: 2px;
 }
 
@@ -136,13 +153,17 @@
 
 @media (max-width: $breakpoint-tablet) {
     .inspector {
-        position: absolute;
-        z-index: 12;
-        top: 58px;
+        top: auto;
         right: 0;
         bottom: 0;
-        width: min(340px, 92vw);
-        border-left-color: #3b4655;
-        box-shadow: -18px 0 45px #0009;
+        left: 0;
+        width: 100%;
+        max-height: min(76vh, 680px);
+        border-color: #445978;
+        border-right: 0;
+        border-bottom: 0;
+        border-left: 0;
+        border-radius: 16px 16px 0 0;
+        box-shadow: 0 -18px 45px #000b;
     }
 }

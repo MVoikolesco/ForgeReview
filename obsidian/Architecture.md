@@ -2,7 +2,9 @@
 
 Studio's client-only history contains cloned workflow definitions, not selection,
 viewport, menu, or execution-report state. Library drops use React Flow
-`screenToFlowPosition`; the contextual inspector is a shared focus-managed modal.
+`screenToFlowPosition`; the single Studio-owned card editor is a focus-managed
+dialog popover anchored to the edited React Flow node. Its pure placement helper
+flips and clamps to the canvas viewport, while narrow screens use a bottom sheet.
 Cards show only safe node status as execution progress. See [[Feature Map]].
 
 The new application separates `backend/` (Gin, SQLite and workflow domain) from
@@ -50,6 +52,16 @@ numeric version, creation time, and `draft`, `published`, or `archived` status.
 Publishing validates the stored draft within a transaction, archives the prior
 published version for that key, and then promotes the draft. Stored definitions
 have no mutable HTTP endpoint. See [[Decision Log]] and [[Feature Map]].
+
+An admin may definitively delete one draft or archived workflow version in one
+SQLite transaction. Published versions require another version to be published
+first. Execution history, publication attempts, workflow webhook registrations,
+and retained audit references block deletion with a safe reason; historical
+records are never removed. Successful version deletion is audited against its
+version ID. `GET
+/api/workflows/:key/published` returns the current immutable published definition
+and version ID for key-based and bare Studio loading. See [[Decision Log]] and
+[[Feature Map]].
 
 Studio-only clone/import/export uses the existing draft-save API. The v1
 `forgereview.workflow` envelope contains a definition only; the client validates
@@ -227,13 +239,14 @@ the compact AppShell variant so its workflow identity, status, and canvas action
 occupy the shared header's right action area without adding a page heading or
 reducing the fixed-height canvas beyond the shared 62px header.
 
-The Studio Inspector is conditional and absent from the default grid. Card
-selection remains independent from editing; only the card edit action or a
-linked validation issue opens it, while a pane click closes it. The canvas grid
-claims the released width and the Inspector becomes a responsive overlay below
-the desktop breakpoint. Manual trigger JSON is entered only in the focused run
-modal, not stored in card data or displayed in the global header. See
-[[Feature Map]] and [[Decision Log]].
+The Studio card editor is conditional and absent from the default grid. Card
+selection remains independent from editing; card controls, canvas context-menu
+editing, and linked validation issues all set the same Studio editor-node state.
+The editor remains next to its card when space permits, tracks canvas movement,
+and closes on outside interaction or Escape without discarding live draft edits.
+Below the tablet breakpoint it is a focused bottom sheet. Manual trigger JSON is
+entered only in the separate focused run modal, not stored in card data or
+displayed in the global header. See [[Feature Map]] and [[Decision Log]].
 
 Catalog cards now declare availability. `workflow`/subpipeline remains visible
 but unavailable in Studio and backend validation rejects it until a runtime

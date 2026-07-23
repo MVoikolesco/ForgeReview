@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
+	"forgereview/backend/internal/auth"
 	"forgereview/backend/internal/workflow"
 )
 
@@ -163,6 +166,81 @@ func TestSaveRejectsFixedPullRequestCoordinates(t *testing.T) {
 	definition := workflow.Definition{Key: "fixed", Name: "Fixed", Nodes: []workflow.Node{{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"owner": "acme"}}}}
 	if _, err = database.Save(context.Background(), definition); err == nil || !strings.Contains(err.Error(), "does not support fixed PR coordinate") {
 		t.Fatalf("fixed coordinate save error = %v", err)
+	}
+}
+
+func TestDeleteWorkflowVersionBlocksEveryRetainedDependency(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/delete-dependencies.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	versionID, err := database.Save(context.Background(), versionedDefinition("Retained"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionID, err := database.CreateExecution(context.Background(), versionID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = database.BeginPublication(context.Background(), workflow.PublicationAttempt{IdempotencyKey: "retained-publication", ExecutionID: executionID, VersionID: versionID, NodeKey: "publish"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.UpsertWebhookRegistration(context.Background(), workflow.WebhookRegistration{Key: "retained-hook", Name: "Retained hook", WorkflowKey: "review", TriggerNodeKey: "start", SecretCiphertext: "ciphertext", Active: true}); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := database.CreateUser(context.Background(), "admin@example.test", "hash", auth.RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = database.Audit(context.Background(), admin.ID, "workflow.published", "workflow_version:"+strconv.FormatInt(versionID, 10), nil); err != nil {
+		t.Fatal(err)
+	}
+	err = database.DeleteWorkflowVersion(context.Background(), versionID, admin.ID)
+	if !errors.Is(err, ErrWorkflowVersionDeletionBlocked) || !strings.Contains(err.Error(), "execution history") || !strings.Contains(err.Error(), "publication attempts") || !strings.Contains(err.Error(), "webhook registrations") || !strings.Contains(err.Error(), "audit history") {
+		t.Fatalf("delete dependency error = %v", err)
+	}
+	if _, err = database.Load(context.Background(), versionID); err != nil {
+		t.Fatalf("blocked deletion removed version: %v", err)
+	}
+}
+
+func TestDeleteWorkflowVersionOnlyRemovesEligibleVersionAndAuditsIt(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/delete-version.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	admin, err := database.CreateUser(context.Background(), "admin@example.test", "hash", auth.RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := database.Save(context.Background(), versionedDefinition("Published"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Publish(context.Background(), published, workflow.DefaultCatalog()); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := database.Save(context.Background(), versionedDefinition("Draft"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = database.DeleteWorkflowVersion(context.Background(), published, admin.ID); !errors.Is(err, ErrWorkflowVersionNotDeletable) {
+		t.Fatalf("delete published = %v", err)
+	}
+	if err = database.DeleteWorkflowVersion(context.Background(), draft, admin.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Load(context.Background(), draft); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("deleted draft load = %v", err)
+	}
+	if _, err = database.Load(context.Background(), published); err != nil {
+		t.Fatalf("published version removed = %v", err)
+	}
+	audit, err := database.AuditEntries(context.Background(), 1)
+	if err != nil || len(audit) != 1 || audit[0].Action != "workflow_version.deleted" || audit[0].Target != "workflow_version:"+strconv.FormatInt(draft, 10) || audit[0].ActorID != admin.ID {
+		t.Fatalf("deletion audit = %#v, %v", audit, err)
 	}
 }
 

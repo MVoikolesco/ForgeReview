@@ -1,4 +1,12 @@
-import { useState } from "react";
+import { X } from "lucide-react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import { placeCardEditor, type PopoverPlacement } from "../../lib/popover";
 import type {
   CardData,
   Integration,
@@ -7,7 +15,6 @@ import type {
 } from "../../lib/types";
 import { configList, configNumber, configText } from "../../lib/workflow";
 import { ToggleSwitch } from "../common/ToggleSwitch";
-import { ModalShell } from "../common/ModalShell";
 import styles from "./CardInspector.module.scss";
 
 export function CardInspector({
@@ -22,6 +29,7 @@ export function CardInspector({
   workflowKey,
   onRegisterWebhook,
   onClose,
+  nodeID,
 }: {
   selected: CardData;
   integrations: Integration[];
@@ -41,11 +49,103 @@ export function CardInspector({
     active: boolean;
   }) => Promise<void>;
   onClose: () => void;
+  nodeID: string;
 }) {
   const [webhookKey, setWebhookKey] = useState("");
   const [webhookName, setWebhookName] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
   const [webhookBusy, setWebhookBusy] = useState(false);
+  const panelRef = useRef<HTMLElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const [placement, setPlacement] = useState<PopoverPlacement>();
+  useEffect(() => {
+    openerRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    panelRef.current
+      ?.querySelector<HTMLElement>("[data-editor-autofocus]")
+      ?.focus();
+    return () => openerRef.current?.focus();
+  }, []);
+  useLayoutEffect(() => {
+    const updatePlacement = () => {
+      const anchor = Array.from(
+        document.querySelectorAll<HTMLElement>(".react-flow__node"),
+      ).find((element) => element.dataset.id === nodeID);
+      const panel = panelRef.current;
+      if (!anchor || !panel) return;
+      const rect = anchor.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      if (!panelRect.width || !panelRect.height) return;
+      const canvasRect = document
+        .querySelector<HTMLElement>(".react-flow")
+        ?.getBoundingClientRect();
+      const viewport = canvasRect ?? {
+        left: 0,
+        top: 0,
+        width: window.innerWidth,
+        height: window.innerHeight,
+      };
+      const next = placeCardEditor(
+        {
+          left: rect.left - viewport.left,
+          top: rect.top - viewport.top,
+          right: rect.right - viewport.left,
+          bottom: rect.bottom - viewport.top,
+          width: rect.width,
+          height: rect.height,
+        },
+        { width: viewport.width, height: viewport.height },
+        panelRect,
+      );
+      next.x += viewport.left;
+      next.y += viewport.top;
+      setPlacement((current) =>
+        current?.side === next.side &&
+        current.x === next.x &&
+        current.y === next.y
+          ? current
+          : next,
+      );
+    };
+    updatePlacement();
+    const viewport = document.querySelector<HTMLElement>(
+      ".react-flow__viewport",
+    );
+    const observer = new MutationObserver(updatePlacement);
+    if (viewport)
+      observer.observe(viewport, {
+        attributes: true,
+        attributeFilter: ["style"],
+      });
+    window.addEventListener("resize", updatePlacement);
+    window.addEventListener("scroll", updatePlacement, true);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", updatePlacement);
+      window.removeEventListener("scroll", updatePlacement, true);
+    };
+  }, [nodeID, selected]);
+  useEffect(() => {
+    const closeOnOutside = (event: PointerEvent) => {
+      if (!panelRef.current?.contains(event.target as globalThis.Node))
+        onClose();
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("pointerdown", closeOnOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [onClose]);
   const updateConfig = (key: string, value: unknown) =>
     !readOnly && onChange({ config: { ...selected.config, [key]: value } });
   const gitea = integrations.filter(
@@ -115,11 +215,58 @@ export function CardInspector({
     </label>
   );
   return (
-    <ModalShell title={selected.name} eyebrow="CONFIGURAÇÃO DO CARD" onClose={onClose} className={styles.inspector}>
+    <section
+      ref={panelRef}
+      className={styles.inspector}
+      role="dialog"
+      aria-modal={false}
+      aria-labelledby={`card-editor-${nodeID}`}
+      style={
+        placement
+          ? ({
+              "--editor-x": `${placement.x}px`,
+              "--editor-y": `${placement.y}px`,
+            } as CSSProperties)
+          : undefined
+      }
+      onKeyDown={(event) => {
+        if (event.key !== "Tab") return;
+        const focusable = Array.from(
+          panelRef.current?.querySelectorAll<HTMLElement>(
+            "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href]",
+          ) ?? [],
+        ).filter((element) => !element.hasAttribute("disabled"));
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable.at(-1)!;
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }}
+    >
+      <header>
+        <div>
+          <span>CONFIGURAÇÃO DO CARD</span>
+          <b id={`card-editor-${nodeID}`}>{selected.name}</b>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={`Fechar editor de ${selected.name}`}
+          title="Fechar editor"
+        >
+          <X size={16} aria-hidden="true" />
+        </button>
+      </header>
       <fieldset className={styles.fields} disabled={readOnly}>
         <label>
           Nome do card
           <input
+            data-editor-autofocus
             value={selected.name}
             onChange={(event) => onChange({ name: event.target.value })}
           />
@@ -375,8 +522,22 @@ export function CardInspector({
               {numberField("max_iterations", "Máximo de iterações", 20)}
               <label>
                 Concorrência
-                <input type="number" min="1" max="4" value={configNumber(selected.config.concurrency, 1)} onChange={(event) => updateConfig("concurrency", Math.max(1, Math.min(4, event.target.valueAsNumber || 1)))} />
-                <small>De 1 a 4 escopos filhos; os resultados continuam ordenados pela entrada.</small>
+                <input
+                  type="number"
+                  min="1"
+                  max="4"
+                  value={configNumber(selected.config.concurrency, 1)}
+                  onChange={(event) =>
+                    updateConfig(
+                      "concurrency",
+                      Math.max(1, Math.min(4, event.target.valueAsNumber || 1)),
+                    )
+                  }
+                />
+                <small>
+                  De 1 a 4 escopos filhos; os resultados continuam ordenados
+                  pela entrada.
+                </small>
               </label>
               <p>
                 Use <code>item</code> para os cards do grupo e conecte apenas
@@ -557,6 +718,6 @@ export function CardInspector({
           versão.
         </p>
       </fieldset>
-    </ModalShell>
+    </section>
   );
 }

@@ -1,8 +1,12 @@
 # Feature Map
 
-- Studio interaction completion: searchable accessible card addition and drag/drop,
-  contextual canvas tools, safe status progress, modal card editing, semantic
-  undo/redo, and bounded loop concurrency (1–4). See [[Architecture]].
+- Studio interaction completion: searchable accessible card addition and drag/drop
+  (arrow navigation, Enter activation, Escape close) plus canvas search
+  (Enter focus, Escape close), contextual canvas tools
+  for cards, edges, and panes, safely positioned dismissible context menus,
+  dark themed React Flow navigation controls, safe status progress, anchored
+  card editing, semantic undo/redo, and bounded loop concurrency (1–4). See
+  [[Architecture]].
 
 - POC: preserved under `POC/`.
 - Local identity and RBAC: login, logout, and current-user endpoints use
@@ -29,9 +33,12 @@
   selection. Gitea selects an organization then only its repositories; LLM setup
   offers searchable multi-select discovered models (no normal-path free text).
   Persisted selections reload in resource-management ModalShell flows.
-- Card inspector: edits supported node configuration and selects active Gitea
-  or reusable model connections. The review template projects the full initial
-  review graph onto the canvas.
+- Card editor: one Studio-owned dialog popover edits supported node configuration
+  and selects active Gitea or reusable model connections. Card controls, context
+  menus, and validation issues open the same editor; it flips/clamps beside its
+  React Flow card, retains draft edits on dismissal, and becomes a narrow-screen
+  bottom sheet. The review template projects the full initial review graph onto
+  the canvas.
 - Integrations: create and list Gitea, OpenAI-compatible and Ollama connection
   records using AES-256-GCM ciphertext in SQLite; APIs expose only safe
   `secret_configured` state. Admins validate unsaved connections server-side,
@@ -101,6 +108,14 @@
   rascunho/publicada/arquivada states and permits publication only from a draft.
   Studio has separate draft-save and publish controls; publishing saves the
   visible canvas before calling the version publish endpoint.
+- Pipeline version deletion and published Studio defaults: administrators can
+  confirm definitive deletion for each draft or archived version from
+  `/pipelines`; published versions require another version to be published
+  first. Retained execution, publication, webhook, or audit evidence blocks it
+  with a dependency-specific message.
+  Published entries open by workflow key and Studio resolves the current
+  published version. Bare `/studio` opens the official published review pipeline
+  when available, otherwise retains a safe local empty canvas.
 - Saved-version editing: every Pipeline version has an `Abrir no Studio` entry
   point. `/studio?version=:id` loads its immutable definition, hydrates current
   catalog card data, positions, configuration, and typed edges, and retains the

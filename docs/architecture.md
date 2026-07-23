@@ -119,7 +119,15 @@ Only admins may create, edit, disable, or delete connections and users.
 - `GET /api/workflows`: list workflow keys with their latest name/description
   and all version summaries (`version_id`, `version`, `created_at`, and
   `status`). Status is one of `draft`, `published`, or `archived`.
+- `GET /api/workflows/:key/published`: load the current published immutable
+  definition with its `version_id`; it returns `404` if the key is unpublished.
 - `GET /api/workflow-versions/:id`: load an immutable saved definition.
+- `DELETE /api/workflow-versions/:id`: admin-only definitive deletion of one
+  `draft` or `archived` version. A published version returns `409` and requires
+  another version to be published first. Execution, publication, workflow
+  webhook, and audit references return a dependency-specific `409`; no
+  historical execution or audit record is deleted. Successful deletions are
+  audited against the removed version ID.
 - `POST /api/workflow-versions/:id/publish`: atomically publish a draft and
   archive the previous published version for that key. It returns the published
   version summary. A missing version returns `404`, a non-draft returns `409`,
@@ -339,8 +347,13 @@ published graph labels and conservative publish-policy/readiness indicators;
 it never renders stored configuration or credentials. `/pipelines` lists the grouped workflow summaries from `GET /api/workflows`.
 It displays all draft, published, and archived versions and exposes publication
 only for draft versions; after a successful response it reloads the lifecycle
-list so the archived and published states are current. Each listed version has
-an `Abrir no Studio` link to `/studio?version=:id`. Studio loads that immutable
+list so the archived and published states are current. Administrators can
+confirm deletion for each draft or archived version; retained execution,
+publication, webhook, or audit evidence blocks it with a specific reason.
+Published entries must first be superseded by publishing another version.
+Published entries open through
+`/studio?workflow=:key`, while draft and archived entries retain
+`/studio?version=:id`. Studio loads that immutable
 definition through `GET /api/workflow-versions/:id`, reconstructs React Flow
 cards from the current catalog (including persisted names, configuration,
 positions, and typed edge handles), and retains its workflow identity for later
@@ -348,6 +361,10 @@ saves. An opened version is explicitly identified as immutable: every save,
 publish, or run saves a new draft, never updates the source version. The Studio
 marks edited canvases as unsaved and warns on browser exit. Header navigation
 links connect Studio, Pipelines, and Integrations.
+
+With no version or workflow parameter, `/studio` resolves the published
+`official-gitea-pr-review` workflow. If it does not exist, Studio keeps a safe
+local empty canvas rather than treating a starter definition as published.
 
 The `Integrações` control opens the Studio connection modal. It lists safe
 integration summaries and creates Gitea, OpenAI-compatible or Ollama records

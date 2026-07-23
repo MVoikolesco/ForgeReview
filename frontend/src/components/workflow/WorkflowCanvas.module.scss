@@ -17,6 +17,31 @@
     filter: drop-shadow(0 0 3px #4b8cff66);
 }
 
+.canvas :global(.react-flow__minimap), .canvas :global(.react-flow__controls) {
+    border: 1px solid $border-control;
+    border-radius: $radius-control;
+    background: $surface-panel;
+    box-shadow: $shadow-panel;
+}
+
+.canvas :global(.react-flow__minimap) { overflow: hidden; }
+.canvas :global(.react-flow__minimap-mask) { fill: #121b2acc; stroke: #78a9ff; stroke-width: 1; }
+.canvas :global(.react-flow__minimap-node) { stroke: #a9c6ff; stroke-width: 1; }
+.canvas :global(.react-flow__controls-button) {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    border: 0;
+    border-bottom: 1px solid $border-subtle;
+    color: $text-secondary;
+    background: $surface-panel;
+}
+.canvas :global(.react-flow__controls-button:last-child) { border-bottom: 0; }
+.canvas :global(.react-flow__controls-button svg) { fill: currentColor; max-width: 15px; }
+.canvas :global(.react-flow__controls-button:hover), .canvas :global(.react-flow__controls-button:focus-visible) { color: $text-primary; background: #1f2a3a; outline: 2px solid #83aeff; outline-offset: -2px; }
+.canvas :global(.react-flow__controls-button:disabled) { color: $text-muted; background: $surface-root; opacity: .65; }
+
 @media (prefers-reduced-motion: reduce) {
     .canvas :global(.react-flow__edge.animated .react-flow__edge-path) {
         animation: none;
@@ -43,12 +68,12 @@
 .toolbar input { width: min(180px, 28vw); border: 0; outline: 0; color: #e4eaf3; font: inherit; font-size: 12px; background: transparent; }
 .toolbar button { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid #303a48; border-radius: 5px; color: #cbd5e2; background: #1a2029; cursor: pointer; }
 .toolbar button:hover, .toolbar button:focus-visible { border-color: #5a83bd; color: #fff; }
-.contextMenu { position: fixed; z-index: 20; display: grid; min-width: 180px; padding: 6px; border: 1px solid #3d4a5c; border-radius: 8px; background: #141a22; box-shadow: 0 18px 44px #000b; }
+.contextMenu { position: fixed; z-index: 20; display: grid; min-width: 204px; padding: 6px; border: 1px solid #587198; border-radius: 8px; background: #141a22; box-shadow: 0 18px 44px #000b; }
 .contextMenu button { padding: 8px 10px; border: 0; border-radius: 5px; color: #dce5f0; text-align: left; background: transparent; cursor: pointer; }
 .contextMenu button:hover:not(:disabled), .contextMenu button:focus-visible { background: #273140; }
 .contextMenu button:disabled { opacity: .5; cursor: not-allowed; }
 .contextMenu hr { width: 100%; border: 0; border-top: 1px solid #303a48; }
-@media (max-width: 600px) { .toolbar { top: 10px; left: 10px; } .toolbar input { width: 110px; } }
+@media (max-width: 600px) { .toolbar { top: 10px; left: 10px; } .toolbar input { width: 110px; } .canvas :global(.react-flow__minimap) { transform: scale(.78); transform-origin: bottom right; } .canvas :global(.react-flow__controls) { bottom: 10px; left: 10px; } }
 
 .validation {
     position: absolute;

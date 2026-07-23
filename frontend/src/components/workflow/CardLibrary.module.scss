@@ -19,8 +19,7 @@
 }
 .search { display: flex; align-items: center; gap: 6px; margin: 0 6px 14px; padding: 0 8px; border: 1px solid #303641; border-radius: 7px; color: #8494a9; background: #12161d; }
 .search input { width: 100%; min-width: 0; padding: 8px 0; border: 0; outline: 0; color: #dbe2ed; font: inherit; font-size: 12px; background: transparent; }
-.library button:not(:disabled) { cursor: grab; }
-.library button:not(:disabled):active { cursor: grabbing; }
+.library button:not(:disabled) { cursor: pointer; }
 
 .library section {
     margin-bottom: 17px;
@@ -57,13 +56,7 @@
     background: #171a20;
 }
 
-.library button i {
-    width: 8px;
-    height: 8px;
-    margin-right: 2px;
-    border-radius: 3px;
-    background: #4b8cff;
-}
+.dragIndicator { flex: 0 0 auto; color: #6b9cff; }
 
 .library button svg {
     margin-left: auto;
@@ -71,6 +64,7 @@
 
 .library button small { color: #8e9caf; font-size: 8px; }
 .library button:disabled { cursor: not-allowed; opacity: .5; }
+.library button.highlighted:not(:disabled), .library button:hover:not(:disabled), .library button:focus-visible:not(:disabled) { border-color: #5a83bd; background: #202936; outline: 0; }
 
 @media (max-width: $breakpoint-mobile) {
     .library {

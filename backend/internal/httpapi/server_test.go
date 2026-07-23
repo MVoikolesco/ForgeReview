@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -442,6 +443,108 @@ func TestWorkflowPublishLifecycleAndListContract(t *testing.T) {
 	versions := items[0].Versions
 	if versions[0].Version != 1 || versions[0].Status != workflow.VersionStatusArchived || versions[1].Version != 2 || versions[1].Status != workflow.VersionStatusPublished || versions[1].ID != secondID || versions[1].CreatedAt == "" {
 		t.Fatalf("listed lifecycle = %#v", versions)
+	}
+}
+
+func TestWorkflowVersionDeletionIsAdminOnlyAndPreservesRetainedHistory(t *testing.T) {
+	database, err := store.Open("file:" + t.TempDir() + "/workflow-delete.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	manager, err := auth.New(database, auth.Config{SigningKey: strings.Repeat("s", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := manager.CreateUser(context.Background(), "admin@example.test", "correct horse battery staple", auth.RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	editor, err := manager.CreateUser(context.Background(), "editor@example.test", "correct horse battery staple", auth.RoleEditor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewWithAuth(workflow.DefaultCatalog(), database, manager)
+	deletable, err := database.Save(context.Background(), workflow.Definition{Key: "deletable", Name: "Deletable", Nodes: []workflow.Node{{Key: "start", Type: "trigger", Name: "Start"}}})
+	if err != nil || deletable < 1 {
+		t.Fatalf("save deletable = %d, %v", deletable, err)
+	}
+	_, editorToken, _, err := manager.Login(context.Background(), editor.Email, "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedRequest := httptest.NewRequest(http.MethodDelete, "/api/workflow-versions/"+strconv.FormatInt(deletable, 10), nil)
+	deniedRequest.AddCookie(&http.Cookie{Name: auth.CookieName, Value: editorToken})
+	denied := httptest.NewRecorder()
+	router.ServeHTTP(denied, deniedRequest)
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("editor deletion = %d: %s", denied.Code, denied.Body.String())
+	}
+	_, adminToken, _, err := manager.Login(context.Background(), admin.Email, "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remove := httptest.NewRequest(http.MethodDelete, "/api/workflow-versions/"+strconv.FormatInt(deletable, 10), nil)
+	remove.AddCookie(&http.Cookie{Name: auth.CookieName, Value: adminToken})
+	deleted := httptest.NewRecorder()
+	router.ServeHTTP(deleted, remove)
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("admin deletion = %d: %s", deleted.Code, deleted.Body.String())
+	}
+	if _, err = database.Load(context.Background(), deletable); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("deleted version load = %v", err)
+	}
+	audit, err := database.AuditEntries(context.Background(), 1)
+	if err != nil || len(audit) != 1 || audit[0].Action != "workflow_version.deleted" || audit[0].Target != "workflow_version:"+strconv.FormatInt(deletable, 10) || audit[0].ActorID != admin.ID {
+		t.Fatalf("deletion audit = %#v, %v", audit, err)
+	}
+
+	retained, err := database.Save(context.Background(), workflow.Definition{Key: "retained", Name: "Retained", Nodes: []workflow.Node{{Key: "start", Type: "trigger", Name: "Start"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = database.Audit(context.Background(), admin.ID, "workflow.published", "workflow_version:"+strconv.FormatInt(retained, 10), nil); err != nil {
+		t.Fatal(err)
+	}
+	blockedRequest := httptest.NewRequest(http.MethodDelete, "/api/workflow-versions/"+strconv.FormatInt(retained, 10), nil)
+	blockedRequest.AddCookie(&http.Cookie{Name: auth.CookieName, Value: adminToken})
+	blocked := httptest.NewRecorder()
+	router.ServeHTTP(blocked, blockedRequest)
+	if blocked.Code != http.StatusConflict || !strings.Contains(blocked.Body.String(), "audit history") {
+		t.Fatalf("retained audit deletion = %d: %s", blocked.Code, blocked.Body.String())
+	}
+	if _, err = database.Load(context.Background(), retained); err != nil {
+		t.Fatalf("blocked deletion removed version: %v", err)
+	}
+	published, err := database.Save(context.Background(), workflow.Definition{Key: "published", Name: "Published", Nodes: []workflow.Node{{Key: "start", Type: "trigger", Name: "Start"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Publish(context.Background(), published, workflow.DefaultCatalog()); err != nil {
+		t.Fatal(err)
+	}
+	publishedRequest := httptest.NewRequest(http.MethodDelete, "/api/workflow-versions/"+strconv.FormatInt(published, 10), nil)
+	publishedRequest.AddCookie(&http.Cookie{Name: auth.CookieName, Value: adminToken})
+	publishedResponse := httptest.NewRecorder()
+	router.ServeHTTP(publishedResponse, publishedRequest)
+	if publishedResponse.Code != http.StatusConflict || !strings.Contains(publishedResponse.Body.String(), "publish another version first") {
+		t.Fatalf("published deletion = %d: %s", publishedResponse.Code, publishedResponse.Body.String())
+	}
+}
+
+func TestPublishedWorkflowLookupReturnsCurrentDefinition(t *testing.T) {
+	database, err := store.Open("file:" + t.TempDir() + "/published-lookup.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	router := New(workflow.DefaultCatalog(), database)
+	id := createWorkflow(t, router, `{"key":"review","name":"Review","nodes":[{"key":"start","type":"trigger","name":"Start"}]}`)
+	publishWorkflow(t, router, id, http.StatusOK)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/workflows/review/published", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"version_id":`+strconv.FormatInt(id, 10)) || !strings.Contains(response.Body.String(), `"key":"review"`) {
+		t.Fatalf("published lookup = %d: %s", response.Code, response.Body.String())
 	}
 }
 

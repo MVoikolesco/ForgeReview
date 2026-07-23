@@ -621,6 +621,18 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		}
 		c.JSON(http.StatusOK, items)
 	})
+	api.GET("/workflows/:key/published", func(c *gin.Context) {
+		id, definition, err := workflows.PublishedVersion(c.Request.Context(), c.Param("key"))
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "published workflow not found"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load published workflow"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"version_id": id, "definition": definition})
+	})
 	api.GET("/workflow-versions/:id", func(c *gin.Context) {
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
@@ -637,6 +649,27 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 			return
 		}
 		c.JSON(http.StatusOK, definition)
+	})
+	api.DELETE("/workflow-versions/:id", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid version id"})
+			return
+		}
+		err = workflows.DeleteWorkflowVersion(c.Request.Context(), id, currentUser(c).ID)
+		switch {
+		case err == nil:
+			c.Status(http.StatusNoContent)
+		case errors.Is(err, store.ErrWorkflowVersionNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "workflow version not found"})
+		case errors.Is(err, store.ErrWorkflowVersionNotDeletable):
+			c.JSON(http.StatusConflict, gin.H{"error": "published workflow version cannot be deleted; publish another version first"})
+		case errors.Is(err, store.ErrWorkflowVersionDeletionBlocked):
+			reason := strings.TrimPrefix(err.Error(), store.ErrWorkflowVersionDeletionBlocked.Error()+": ")
+			c.JSON(http.StatusConflict, gin.H{"error": "workflow version cannot be deleted because retained " + reason + " exists", "reason": reason})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not delete workflow version"})
+		}
 	})
 	api.POST("/workflow-versions/:id/publish", requireRoles(auth.RoleEditor, auth.RoleAdmin), func(c *gin.Context) {
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)

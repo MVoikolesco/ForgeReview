@@ -31,6 +31,7 @@ import {
   getExecution,
   getIntegrations,
   getModelProfiles,
+  getPublishedWorkflow,
   getWebhookRegistrations,
   getWorkflows,
   getWorkflowVersion,
@@ -39,6 +40,14 @@ import {
   saveWorkflow,
 } from "../../lib/api";
 import { studioManagementActions } from "../../lib/navigation";
+import {
+  isEditableTarget,
+  pushHistory,
+  redoHistory,
+  undoHistory,
+  studioLoadTarget,
+  type StudioHistory,
+} from "../../lib/studio";
 import type {
   CardData,
   CardType,
@@ -67,7 +76,6 @@ import {
   validateStudioWorkflow,
   type WorkflowValidationIssue,
 } from "../../lib/workflow";
-import { isEditableTarget, pushHistory, redoHistory, undoHistory, type StudioHistory } from "../../lib/studio";
 import { useCurrentUser } from "../auth/AuthGate";
 import { ModalShell } from "../common/ModalShell";
 import { ConnectionWizard } from "../integrations/ConnectionWizard";
@@ -83,10 +91,8 @@ export function StudioWorkspace() {
   const canEdit = user?.role === "editor" || user?.role === "admin";
   const searchParams = useSearchParams();
   const versionParam = searchParams.get("version");
-  const versionID =
-    versionParam && /^\d+$/.test(versionParam)
-      ? Number(versionParam)
-      : undefined;
+  const workflowParam = searchParams.get("workflow");
+  const loadTarget = studioLoadTarget(versionParam, workflowParam);
   const [nodes, setNodes, onNodesChange] =
     useNodesState<Node<CardData>>(starterNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(starterEdges);
@@ -106,7 +112,10 @@ export function StudioWorkspace() {
   const [workflowKeys, setWorkflowKeys] = useState<string[]>([]);
   const [selectedNodeIDs, setSelectedNodeIDs] = useState<string[]>([]);
   const [selectedEdgeIDs, setSelectedEdgeIDs] = useState<string[]>([]);
-  const [history, setHistory] = useState<StudioHistory>({ past: [], future: [] });
+  const [history, setHistory] = useState<StudioHistory>({
+    past: [],
+    future: [],
+  });
   const [canvasSearch, setCanvasSearch] = useState("");
   const [focusedNodeID, setFocusedNodeID] = useState<string>();
   const [showManualRun, setShowManualRun] = useState(false);
@@ -122,8 +131,14 @@ export function StudioWorkspace() {
     [nodes, edges, metadata],
   );
   const currentDefinition = useRef(definition);
-  useEffect(() => { currentDefinition.current = definition; }, [definition]);
-  const remember = useCallback(() => setHistory((current) => pushHistory(current, currentDefinition.current)), []);
+  useEffect(() => {
+    currentDefinition.current = definition;
+  }, [definition]);
+  const remember = useCallback(
+    () =>
+      setHistory((current) => pushHistory(current, currentDefinition.current)),
+    [],
+  );
   const validationIssues = useMemo(
     () => validateStudioWorkflow(definition, cards),
     [definition, cards],
@@ -150,23 +165,40 @@ export function StudioWorkspace() {
     }
   };
   useEffect(() => {
-    if (!versionID) {
-      if (versionParam) setMessage("A versão solicitada é inválida.");
-      void getCards()
-        .then(setCards)
-        .catch(() =>
-          setMessage("Backend indisponível. Biblioteca local exibida."),
-        );
-      return;
-    }
     setBusy(true);
-    setMessage(`Abrindo versão salva ${versionID}...`);
-    void Promise.all([
-      getCards(),
-      getWorkflowVersion(versionID),
-      getWorkflows(),
-    ])
-      .then(([catalog, definition, workflows]) => {
+    setMessage(
+      loadTarget.kind === "version"
+        ? `Abrindo versão salva ${loadTarget.versionID}...`
+        : "Abrindo pipeline publicado...",
+    );
+    const load =
+      loadTarget.kind === "version"
+        ? Promise.all([
+            getCards(),
+            getWorkflowVersion(loadTarget.versionID),
+            getWorkflows(),
+          ]).then(([catalog, definition, workflows]) => ({
+            catalog,
+            definition,
+            versionID: loadTarget.versionID,
+            published: workflows.some((workflow) =>
+              workflow.versions.some(
+                (version) =>
+                  version.version_id === loadTarget.versionID &&
+                  version.status === "published",
+              ),
+            ),
+          }))
+        : Promise.all([getCards(), getPublishedWorkflow(loadTarget.workflowKey)]).then(
+            ([catalog, published]) => ({
+              catalog,
+              definition: published.definition,
+              versionID: published.version_id,
+              published: true,
+            }),
+          );
+    void load
+      .then(({ catalog, definition, versionID: loadedVersionID, published }) => {
         const hydrated = hydrateDefinition(definition, catalog);
         setCards(catalog);
         setNodes(hydrated.nodes);
@@ -177,30 +209,29 @@ export function StudioWorkspace() {
           name: definition.name,
           description: definition.description,
         });
-        setOpenedVersionID(versionID);
-        setOpenedVersionPublished(
-          workflows.some((workflow) =>
-            workflow.versions.some(
-              (version) =>
-                version.version_id === versionID &&
-                version.status === "published",
-            ),
-          ),
-        );
+        setOpenedVersionID(loadedVersionID);
+        setOpenedVersionPublished(published);
         setDirty(false);
         setMessage(
-          `Versão salva ${versionID} aberta. Alterações serão salvas como um novo rascunho; a versão original permanece imutável.`,
+          `Versão salva ${loadedVersionID} aberta. Alterações serão salvas como um novo rascunho; a versão original permanece imutável.`,
         );
       })
-      .catch((error) =>
-        setMessage(
-          error instanceof Error
-            ? error.message
-            : "Não foi possível abrir a versão salva.",
-        ),
-      )
+      .catch((error) => {
+        setOpenedVersionID(undefined);
+        setOpenedVersionPublished(false);
+        if (loadTarget.kind === "published" && "status" in (error as object) && (error as { status?: number }).status === 404) {
+          setNodes([]);
+          setEdges([]);
+          setInspectedNodeID(undefined);
+          setMetadata(defaultWorkflowMetadata);
+          setDirty(false);
+          setMessage("Nenhuma pipeline publicada está disponível. Crie ou abra uma pipeline para iniciar o canvas.");
+          return;
+        }
+        setMessage(error instanceof Error ? error.message : "Não foi possível abrir o workflow.");
+      })
       .finally(() => setBusy(false));
-  }, [versionID, versionParam, setEdges, setNodes]);
+  }, [loadTarget.kind, loadTarget.kind === "version" ? loadTarget.versionID : loadTarget.workflowKey, setEdges, setNodes]);
   useEffect(() => {
     void Promise.all([getIntegrations(), getModelProfiles()])
       .then(([items, profiles]) => {
@@ -321,29 +352,68 @@ export function StudioWorkspace() {
       setBusy(false);
     }
   };
-  const restoreHistory = useCallback((next: import("../../lib/types").WorkflowDefinition) => {
-    const hydrated = hydrateDefinition(next, cards);
-    setNodes(hydrated.nodes); setEdges(hydrated.edges);
-    setMetadata({ key: next.key, name: next.name, description: next.description }); setDirty(true);
-  }, [cards, setEdges, setNodes]);
+  const restoreHistory = useCallback(
+    (next: import("../../lib/types").WorkflowDefinition) => {
+      const hydrated = hydrateDefinition(next, cards);
+      setNodes(hydrated.nodes);
+      setEdges(hydrated.edges);
+      setMetadata({
+        key: next.key,
+        name: next.name,
+        description: next.description,
+      });
+      setDirty(true);
+    },
+    [cards, setEdges, setNodes],
+  );
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if (isEditableTarget(event.target)) return;
       const mod = event.ctrlKey || event.metaKey;
-      if (mod && event.key.toLowerCase() === "s") { event.preventDefault(); if (canEdit) void saveDraft(); return; }
+      if (mod && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        if (canEdit) void saveDraft();
+        return;
+      }
       if (mod && ["z", "y"].includes(event.key.toLowerCase())) {
         event.preventDefault();
         const redo = event.key.toLowerCase() === "y" || event.shiftKey;
-        const result = redo ? redoHistory(history, currentDefinition.current) : undoHistory(history, currentDefinition.current);
-        if (result) { setHistory(result.history); restoreHistory(result.definition); }
+        const result = redo
+          ? redoHistory(history, currentDefinition.current)
+          : undoHistory(history, currentDefinition.current);
+        if (result) {
+          setHistory(result.history);
+          restoreHistory(result.definition);
+        }
         return;
       }
-      if ((mod && event.key.toLowerCase() === "k") || event.key === "/") { event.preventDefault(); document.querySelector<HTMLInputElement>("[data-canvas-search]")?.focus(); return; }
-      if (event.key === "?") { setMessage("Atalhos: ⌘/Ctrl+Z desfaz, ⌘/Ctrl+Y refaz, ⌘/Ctrl+S salva, ⌘/Ctrl+K ou / busca, F foca seleção e Esc fecha."); return; }
-      if (event.key === "Escape") { setInspectedNodeID(undefined); setSelectedNodeIDs([]); setSelectedEdgeIDs([]); document.querySelectorAll("details[open]").forEach((item) => item.removeAttribute("open")); return; }
-      if (event.key.toLowerCase() === "f" && selectedNodeIDs[0]) setFocusedNodeID(selectedNodeIDs[0]);
+      if ((mod && event.key.toLowerCase() === "k") || event.key === "/") {
+        event.preventDefault();
+        document
+          .querySelector<HTMLInputElement>("[data-canvas-search]")
+          ?.focus();
+        return;
+      }
+      if (event.key === "?") {
+        setMessage(
+          "Atalhos: ⌘/Ctrl+Z desfaz, ⌘/Ctrl+Y refaz, ⌘/Ctrl+S salva, ⌘/Ctrl+K ou / busca, F foca seleção e Esc fecha.",
+        );
+        return;
+      }
+      if (event.key === "Escape") {
+        setInspectedNodeID(undefined);
+        setSelectedNodeIDs([]);
+        setSelectedEdgeIDs([]);
+        document
+          .querySelectorAll("details[open]")
+          .forEach((item) => item.removeAttribute("open"));
+        return;
+      }
+      if (event.key.toLowerCase() === "f" && selectedNodeIDs[0])
+        setFocusedNodeID(selectedNodeIDs[0]);
     };
-    window.addEventListener("keydown", shortcut); return () => window.removeEventListener("keydown", shortcut);
+    window.addEventListener("keydown", shortcut);
+    return () => window.removeEventListener("keydown", shortcut);
   }, [canEdit, history, restoreHistory, selectedNodeIDs]);
   const publishCurrent = async () => {
     if (validationIssues.length) {
@@ -817,21 +887,61 @@ export function StudioWorkspace() {
           onPaneClick={clearCanvasEditing}
           validationIssues={validationIssues}
           onSelectValidationIssue={selectValidationIssue}
-          onAddCardAt={(key, position) => { const card = cards.find((item) => item.key === key); if (card) addCard(card, position); }}
+          onAddCardAt={(key, position) => {
+            const card = cards.find((item) => item.key === key);
+            if (card) addCard(card, position);
+          }}
           onDuplicateNode={(nodeID) => {
             if (!canEdit) return;
-            const source = nodes.find((node) => node.id === nodeID); if (!source) return;
-            remember(); const id = `${source.data.type}-${Date.now().toString(36)}`;
-            setNodes((all) => [...all, { ...source, id, position: { x: source.position.x + 44, y: source.position.y + 44 }, data: { ...source.data, key: id, name: `${source.data.name} (cópia)`, config: structuredClone(source.data.config), status: "idle" } }]);
-            setSelectedNodeIDs([id]); setDirty(true);
+            const source = nodes.find((node) => node.id === nodeID);
+            if (!source) return;
+            remember();
+            const id = `${source.data.type}-${Date.now().toString(36)}`;
+            setNodes((all) => [
+              ...all,
+              {
+                ...source,
+                id,
+                position: {
+                  x: source.position.x + 44,
+                  y: source.position.y + 44,
+                },
+                data: {
+                  ...source.data,
+                  key: id,
+                  name: `${source.data.name} (cópia)`,
+                  config: structuredClone(source.data.config),
+                  status: "idle",
+                },
+              },
+            ]);
+            setSelectedNodeIDs([id]);
+            setDirty(true);
+          }}
+          onDeleteEdge={(edgeID) => {
+            if (!canEdit) return;
+            setEdges((all) => all.filter((edge) => edge.id !== edgeID));
+            setSelectedEdgeIDs((all) => all.filter((id) => id !== edgeID));
+            setDirty(true);
+            setMessage("Conexão removida.");
           }}
           searchQuery={canvasSearch}
-          onSearchQueryChange={(query) => { setCanvasSearch(query); const match = nodes.find((node) => node.data.name.toLowerCase().includes(query.toLowerCase())); if (query && match) { setFocusedNodeID(match.id); setSelectedNodeIDs([match.id]); } }}
+          onSearchQueryChange={(query) => {
+            setCanvasSearch(query);
+            const match = nodes.find((node) =>
+              node.data.name.toLowerCase().includes(query.toLowerCase()),
+            );
+            if (query && match) {
+              setFocusedNodeID(match.id);
+              setSelectedNodeIDs([match.id]);
+            }
+          }}
           focusNodeID={focusedNodeID}
           readOnly={!canEdit}
         />
         {inspectedCard && (
           <CardInspector
+            nodeID={inspectedNodeID!}
             selected={inspectedCard}
             integrations={integrations}
             modelProfiles={modelProfiles}

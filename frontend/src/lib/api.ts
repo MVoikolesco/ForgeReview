@@ -7,6 +7,7 @@ import type {
   Discovery,
   Repository,
   WorkflowDefinition,
+  PublishedWorkflow,
   WorkflowSummary,
   WorkflowVersionSummary,
   WebhookRegistration,
@@ -19,6 +20,7 @@ export class APIError extends Error {
   constructor(
     message: string,
     readonly status?: number,
+    readonly reason?: string,
   ) {
     super(message);
     this.name = "APIError";
@@ -38,11 +40,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const payload =
     response.status === 204
       ? undefined
-      : ((await response.json()) as T & { error?: string });
+       : ((await response.json()) as T & { error?: string; reason?: string });
   if (!response.ok) {
     const error = new APIError(
       payload?.error || "Não foi possível concluir a operação.",
       response.status,
+      payload?.reason,
     );
     if (response.status === 401 && path !== "/api/auth/login")
       window.dispatchEvent(new CustomEvent("forgereview:session-expired"));
@@ -187,6 +190,14 @@ export const saveWorkflow = (definition: WorkflowDefinition) =>
     body: JSON.stringify(definition),
   });
 export const getWorkflows = () => request<WorkflowSummary[]>("/api/workflows");
+export const getPublishedWorkflow = (key: string) =>
+  request<PublishedWorkflow>(
+    `/api/workflows/${encodeURIComponent(key)}/published`,
+  );
+export const deleteWorkflowVersion = (versionID: number) =>
+  request<void>(`/api/workflow-versions/${versionID}`, {
+    method: "DELETE",
+  });
 export const getWorkflowVersion = (versionID: number) =>
   request<WorkflowDefinition>(`/api/workflow-versions/${versionID}`);
 export const publishWorkflow = (versionID: number) =>

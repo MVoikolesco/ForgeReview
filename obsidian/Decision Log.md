@@ -1,5 +1,14 @@
 # Decision Log
 
+## 2026-07-23: Version-scoped workflow deletion preserves retained evidence
+
+Deletion is admin-only and targets exactly one draft or archived workflow
+version. A published version must first be archived by publishing another
+version. Execution, publication, workflow webhook, and audit references block
+the transaction rather than deleting historical evidence. A successful deletion
+is audited against the removed version ID. Studio exposes the action only for
+eligible versions. See [[Architecture]] and [[Feature Map]].
+
 ## 2026-07-23: Serializable Studio-only editing history
 
 Undo/redo stores cloned workflow definitions rather than React Flow UI state.

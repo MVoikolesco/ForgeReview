@@ -1,5 +1,20 @@
 import type { WorkflowDefinition } from "./types";
 
+export type StudioLoadTarget =
+  | { kind: "version"; versionID: number }
+  | { kind: "published"; workflowKey: string };
+
+/** Explicit versions win; a named workflow and bare Studio both open published definitions. */
+export const studioLoadTarget = (
+  versionParam: string | null,
+  workflowKey: string | null,
+): StudioLoadTarget => {
+  if (versionParam && /^\d+$/.test(versionParam))
+    return { kind: "version", versionID: Number(versionParam) };
+  if (workflowKey?.trim()) return { kind: "published", workflowKey: workflowKey.trim() };
+  return { kind: "published", workflowKey: "official-gitea-pr-review" };
+};
+
 export type StudioHistory = { past: WorkflowDefinition[]; future: WorkflowDefinition[] };
 
 /** Keeps only serializable workflow definitions; selection and execution status never enter history. */
@@ -29,6 +44,14 @@ export const searchCards = <T extends { name: string; key: string; category?: st
     return terms.every((term) => text.includes(term));
   });
 };
+
+/** Returns the highlighted available result, falling back to the first available match. */
+export const selectedCardSearchResult = <T extends { key: string; available?: boolean }>(
+  cards: T[],
+  highlightedKey?: string,
+) =>
+  cards.find((card) => card.key === highlightedKey && card.available !== false) ??
+  cards.find((card) => card.available !== false);
 
 export const isEditableTarget = (target: EventTarget | null) => {
   const element = target instanceof Element ? target : null;

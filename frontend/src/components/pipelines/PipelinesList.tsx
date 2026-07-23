@@ -1,3 +1,4 @@
+import { Trash2 } from "lucide-react";
 import type { WorkflowSummary } from "../../lib/types";
 import {
   canPublishVersion,
@@ -8,7 +9,10 @@ import styles from "./PipelinesList.module.scss";
 type PipelinesListProps = {
   items: WorkflowSummary[];
   publishingID?: number;
+  deletingID?: number;
+  canDelete: boolean;
   onPublish: (versionID: number) => void;
+  onDelete: (workflow: WorkflowSummary, version: WorkflowSummary["versions"][number]) => void;
 };
 
 const formattedDate = (value: string) => {
@@ -24,7 +28,10 @@ const formattedDate = (value: string) => {
 export function PipelinesList({
   items,
   publishingID,
+  deletingID,
+  canDelete,
   onPublish,
+  onDelete,
 }: PipelinesListProps) {
   if (!items.length)
     return (
@@ -57,8 +64,8 @@ export function PipelinesList({
                  <span className={styles[version.status]}>
                    {workflowVersionStatusLabel(version.status)}
                  </span>
-                 <Link href={`/studio?version=${version.version_id}`}>
-                   <Pencil size={13} /> Abrir no Studio
+                  <Link href={version.status === "published" ? `/studio?workflow=${encodeURIComponent(workflow.key)}` : `/studio?version=${version.version_id}`}>
+                    <Pencil size={13} /> Abrir no Studio
                  </Link>
                  {canPublishVersion(version.status) && (
                   <button
@@ -69,7 +76,16 @@ export function PipelinesList({
                       ? "Publicando..."
                       : "Publicar"}
                   </button>
-                )}
+                 )}
+                 {canDelete && version.status !== "published" && (
+                  <button
+                    className={styles.delete}
+                    disabled={Boolean(deletingID)}
+                    onClick={() => onDelete(workflow, version)}
+                  >
+                    <Trash2 size={13} /> {deletingID === version.version_id ? "Excluindo..." : "Excluir versão"}
+                  </button>
+                 )}
               </li>
             ))}
           </ol>

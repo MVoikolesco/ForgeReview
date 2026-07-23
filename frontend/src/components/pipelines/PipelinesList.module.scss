@@ -47,6 +47,12 @@
     font-size: 10px;
 }
 
+.list .delete {
+    border-color: #a84f58;
+    color: #ffd8dc;
+    background: #3b1c22;
+}
+
 .list ol {
     display: grid;
     gap: 1px;
@@ -57,7 +63,7 @@
 
 .list li {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 95px 124px 90px;
+    grid-template-columns: minmax(0, 1fr) 95px 124px 90px 112px;
     align-items: center;
     gap: 12px;
     min-height: 59px;

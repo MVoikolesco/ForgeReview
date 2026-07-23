@@ -91,6 +91,16 @@
     font-size: 12px;
 }
 
+.deleteConfirm {
+    @include control;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-color: #a84f58;
+    color: #ffd8dc;
+    background: #3b1c22;
+}
+
 @media (max-width: $breakpoint-mobile) {
     .content {
         padding-top: 28px;

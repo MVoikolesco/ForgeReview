@@ -84,6 +84,11 @@ export type WorkflowSummary = {
   versions: WorkflowVersionSummary[];
 };
 
+export type PublishedWorkflow = {
+  version_id: number;
+  definition: WorkflowDefinition;
+};
+
 export type ExecutionReport = {
 	 execution_id?: number;
 	status: string;

@@ -1,5 +1,40 @@
 # Change Log
 
+## 2026-07-23: Safe version deletion and published Studio default
+
+- Replaced whole-pipeline deletion with admin-only, atomic deletion of one draft
+  or archived version. Published versions require a replacement publication;
+  retained execution, publication, webhook, and audit references return a safe
+  conflict without deleting historical records. Successful deletion is audited.
+- Added per-version Pipeline confirmation, feedback, and reload. Added
+  published-workflow lookup; bare Studio now opens the official published review
+  workflow when present, otherwise keeps an empty local fallback. See
+  [[Architecture]] and [[Feature Map]].
+
+## 2026-07-23: Anchored Studio card editor
+
+- Replaced desktop card editing through `ModalShell` with one Studio-owned,
+  focus-managed dialog popover anchored to the React Flow card. It clamps and
+  flips inside the canvas viewport, follows canvas movement, restores opener
+  focus, and closes on Escape or outside interaction without losing live edits.
+  Narrow screens use a bottom sheet.
+- Card header controls, the card context menu, and validation links use the
+  same editor state. Added pure placement regression coverage for flipping and
+  clamping. See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-23: Studio canvas interaction corrections
+
+- Corrected context-menu event propagation so card, edge, and pane menus appear
+  within the viewport, expose role-disabled mutation actions, and close on
+  outside interaction or Escape. Edge deletion now uses the same controlled
+  Studio state as other graph changes.
+- Card-library search supports arrow-highlight navigation, Enter activation, and
+  Escape close; canvas search focuses its selected result on Enter. Draggable
+  cards use a visible grip rather than a hand cursor.
+  React Flow MiniMap and Controls are scoped to the dark Studio tokens.
+  Added search-result selection regression coverage. See [[Architecture]] and
+  [[Feature Map]].
+
 ## 2026-07-23: Studio interaction completion
 
 - Added serializable semantic history helpers and keyboard commands, searchable
