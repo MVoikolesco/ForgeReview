@@ -1,5 +1,22 @@
 # Decision Log
 
+## 2026-07-23: Bounded durable retry and serialized provider calls
+
+Only transient worker failures retry, with a maximum of three durable attempts
+and deterministic exponential backoff plus bounded jitter. Permanent, uncertain,
+and exhausted failures enter DLQ; admin replay creates a fresh execution and is
+audited. Recovery requeues due work and execution work stale for 15 minutes.
+Loops permit up to four child scopes and eight total card operations per runner,
+but provider-facing fetch/model/publish calls are serialized because current
+adapters cannot prove a provider-specific ordering policy. Aggregate results are
+still ordered by input scope. See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-23: Safe replayable execution lifecycle
+
+Status and SSE intentionally exclude raw runtime payloads. Retained sensitive
+execution data supports a new **reprocess**, never a claimed resume; publication
+is not cancellable once started. See [[Operational Execution]].
+
 ## 2026-07-23: Shared role-aware content navigation
 
 Standard authenticated pages use a single AppShell so route visibility, active

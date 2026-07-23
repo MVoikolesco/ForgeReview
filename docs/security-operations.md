@@ -12,9 +12,28 @@ is admin-only and returns bounded safe metadata; secrets, passwords, tokens, and
 ciphertext are excluded.
 
 Publication transport errors, 5xx responses, and unreadable successful responses
-are stored as `uncertain`; they are not automatically retried. Definitive 4xx
-provider rejections are retryable only through the controlled publication flow.
+are stored as `uncertain`; they are not automatically retried. Validation,
+provider 4xx, and uncertain-publication outcomes are never automatically retried.
 Admins reconcile an uncertain attempt with `POST /api/publications/:key/reconcile`
 and the active Gitea integration plus PR coordinates. ForgeReview searches reviews
-for its idempotency marker: a match completes the attempt; only a confirmed absent
-marker makes it retryable.
+ for its idempotency marker: a match completes the attempt; only a confirmed absent
+ marker makes it retryable.
+
+## Execution status and sensitive retention
+
+`GET /api/executions/:id` and both SSE feeds (`/api/execution-events` and
+`/api/executions/:id/events`) expose only execution lifecycle and per-card
+identity/status/scope. Events are stored before delivery and replay from
+`Last-Event-ID`; raw input, node values, provider data, errors, and secrets are
+excluded. Sensitive execution input/node details are retained separately for
+seven days. Reprocess creates a new execution; it is not a resume. Cancellation
+is available only before external publication starts.
+
+## Retry and dead-letter handling
+
+Worker failures classified as transient retry no more than three times with
+deterministic exponential backoff and bounded jitter. Permanent and uncertain
+failures become `dead_letter`; an administrator may create a new execution from
+retained input with `POST /api/executions/:id/replay`. Replay is audited. Recovery
+also returns running executions stale for 15 minutes to the queue; it never
+claims to resume in-memory provider work.

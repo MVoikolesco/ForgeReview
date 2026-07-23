@@ -85,12 +85,23 @@ export type WorkflowSummary = {
 };
 
 export type ExecutionReport = {
-  status: string;
-  runs: Array<{
-    node_key: string;
+	 execution_id?: number;
+	status: string;
+	runs: Array<{
+	  node_key: string;
+	  scope_key?: string;
     status: "running" | "completed" | "failed" | "partial";
     error?: string;
   }>;
+};
+
+export type ExecutionEvent = {
+  id: number;
+  execution_id: number;
+  kind: "execution" | "node";
+  status: string;
+  node?: { node_key: string; scope_key?: string; status: CardStatus };
+  created_at: string;
 };
 
 export type Integration = {

@@ -7,9 +7,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"forgereview/backend/internal/integration"
 	"forgereview/backend/internal/workflow"
@@ -66,6 +68,45 @@ func TestNodeProgressUpsertsRunningToTerminalWithoutDuplicateRows(t *testing.T) 
 	completed, err := database.Execution(context.Background(), executionID)
 	if err != nil || rows != 1 || len(completed.Runs) != 1 || completed.Runs[0].Status != "completed" || completed.Runs[0].ScopeKey != "root" {
 		t.Fatalf("completed = %#v, rows=%d, err=%v", completed, rows, err)
+	}
+}
+
+func TestExecutionStatusAndReplayEventsExcludeSensitivePayloads(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/safe-status.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	versionID, err := database.Save(context.Background(), workflow.Definition{Key: "safe", Name: "Safe", Nodes: []workflow.Node{{Key: "start", Type: "trigger", Name: "Start"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := database.CreateExecution(context.Background(), versionID, map[string]any{"token": "must-not-leak"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, claimed, err := database.ClaimExecution(context.Background(), id); err != nil || !claimed {
+		t.Fatalf("claim = %v, %v", claimed, err)
+	}
+	run := workflow.NodeRun{NodeKey: "start", ScopeKey: "root", Status: "completed", Inputs: map[string][]any{"event": {"sensitive"}}, Outputs: []workflow.Token{{NodeKey: "start", PortKey: "event", Value: "sensitive"}}}
+	if err = database.SaveNodeProgress(context.Background(), id, run); err != nil {
+		t.Fatal(err)
+	}
+	status, err := database.Execution(context.Background(), id)
+	if err != nil || status.Status != "running" || len(status.Runs) != 1 || status.Runs[0].NodeKey != "start" {
+		t.Fatalf("safe status = %#v, %v", status, err)
+	}
+	payload, _ := json.Marshal(status)
+	if strings.Contains(string(payload), "sensitive") || strings.Contains(string(payload), "token") {
+		t.Fatalf("status leaked payload: %s", payload)
+	}
+	events, err := database.ExecutionEvents(context.Background(), 0, id, 10)
+	if err != nil || len(events) < 3 {
+		t.Fatalf("events = %#v, %v", events, err)
+	}
+	payload, _ = json.Marshal(events)
+	if strings.Contains(string(payload), "sensitive") || strings.Contains(string(payload), "token") {
+		t.Fatalf("events leaked payload: %s", payload)
 	}
 }
 
@@ -432,6 +473,131 @@ func TestQueuedExecutionRecoveryRetainsSelectedTriggerAndInput(t *testing.T) {
 	if err != nil || !claimed || execution.TriggerNodeKey != "api" || execution.Input["request"] != "durable" {
 		t.Fatalf("recovered execution = %#v, %t, %v", execution, claimed, err)
 	}
+}
+
+func TestExecutionFailureRetriesAreBoundedAndPermanentOrUncertainFailuresDeadLetter(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/failure-policy.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	versionID, err := database.Save(context.Background(), workflow.Definition{Key: "retry-policy", Name: "Retry policy", Nodes: []workflow.Node{{Key: "start", Type: "trigger", Name: "Start"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRunning := func() int64 {
+		id, createErr := database.CreateExecution(context.Background(), versionID, map[string]any{"payload": "private"})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		if _, claimed, claimErr := database.ClaimExecution(context.Background(), id); claimErr != nil || !claimed {
+			t.Fatalf("claim %d = %t, %v", id, claimed, claimErr)
+		}
+		return id
+	}
+	id := newRunning()
+	for attempt := 1; attempt <= maxExecutionRetries; attempt++ {
+		retry, failureErr := database.HandleExecutionFailure(context.Background(), id, "transient")
+		if failureErr != nil || !retry {
+			t.Fatalf("attempt %d = retry %t, err %v", attempt, retry, failureErr)
+		}
+		var retries int
+		var next string
+		if err = database.db.QueryRow(`SELECT retry_count,next_retry_at FROM workflow_executions WHERE id=?`, id).Scan(&retries, &next); err != nil || retries != attempt || next == "" {
+			t.Fatalf("retry state %d = %d/%q, %v", attempt, retries, next, err)
+		}
+		if _, err = database.db.Exec(`UPDATE workflow_executions SET next_retry_at=NULL WHERE id=?`, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, claimed, claimErr := database.ClaimExecution(context.Background(), id); claimErr != nil || !claimed {
+			t.Fatalf("reclaim %d = %t, %v", attempt, claimed, claimErr)
+		}
+	}
+	if retry, failureErr := database.HandleExecutionFailure(context.Background(), id, "transient"); failureErr != nil || retry {
+		t.Fatalf("exhausted retry = %t, %v", retry, failureErr)
+	}
+	for _, class := range []string{"permanent", "uncertain"} {
+		terminal := newRunning()
+		if retry, failureErr := database.HandleExecutionFailure(context.Background(), terminal, class); failureErr != nil || retry {
+			t.Fatalf("%s = retry %t, err %v", class, retry, failureErr)
+		}
+		var status, persistedClass string
+		if err = database.db.QueryRow(`SELECT status,last_failure_class FROM workflow_executions WHERE id=?`, terminal).Scan(&status, &persistedClass); err != nil || status != "dead_letter" || persistedClass != class {
+			t.Fatalf("%s terminal state = %s/%s, %v", class, status, persistedClass, err)
+		}
+	}
+}
+
+func TestRecoverStaleExecutionAndReplayDeadLetterAreSafeAndAuditable(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/recovery-replay.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	versionID, err := database.Save(context.Background(), workflow.Definition{Key: "recovery-replay", Name: "Recovery replay", Nodes: []workflow.Node{{Key: "start", Type: "trigger", Name: "Start"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, _ := database.CreateExecution(context.Background(), versionID, map[string]any{"secret_payload": "never public"})
+	fresh, _ := database.CreateExecution(context.Background(), versionID, nil)
+	for _, id := range []int64{stale, fresh} {
+		if _, claimed, claimErr := database.ClaimExecution(context.Background(), id); claimErr != nil || !claimed {
+			t.Fatalf("claim = %t, %v", claimed, claimErr)
+		}
+	}
+	if _, err = database.db.Exec(`UPDATE workflow_executions SET started_at=datetime('now','-20 minutes') WHERE id=?`, stale); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := database.RecoverableExecutionIDs(context.Background(), 15*time.Minute)
+	if err != nil || len(ids) != 1 || ids[0] != stale {
+		t.Fatalf("recovery = %#v, %v", ids, err)
+	}
+	if _, err = database.RecoverableExecutionIDs(context.Background(), 0); err == nil {
+		t.Fatal("zero stale threshold was accepted")
+	}
+	if _, claimed, claimErr := database.ClaimExecution(context.Background(), stale); claimErr != nil || !claimed {
+		t.Fatalf("claim recovered = %t, %v", claimed, claimErr)
+	}
+	if _, err = database.HandleExecutionFailure(context.Background(), stale, "permanent"); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := database.ReplayDeadLetterExecution(context.Background(), stale)
+	if err != nil || replay == stale {
+		t.Fatalf("replay = %d, %v", replay, err)
+	}
+	actor, err := database.CreateUser(context.Background(), "admin@example.test", "test-hash", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = database.Audit(context.Background(), actor.ID, "execution.dead_letter_replayed", "execution:"+strconv.FormatInt(replay, 10), map[string]any{"source_execution_id": stale, "token": "must-not-store"}); err != nil {
+		t.Fatal(err)
+	}
+	audit, err := database.AuditEntries(context.Background(), 1)
+	if err != nil || len(audit) != 1 || audit[0].Action != "execution.dead_letter_replayed" || audit[0].Metadata["token"] != nil || audit[0].Metadata["source_execution_id"] != float64(stale) {
+		t.Fatalf("audit = %#v, %v", audit, err)
+	}
+}
+
+func TestMetricsAreAggregateOnly(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/metrics.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	versionID, err := database.Save(context.Background(), workflow.Definition{Key: "metrics", Name: "Metrics", Nodes: []workflow.Node{{Key: "start", Type: "trigger", Name: "Start"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := database.CreateExecution(context.Background(), versionID, map[string]any{"secret": "do-not-expose"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics, err := database.Metrics(context.Background())
+	payload, _ := json.Marshal(metrics)
+	if err != nil || metrics.QueueDepth != 1 || strings.Contains(string(payload), "secret") || strings.Contains(string(payload), "payload") {
+		t.Fatalf("metrics = %s, %v", payload, err)
+	}
+	_ = id
 }
 
 func publicationDefinition() workflow.Definition {

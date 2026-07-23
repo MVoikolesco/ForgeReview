@@ -122,8 +122,8 @@ Only admins may create, edit, disable, or delete connections and users.
 - `POST /api/published-workflow-versions/:id/executions`: execute an opened
   published version without saving a draft. Draft and archived versions return
   `409`; both Studio routes require a selected manual trigger.
-- `GET /api/executions/:id`: load persisted node states, input references and
-  output tokens.
+- `GET /api/executions/:id`: load safe persisted execution and per-node lifecycle
+   states only; raw inputs and outputs are excluded.
 - `GET /api/executions?limit=10`: return at most 1–100 dashboard-safe execution
   summaries (default 10). Each summary has execution status/timestamps, workflow
   identity/version, and PR coordinates only when matching fetch/publish cards in
@@ -176,11 +176,14 @@ their administrator must submit a new Token/API key.
 
 `loop.items` accepts a list or a `group.groups` output. It requires a positive
 integer `max_iterations`; inputs above that bound fail before any child scope is
-started. `concurrency` defaults to `1` and only `1` is currently valid. The
+started. `concurrency` defaults to `1` and is bounded at `4`. The
 validated `max_iterations`, `concurrency`, `on_error`, and completed/failed
-iteration counts are retained in loop node-run metadata. Child scopes run
-strictly sequentially and receive deterministic keys of the form
-`<loop-node-key>:000001`, in input order.
+iteration counts are retained in loop node-run metadata. Child scopes receive
+deterministic keys of the form `<loop-node-key>:000001`, in input order.
+Aggregation remains in that order even when child scopes run concurrently. A
+runner limits card work to eight concurrent operations and serializes `fetch`,
+`model`, and `publish` calls because current adapters have no provider-specific
+ordering policy.
 
 Each `loop.item` edge receives one token in its child scope, and every
 downstream token remains in that scope; the graph remains a single visual graph.
@@ -261,14 +264,29 @@ or reconciliation of an uncertain external review result remain out of scope.
 
 ## Asynchronous execution dispatch
 
+## Operational execution status
+
+SQLite persists safe execution/node lifecycle events before SSE delivery.
+`GET /api/execution-events` supplies Dashboard activity and
+`GET /api/executions/:id/events` supplies Studio activity; both support replay
+through `Last-Event-ID`. Status/event payloads contain only IDs, status,
+timestamps, node keys, and scope keys. Raw trigger input and node payloads reside
+in separate sensitive tables and are purged after seven days. Reprocess creates a
+new queued execution from retained input and must never be described as resume.
+
 When `FORGEREVIEW_REDIS_URL` is set, startup verifies Redis and starts a worker
 using its list-backed execution-ID queue. The worker atomically claims a queued
 SQLite execution before running it, making duplicate queue deliveries harmless.
 Before the worker starts, every still-queued SQLite execution ID is re-enqueued;
 the persisted selected trigger and input therefore survive process restarts and
 temporary enqueue failures.
+Transient worker failures retry at most three times with deterministic exponential
+backoff plus bounded jitter. Permanent and uncertain failures, and exhausted
+transient retries, become `dead_letter`; only an admin can create a new replay
+execution through `POST /api/executions/:id/replay`, which is audited. Startup
+and periodic recovery requeue due work and running work stale for 15 minutes.
 `GET /api/executions/:id` remains the status API and reports `queued`, `running`,
-`completed`, or `failed` plus completed node reports. If Redis is unavailable,
+`completed`, `cancelled`, or `dead_letter` plus completed node reports. If Redis is unavailable,
 startup fails unless local development explicitly sets
 `FORGEREVIEW_ALLOW_IN_PROCESS_QUEUE=true`; that opt-in fallback is non-durable
 and is also used by tests. Leaving `FORGEREVIEW_REDIS_URL` unset preserves the

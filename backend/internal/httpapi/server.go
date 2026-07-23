@@ -17,6 +17,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"forgereview/backend/internal/auth"
@@ -55,6 +56,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		adapters = adapterSets[0]
 	}
 	router := gin.New()
+	var sseConnections atomic.Int64
 	proxies, err := trustedProxies()
 	if err != nil {
 		panic(fmt.Sprintf("invalid FORGEREVIEW_TRUSTED_PROXIES: %v", err))
@@ -724,6 +726,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		}
 		c.JSON(http.StatusOK, items)
 	})
+	api.GET("/execution-events", func(c *gin.Context) { streamExecutionEvents(c, workflows, 0, &sseConnections) })
 	api.GET("/executions/:id", func(c *gin.Context) {
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
@@ -741,7 +744,127 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		}
 		c.JSON(http.StatusOK, report)
 	})
+	api.GET("/executions/:id/events", func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil || id < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid execution id"})
+			return
+		}
+		streamExecutionEvents(c, workflows, id, &sseConnections)
+	})
+	api.GET("/metrics", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+		metrics, err := workflows.Metrics(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load metrics"})
+			return
+		}
+		// Connection count is a process gauge; all execution counters are durable.
+		c.JSON(http.StatusOK, gin.H{"queue_depth": metrics.QueueDepth, "status_counts": metrics.StatusCounts, "retry_count": metrics.RetryCount, "dead_letter_count": metrics.DeadLetterCount, "average_duration_ms": metrics.AverageDuration, "sse_connections": sseConnections.Load()})
+	})
+	api.POST("/executions/:id/cancel", requireRoles(auth.RoleEditor, auth.RoleAdmin), func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil || id < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid execution id"})
+			return
+		}
+		if err = workflows.CancelExecution(c.Request.Context(), id); errors.Is(err, store.ErrExecutionNotCancellable) {
+			c.JSON(http.StatusConflict, gin.H{"error": "execution cannot be cancelled after publication begins or after it is terminal"})
+			return
+		} else if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "execution not found"})
+			return
+		} else if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not cancel execution"})
+			return
+		}
+		_ = workflows.Audit(c.Request.Context(), currentUser(c).ID, "execution.cancelled", fmt.Sprintf("execution:%d", id), nil)
+		c.JSON(http.StatusOK, gin.H{"execution_id": id, "status": "cancelled"})
+	})
+	api.POST("/executions/:id/reprocess", requireRoles(auth.RoleEditor, auth.RoleAdmin), func(c *gin.Context) {
+		if adapters.Dispatcher == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "durable execution queue is not configured"})
+			return
+		}
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil || id < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid execution id"})
+			return
+		}
+		next, err := workflows.ReprocessExecution(c.Request.Context(), id)
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "execution not found"})
+			return
+		} else if err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": "execution cannot be reprocessed: sensitive input may have expired"})
+			return
+		}
+		if err = adapters.Dispatcher.Enqueue(c.Request.Context(), next); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"execution_id": next, "status": "queued", "error": "execution persisted but dispatch is unavailable"})
+			return
+		}
+		_ = workflows.Audit(c.Request.Context(), currentUser(c).ID, "execution.reprocessed", fmt.Sprintf("execution:%d", next), map[string]any{"source_execution_id": id})
+		c.JSON(http.StatusAccepted, gin.H{"execution_id": next, "status": "queued"})
+	})
+	api.POST("/executions/:id/replay", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+		if adapters.Dispatcher == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "durable execution queue is not configured"})
+			return
+		}
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil || id < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid execution id"})
+			return
+		}
+		next, err := workflows.ReplayDeadLetterExecution(c.Request.Context(), id)
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "execution not found"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": "execution is not eligible for dead-letter replay"})
+			return
+		}
+		if err = adapters.Dispatcher.Enqueue(c.Request.Context(), next); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"execution_id": next, "status": "queued", "error": "execution persisted but dispatch is unavailable"})
+			return
+		}
+		_ = workflows.Audit(c.Request.Context(), currentUser(c).ID, "execution.dead_letter_replayed", fmt.Sprintf("execution:%d", next), map[string]any{"source_execution_id": id})
+		c.JSON(http.StatusAccepted, gin.H{"execution_id": next, "status": "queued"})
+	})
 	return router
+}
+
+func streamExecutionEvents(c *gin.Context, workflows *store.SQLite, executionID int64, connections *atomic.Int64) {
+	connections.Add(1)
+	defer connections.Add(-1)
+	after, _ := strconv.ParseInt(c.GetHeader("Last-Event-ID"), 10, 64)
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		events, err := workflows.ExecutionEvents(c.Request.Context(), after, executionID, 100)
+		if err != nil {
+			return
+		}
+		for _, event := range events {
+			payload, _ := json.Marshal(event)
+			_, _ = fmt.Fprintf(c.Writer, "id: %d\nevent: execution\ndata: %s\n\n", event.ID, payload)
+			after = event.ID
+		}
+		flusher.Flush()
+		select {
+		case <-c.Request.Context().Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func handleVersionExecution(c *gin.Context, workflows *store.SQLite, catalog workflow.Catalog, adapters workflow.Adapters, requiredStatus string) {
@@ -817,6 +940,9 @@ func handleVersionExecution(c *gin.Context, workflows *store.SQLite, catalog wor
 	runAdapters.Progress = workflow.ProgressObserverFunc(func(progressCtx context.Context, run workflow.NodeRun) error {
 		return workflows.SaveNodeProgress(progressCtx, executionID, run)
 	})
+	runAdapters.Cancellation = func(checkCtx context.Context) (bool, error) {
+		return workflows.CancellationRequested(checkCtx, executionID)
+	}
 	report, runErr := workflow.RunFromTriggerWithAdapters(c.Request.Context(), definition, catalog, triggerNode, input, runAdapters)
 	if err = workflows.CompleteExecution(c.Request.Context(), executionID, report); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist execution"})

@@ -27,6 +27,16 @@ type AuditEntry struct {
 	CreatedAt string         `json:"created_at"`
 }
 
+// ExecutionMetrics is intentionally aggregate-only: no workflow, user,
+// execution, provider, or request labels can become sensitive/high-cardinality.
+type ExecutionMetrics struct {
+	QueueDepth      int64            `json:"queue_depth"`
+	StatusCounts    map[string]int64 `json:"status_counts"`
+	RetryCount      int64            `json:"retry_count"`
+	DeadLetterCount int64            `json:"dead_letter_count"`
+	AverageDuration float64          `json:"average_duration_ms"`
+}
+
 var (
 	ErrWorkflowVersionNotFound  = errors.New("workflow version not found")
 	ErrWorkflowVersionNotDraft  = errors.New("workflow version is not a draft")
@@ -69,6 +79,14 @@ func Open(path string) (*SQLite, error) {
 		return nil, err
 	}
 	if err = store.migratePublicationUncertain(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err = store.migrateExecutionSensitiveData(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err = store.ensureExecutionRetryColumns(context.Background()); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -650,17 +668,37 @@ func (s *SQLite) CreateTriggeredExecution(ctx context.Context, versionID int64, 
 	if err != nil {
 		return 0, err
 	}
-	result, err := s.db.ExecContext(ctx, `INSERT INTO workflow_executions(workflow_version_id,status,metadata_json,execution_input_json,trigger_node_key) VALUES(?, 'queued', '{}', ?, ?)`, versionID, string(payload), triggerNodeKey)
+	result, err := s.db.ExecContext(ctx, `INSERT INTO workflow_executions(workflow_version_id,status,metadata_json,execution_input_json,trigger_node_key) VALUES(?, 'queued', '{}', '{}', ?)`, versionID, triggerNodeKey)
 	if err != nil {
 		return 0, err
 	}
-	return result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if _, err = s.db.ExecContext(ctx, `INSERT INTO workflow_execution_sensitive(execution_id,input_json) VALUES(?,?)`, id, string(payload)); err != nil {
+		return 0, err
+	}
+	_ = s.appendExecutionEvent(ctx, id, "execution", "queued", nil)
+	return id, nil
 }
 
 // ClaimExecution atomically transitions a queued execution to running. A
 // duplicate queue delivery receives false and must not execute it again.
 func (s *SQLite) ClaimExecution(ctx context.Context, id int64) (workflow.Execution, bool, error) {
-	result, err := s.db.ExecContext(ctx, `UPDATE workflow_executions SET status='running' WHERE id=? AND status='queued'`, id)
+	var nextRetry string
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(next_retry_at,'') FROM workflow_executions WHERE id=? AND status='queued'`, id).Scan(&nextRetry); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return workflow.Execution{}, false, nil
+		}
+		return workflow.Execution{}, false, err
+	}
+	if nextRetry != "" {
+		if at, err := time.Parse(time.RFC3339Nano, nextRetry); err == nil && at.After(time.Now().UTC()) {
+			return workflow.Execution{}, false, nil
+		}
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE workflow_executions SET status='running',started_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'`, id)
 	if err != nil {
 		return workflow.Execution{}, false, err
 	}
@@ -670,7 +708,7 @@ func (s *SQLite) ClaimExecution(ctx context.Context, id int64) (workflow.Executi
 	}
 	var execution workflow.Execution
 	var input string
-	err = s.db.QueryRowContext(ctx, `SELECT workflow_version_id,trigger_node_key,execution_input_json FROM workflow_executions WHERE id=?`, id).Scan(&execution.VersionID, &execution.TriggerNodeKey, &input)
+	err = s.db.QueryRowContext(ctx, `SELECT e.workflow_version_id,e.trigger_node_key,COALESCE(p.input_json,'{}') FROM workflow_executions e LEFT JOIN workflow_execution_sensitive p ON p.execution_id=e.id WHERE e.id=?`, id).Scan(&execution.VersionID, &execution.TriggerNodeKey, &input)
 	if err != nil {
 		return workflow.Execution{}, false, err
 	}
@@ -678,7 +716,51 @@ func (s *SQLite) ClaimExecution(ctx context.Context, id int64) (workflow.Executi
 	if err = json.Unmarshal([]byte(input), &execution.Input); err != nil {
 		return workflow.Execution{}, false, fmt.Errorf("decode execution input: %w", err)
 	}
+	_ = s.appendExecutionEvent(ctx, id, "execution", "running", nil)
 	return execution, true, nil
+}
+
+const maxExecutionRetries = 3
+
+// HandleExecutionFailure records a safe failure class. Only transient failures
+// are retried, and every other class (or exhausted retry) is terminal DLQ.
+func (s *SQLite) HandleExecutionFailure(ctx context.Context, id int64, class string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var retries int
+	if err = tx.QueryRowContext(ctx, `SELECT retry_count FROM workflow_executions WHERE id=? AND status='running'`, id).Scan(&retries); err != nil {
+		return false, err
+	}
+	if class == "transient" && retries < maxExecutionRetries {
+		next := time.Now().UTC().Add(retryDelay(id, retries+1)).Format(time.RFC3339Nano)
+		if _, err = tx.ExecContext(ctx, `UPDATE workflow_executions SET status='queued',retry_count=retry_count+1,last_failure_class=?,next_retry_at=? WHERE id=?`, class, next, id); err != nil {
+			return false, err
+		}
+		if err = tx.Commit(); err != nil {
+			return false, err
+		}
+		_ = s.appendExecutionEvent(ctx, id, "execution", "queued", nil)
+		return true, nil
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE workflow_executions SET status='dead_letter',last_failure_class=?,finished_at=CURRENT_TIMESTAMP WHERE id=?`, class, id); err != nil {
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	_ = s.appendExecutionEvent(ctx, id, "execution", "dead_letter", nil)
+	return false, nil
+}
+
+func retryDelay(id int64, retry int) time.Duration {
+	base := time.Second * time.Duration(1<<(retry-1))
+	// A deterministic bounded jitter avoids synchronized retries without making
+	// tests or operator reconstruction depend on process-local randomness.
+	jitter := time.Duration((id*1103515245+int64(retry)*12345)%500) * time.Millisecond
+	return base + jitter
 }
 
 func (s *SQLite) SaveExecution(ctx context.Context, versionID int64, report workflow.RunReport) (int64, error) {
@@ -713,11 +795,17 @@ func (s *SQLite) SaveNodeProgress(ctx context.Context, id int64, run workflow.No
 	if updated != 1 {
 		return fmt.Errorf("execution %d node progress was not persisted", id)
 	}
+	if err = s.saveNodeSensitive(ctx, id, run, scopeKey); err != nil {
+		return err
+	}
+	_ = s.appendExecutionEvent(ctx, id, "node", run.Status, &workflow.ExecutionNodeState{NodeKey: run.NodeKey, ScopeKey: scopeKey, Status: run.Status})
 	return nil
 }
 
 func nodeRunValues(run workflow.NodeRun) ([]byte, string, error) {
-	metadata, err := json.Marshal(map[string]any{"inputs": run.Inputs, "outputs": run.Outputs, "error": run.Error, "duration_ms": run.DurationMS, "metadata": run.Metadata})
+	// The status/event plane retains identity and lifecycle only. The detailed
+	// runtime payload is written to the seven-day sensitive store instead.
+	metadata, err := json.Marshal(map[string]any{"duration_ms": run.DurationMS})
 	if err != nil {
 		return nil, "", err
 	}
@@ -735,7 +823,7 @@ func (s *SQLite) CompleteExecution(ctx context.Context, id int64, report workflo
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE workflow_executions SET status=?,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'`, report.Status, id)
+	result, err := tx.ExecContext(ctx, `UPDATE workflow_executions SET status=?,finished_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('running','cancellation_requested')`, report.Status, id)
 	if err != nil {
 		return err
 	}
@@ -760,6 +848,7 @@ func (s *SQLite) CompleteExecution(ctx context.Context, id int64, report workflo
 	if err = tx.Commit(); err != nil {
 		return err
 	}
+	_ = s.appendExecutionEvent(ctx, id, "execution", report.Status, nil)
 	return nil
 }
 
@@ -783,6 +872,118 @@ func (s *SQLite) QueuedExecutionIDs(ctx context.Context) ([]int64, error) {
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// RecoverableExecutionIDs returns due queued work and atomically returns stale
+// running work to the durable queue. It is safe to call repeatedly; claim is
+// still the single execution owner boundary.
+func (s *SQLite) RecoverableExecutionIDs(ctx context.Context, staleAfter time.Duration) ([]int64, error) {
+	if staleAfter <= 0 {
+		return nil, fmt.Errorf("stale execution threshold must be positive")
+	}
+	// SQLite CURRENT_TIMESTAMP uses a space-separated timestamp. Compare in
+	// SQLite rather than against RFC3339 text so an active execution is not
+	// spuriously marked stale due to lexical timestamp-format differences.
+	if _, err := s.db.ExecContext(ctx, `UPDATE workflow_executions SET status='queued',last_failure_class='uncertain' WHERE status='running' AND started_at < datetime('now', ?)`, fmt.Sprintf("-%d seconds", int64(staleAfter.Seconds()))); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,COALESCE(next_retry_at,'') FROM workflow_executions WHERE status='queued' ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []int64{}
+	now := time.Now().UTC()
+	for rows.Next() {
+		var id int64
+		var next string
+		if err = rows.Scan(&id, &next); err != nil {
+			return nil, err
+		}
+		if next == "" {
+			ids = append(ids, id)
+			continue
+		}
+		at, parseErr := time.Parse(time.RFC3339Nano, next)
+		if parseErr == nil && !at.After(now) {
+			ids = append(ids, id)
+		}
+	}
+	return ids, rows.Err()
+}
+
+func (s *SQLite) ReplayDeadLetterExecution(ctx context.Context, id int64) (int64, error) {
+	var status string
+	if err := s.db.QueryRowContext(ctx, `SELECT status FROM workflow_executions WHERE id=?`, id).Scan(&status); err != nil {
+		return 0, err
+	}
+	if status != "dead_letter" {
+		return 0, fmt.Errorf("execution is not in dead letter")
+	}
+	return s.ReprocessExecution(ctx, id)
+}
+
+var ErrExecutionNotCancellable = errors.New("execution can no longer be cancelled")
+
+// CancelExecution is intentionally rejected after a publication attempt exists.
+// Once external publication begins, the workflow must complete through its
+// idempotency boundary rather than pretending the provider call was cancelled.
+func (s *SQLite) CancelExecution(ctx context.Context, id int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var status string
+	if err = tx.QueryRowContext(ctx, `SELECT status FROM workflow_executions WHERE id=?`, id).Scan(&status); err != nil {
+		return err
+	}
+	if status != "queued" && status != "running" {
+		return ErrExecutionNotCancellable
+	}
+	var publications int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM publication_attempts WHERE workflow_execution_id=?`, id).Scan(&publications); err != nil {
+		return err
+	}
+	if publications > 0 {
+		return ErrExecutionNotCancellable
+	}
+	next := "cancelled"
+	if status == "running" {
+		next = "cancellation_requested"
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE workflow_executions SET status=?,finished_at=CASE WHEN ?='cancelled' THEN CURRENT_TIMESTAMP ELSE finished_at END WHERE id=?`, next, next, id); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return s.appendExecutionEvent(ctx, id, "execution", next, nil)
+}
+
+func (s *SQLite) CancellationRequested(ctx context.Context, id int64) (bool, error) {
+	var status string
+	err := s.db.QueryRowContext(ctx, `SELECT status FROM workflow_executions WHERE id=?`, id).Scan(&status)
+	return status == "cancellation_requested", err
+}
+
+// Reprocess creates a new durable execution from the retained input. It never
+// claims to resume an interrupted in-memory execution.
+func (s *SQLite) ReprocessExecution(ctx context.Context, id int64) (int64, error) {
+	var versionID int64
+	var trigger, input string
+	err := s.db.QueryRowContext(ctx, `SELECT e.workflow_version_id,e.trigger_node_key,COALESCE(p.input_json,'') FROM workflow_executions e LEFT JOIN workflow_execution_sensitive p ON p.execution_id=e.id WHERE e.id=?`, id).Scan(&versionID, &trigger, &input)
+	if err != nil {
+		return 0, err
+	}
+	if input == "" {
+		return 0, fmt.Errorf("execution input expired; reprocess is unavailable")
+	}
+	values := map[string]any{}
+	if json.Unmarshal([]byte(input), &values) != nil {
+		return 0, fmt.Errorf("stored execution input is invalid")
+	}
+	return s.CreateTriggeredExecution(ctx, versionID, trigger, values)
 }
 
 func (s *SQLite) PublishedVersion(ctx context.Context, workflowKey string) (int64, workflow.Definition, error) {
@@ -857,12 +1058,15 @@ func (s *SQLite) CreateWebhookExecution(ctx context.Context, registrationKey, de
 	if !errors.Is(err, sql.ErrNoRows) {
 		return 0, false, err
 	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO workflow_executions(workflow_version_id,status,metadata_json,execution_input_json,trigger_node_key) VALUES(?,'queued','{}',?,?)`, versionID, string(payload), triggerNodeKey)
+	result, err := tx.ExecContext(ctx, `INSERT INTO workflow_executions(workflow_version_id,status,metadata_json,execution_input_json,trigger_node_key) VALUES(?,'queued','{}','{}',?)`, versionID, triggerNodeKey)
 	if err != nil {
 		return 0, false, err
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
+		return 0, false, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO workflow_execution_sensitive(execution_id,input_json) VALUES(?,?)`, id, string(payload)); err != nil {
 		return 0, false, err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO webhook_deliveries(registration_key,delivery_id,body_sha256,workflow_execution_id) VALUES(?,?,?,?)`, registrationKey, deliveryID, bodyHash, id); err != nil {
@@ -880,6 +1084,14 @@ func (s *SQLite) BeginPublication(ctx context.Context, attempt workflow.Publicat
 		return workflow.PublicationAttempt{}, false, err
 	}
 	defer tx.Rollback()
+	var executionStatus string
+	err = tx.QueryRowContext(ctx, `SELECT status FROM workflow_executions WHERE id=?`, attempt.ExecutionID).Scan(&executionStatus)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return workflow.PublicationAttempt{}, false, err
+	}
+	if err == nil && executionStatus != "running" && executionStatus != "queued" {
+		return workflow.PublicationAttempt{}, false, fmt.Errorf("execution is not publishable")
+	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO publication_attempts(idempotency_key,workflow_execution_id,workflow_version_id,node_key,status) VALUES(?,?,?,?, 'pending') ON CONFLICT(idempotency_key) DO NOTHING`, attempt.IdempotencyKey, attempt.ExecutionID, attempt.VersionID, attempt.NodeKey)
 	if err != nil {
 		return workflow.PublicationAttempt{}, false, err
@@ -1011,34 +1223,22 @@ func (s *SQLite) ReconcilePublication(ctx context.Context, key string, receipt *
 	return nil
 }
 
-func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.RunReport, error) {
-	var status string
-	if err := s.db.QueryRowContext(ctx, `SELECT status FROM workflow_executions WHERE id=?`, id).Scan(&status); err != nil {
-		return workflow.RunReport{}, err
+func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.ExecutionStatus, error) {
+	var report workflow.ExecutionStatus
+	if err := s.db.QueryRowContext(ctx, `SELECT id,status,started_at,COALESCE(finished_at,'') FROM workflow_executions WHERE id=?`, id).Scan(&report.ID, &report.Status, &report.StartedAt, &report.FinishedAt); err != nil {
+		return workflow.ExecutionStatus{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT node_key,scope_key,status,metadata_json FROM workflow_node_runs WHERE workflow_execution_id=? ORDER BY id`, id)
 	if err != nil {
-		return workflow.RunReport{}, err
+		return workflow.ExecutionStatus{}, err
 	}
 	defer rows.Close()
-	report := workflow.RunReport{Status: status}
 	for rows.Next() {
-		var run workflow.NodeRun
-		var metadata string
-		if err = rows.Scan(&run.NodeKey, &run.ScopeKey, &run.Status, &metadata); err != nil {
-			return workflow.RunReport{}, err
+		var run workflow.ExecutionNodeState
+		var ignored string
+		if err = rows.Scan(&run.NodeKey, &run.ScopeKey, &run.Status, &ignored); err != nil {
+			return workflow.ExecutionStatus{}, err
 		}
-		var details struct {
-			Inputs     map[string][]any `json:"inputs"`
-			Outputs    []workflow.Token `json:"outputs"`
-			Error      string           `json:"error"`
-			DurationMS int64            `json:"duration_ms"`
-			Metadata   map[string]any   `json:"metadata"`
-		}
-		if err = json.Unmarshal([]byte(metadata), &details); err != nil {
-			return workflow.RunReport{}, err
-		}
-		run.Inputs, run.Outputs, run.Error, run.DurationMS, run.Metadata = details.Inputs, details.Outputs, details.Error, details.DurationMS, details.Metadata
 		report.Runs = append(report.Runs, run)
 	}
 	return report, rows.Err()
@@ -1049,8 +1249,9 @@ func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.RunReport, e
 // or integration configuration. Displayable PR coordinates are derived only
 // from the typed execution input.
 func (s *SQLite) ExecutionSummaries(ctx context.Context, limit int) ([]workflow.ExecutionSummary, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT e.id,e.status,e.started_at,COALESCE(e.finished_at,''),v.workflow_key,v.name,v.version,e.execution_input_json
+	rows, err := s.db.QueryContext(ctx, `SELECT e.id,e.status,e.started_at,COALESCE(e.finished_at,''),v.workflow_key,v.name,v.version,COALESCE(p.input_json,'{}')
 		FROM workflow_executions e JOIN workflow_versions v ON v.id=e.workflow_version_id
+		LEFT JOIN workflow_execution_sensitive p ON p.execution_id=e.id
 		ORDER BY e.started_at DESC,e.id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -1068,6 +1269,90 @@ func (s *SQLite) ExecutionSummaries(ctx context.Context, limit int) ([]workflow.
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (s *SQLite) Metrics(ctx context.Context) (ExecutionMetrics, error) {
+	metrics := ExecutionMetrics{StatusCounts: map[string]int64{}}
+	rows, err := s.db.QueryContext(ctx, `SELECT status,COUNT(*) FROM workflow_executions GROUP BY status`)
+	if err != nil {
+		return metrics, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var count int64
+		if err = rows.Scan(&status, &count); err != nil {
+			return metrics, err
+		}
+		metrics.StatusCounts[status] = count
+	}
+	if err = rows.Err(); err != nil {
+		return metrics, err
+	}
+	metrics.QueueDepth = metrics.StatusCounts["queued"]
+	metrics.DeadLetterCount = metrics.StatusCounts["dead_letter"]
+	if err = s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(retry_count),0),COALESCE(AVG((julianday(finished_at)-julianday(started_at))*86400000),0) FROM workflow_executions WHERE finished_at IS NOT NULL`).Scan(&metrics.RetryCount, &metrics.AverageDuration); err != nil {
+		return metrics, err
+	}
+	return metrics, nil
+}
+
+func (s *SQLite) saveNodeSensitive(ctx context.Context, executionID int64, run workflow.NodeRun, scopeKey string) error {
+	payload, err := json.Marshal(map[string]any{"inputs": run.Inputs, "outputs": run.Outputs, "error": run.Error, "metadata": run.Metadata})
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO workflow_node_run_sensitive(execution_id,node_key,scope_key,payload_json,expires_at) VALUES(?,?,?,?,COALESCE((SELECT datetime(started_at,'+7 days') FROM workflow_executions WHERE id=?),datetime('now','+7 days'))) ON CONFLICT(execution_id,node_key,scope_key) DO UPDATE SET payload_json=excluded.payload_json,expires_at=excluded.expires_at`, executionID, run.NodeKey, scopeKey, string(payload), executionID)
+	return err
+}
+
+func (s *SQLite) appendExecutionEvent(ctx context.Context, executionID int64, kind, status string, node *workflow.ExecutionNodeState) error {
+	var nodeKey, scopeKey string
+	if node != nil {
+		nodeKey, scopeKey = node.NodeKey, node.ScopeKey
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO execution_events(execution_id,kind,status,node_key,scope_key) VALUES(?,?,?,?,?)`, executionID, kind, status, nodeKey, scopeKey)
+	return err
+}
+
+// ExecutionEvents returns a bounded replay of persisted safe lifecycle events.
+func (s *SQLite) ExecutionEvents(ctx context.Context, afterID, executionID int64, limit int) ([]workflow.ExecutionEvent, error) {
+	query := `SELECT id,execution_id,kind,status,node_key,scope_key,created_at FROM execution_events WHERE id>?`
+	args := []any{afterID}
+	if executionID > 0 {
+		query += ` AND execution_id=?`
+		args = append(args, executionID)
+	}
+	query += ` ORDER BY id LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := []workflow.ExecutionEvent{}
+	for rows.Next() {
+		var item workflow.ExecutionEvent
+		var nodeKey, scopeKey string
+		if err = rows.Scan(&item.ID, &item.ExecutionID, &item.Kind, &item.Status, &nodeKey, &scopeKey, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		if nodeKey != "" {
+			item.Node = &workflow.ExecutionNodeState{NodeKey: nodeKey, ScopeKey: scopeKey, Status: item.Status}
+		}
+		events = append(events, item)
+	}
+	return events, rows.Err()
+}
+
+// PruneExecutionSensitiveData enforces the fixed seven-day retention period.
+func (s *SQLite) PruneExecutionSensitiveData(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM workflow_node_run_sensitive WHERE expires_at <= CURRENT_TIMESTAMP`)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM workflow_execution_sensitive WHERE execution_id IN (SELECT id FROM workflow_executions WHERE started_at <= datetime('now','-7 days'))`)
+	return err
 }
 
 func reviewContextFromInput(payload string) *workflow.ExecutionReviewContext {
@@ -1168,7 +1453,15 @@ CREATE TABLE IF NOT EXISTS workflow_executions (
  finished_at TEXT,
   metadata_json TEXT NOT NULL DEFAULT '{}',
   execution_input_json TEXT NOT NULL DEFAULT '{}',
-  trigger_node_key TEXT NOT NULL DEFAULT ''
+	 trigger_node_key TEXT NOT NULL DEFAULT ''
+	 ,retry_count INTEGER NOT NULL DEFAULT 0
+	 ,last_failure_class TEXT NOT NULL DEFAULT ''
+	 ,next_retry_at TEXT
+);
+CREATE TABLE IF NOT EXISTS workflow_execution_sensitive (
+ execution_id INTEGER PRIMARY KEY REFERENCES workflow_executions(id) ON DELETE CASCADE,
+ input_json TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS workflow_node_runs (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1182,6 +1475,24 @@ CREATE TABLE IF NOT EXISTS workflow_node_runs (
  metadata_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS workflow_node_run_attempt ON workflow_node_runs(workflow_execution_id,node_key,scope_key,attempt);
+CREATE TABLE IF NOT EXISTS workflow_node_run_sensitive (
+ execution_id INTEGER NOT NULL REFERENCES workflow_executions(id) ON DELETE CASCADE,
+ node_key TEXT NOT NULL,
+ scope_key TEXT NOT NULL,
+ payload_json TEXT NOT NULL,
+ expires_at TEXT NOT NULL,
+ PRIMARY KEY(execution_id,node_key,scope_key)
+);
+CREATE TABLE IF NOT EXISTS execution_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ execution_id INTEGER NOT NULL REFERENCES workflow_executions(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL CHECK(kind IN ('execution','node')),
+ status TEXT NOT NULL,
+ node_key TEXT NOT NULL DEFAULT '',
+ scope_key TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS execution_events_execution_id ON execution_events(execution_id,id);
 CREATE TABLE IF NOT EXISTS publication_attempts (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  idempotency_key TEXT NOT NULL UNIQUE,
@@ -1235,6 +1546,70 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
  PRIMARY KEY(registration_key,delivery_id)
 );
 `
+
+// migrateExecutionSensitiveData separates historical input and node payloads
+// from status rows. It is idempotent: fresh databases are already created in
+// the split form and legacy values are copied once before being scrubbed.
+func (s *SQLite) migrateExecutionSensitiveData(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS workflow_execution_sensitive (execution_id INTEGER PRIMARY KEY REFERENCES workflow_executions(id) ON DELETE CASCADE,input_json TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS workflow_node_run_sensitive (execution_id INTEGER NOT NULL REFERENCES workflow_executions(id) ON DELETE CASCADE,node_key TEXT NOT NULL,scope_key TEXT NOT NULL,payload_json TEXT NOT NULL,expires_at TEXT NOT NULL,PRIMARY KEY(execution_id,node_key,scope_key))`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS execution_events (id INTEGER PRIMARY KEY AUTOINCREMENT,execution_id INTEGER NOT NULL REFERENCES workflow_executions(id) ON DELETE CASCADE,kind TEXT NOT NULL,status TEXT NOT NULL,node_key TEXT NOT NULL DEFAULT '',scope_key TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS execution_events_execution_id ON execution_events(execution_id,id)`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO workflow_execution_sensitive(execution_id,input_json) SELECT id,execution_input_json FROM workflow_executions WHERE execution_input_json <> '{}'`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE workflow_executions SET execution_input_json='{}' WHERE execution_input_json <> '{}'`); err != nil {
+		return err
+	}
+	// Legacy node metadata can contain input/output values. Preserve it under the
+	// retention boundary, then replace the public-row metadata with an empty map.
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO workflow_node_run_sensitive(execution_id,node_key,scope_key,payload_json,expires_at) SELECT workflow_execution_id,node_key,scope_key,metadata_json,datetime('now','+7 days') FROM workflow_node_runs WHERE metadata_json <> '{}'`); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE workflow_node_runs SET metadata_json='{}' WHERE metadata_json <> '{}'`)
+	return err
+}
+
+func (s *SQLite) ensureExecutionRetryColumns(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(workflow_executions)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, primary int
+		var name, typ string
+		var def any
+		if err = rows.Scan(&cid, &name, &typ, &notNull, &def, &primary); err != nil {
+			return err
+		}
+		have[name] = true
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	for _, column := range []struct{ name, definition string }{
+		{"retry_count", "INTEGER NOT NULL DEFAULT 0"},
+		{"last_failure_class", "TEXT NOT NULL DEFAULT ''"},
+		{"next_retry_at", "TEXT"},
+	} {
+		if !have[column.name] {
+			if _, err = s.db.ExecContext(ctx, `ALTER TABLE workflow_executions ADD COLUMN `+column.name+` `+column.definition); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
 func (s *SQLite) ensureUserActiveColumn(ctx context.Context) error {
 	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(users)`)

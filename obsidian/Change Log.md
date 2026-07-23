@@ -1,5 +1,19 @@
 # Change Log
 
+## 2026-07-23: Retry/DLQ and bounded loop execution
+
+- Added classified worker retry/DLQ lifecycle, stale-running recovery, audited
+  admin replay, aggregate-only metrics, and regression coverage for safe status
+  payloads. Loop concurrency is bounded to four child scopes and eight total
+  runner operations; provider calls serialize and aggregate deterministically.
+  See [[Architecture]] and [[Decision Log]].
+
+## 2026-07-23: Operational execution status safety
+
+- Added persisted safe lifecycle events, replayable SSE for Studio and Dashboard,
+  seven-day sensitive execution retention, and cancellation/reprocess controls.
+  See [[Operational Execution]].
+
 ## 2026-07-23: Studio header action regression
 
 - Restored the Studio overflow's Pipelines entry for editors/admins and its

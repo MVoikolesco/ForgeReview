@@ -2,7 +2,9 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 
+	"forgereview/backend/internal/integration"
 	"forgereview/backend/internal/workflow"
 )
 
@@ -12,6 +14,7 @@ type ExecutionStore interface {
 	Load(context.Context, int64) (workflow.Definition, error)
 	SaveNodeProgress(context.Context, int64, workflow.NodeRun) error
 	CompleteExecution(context.Context, int64, workflow.RunReport) error
+	HandleExecutionFailure(context.Context, int64, string) (bool, error)
 }
 
 type Worker struct {
@@ -50,6 +53,29 @@ func (w Worker) Process(ctx context.Context, id int64) error {
 	adapters.Progress = workflow.ProgressObserverFunc(func(progressCtx context.Context, run workflow.NodeRun) error {
 		return w.Store.SaveNodeProgress(progressCtx, execution.ID, run)
 	})
-	report, _ := workflow.RunFromTriggerWithAdapters(ctx, definition, w.Catalog, execution.TriggerNodeKey, execution.Input, adapters)
-	return w.Store.CompleteExecution(ctx, id, report)
+	if cancellable, ok := w.Store.(interface {
+		CancellationRequested(context.Context, int64) (bool, error)
+	}); ok {
+		adapters.Cancellation = func(checkCtx context.Context) (bool, error) {
+			return cancellable.CancellationRequested(checkCtx, execution.ID)
+		}
+	}
+	report, runErr := workflow.RunFromTriggerWithAdapters(ctx, definition, w.Catalog, execution.TriggerNodeKey, execution.Input, adapters)
+	if runErr == nil {
+		return w.Store.CompleteExecution(ctx, id, report)
+	}
+	if errors.Is(runErr, context.Canceled) {
+		return w.Store.CompleteExecution(ctx, id, report)
+	}
+	retry, failureErr := w.Store.HandleExecutionFailure(ctx, id, string(integration.ClassifyFailure(runErr)))
+	if failureErr != nil {
+		return failureErr
+	}
+	if retry {
+		// The next-attempt timestamp is durable. A process restart or a duplicate
+		// wake-up is harmless because recovery only re-enqueues due work and Claim
+		// remains atomic.
+		return w.Queue.Enqueue(ctx, id)
+	}
+	return nil
 }

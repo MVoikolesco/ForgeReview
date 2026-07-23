@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -331,6 +332,84 @@ func TestRunLoopPartialFailureContinuesRemainingScopesAndReturnsAggregate(t *tes
 	}
 	if results := outputFor(t, report, "loop", "results").([]any); len(results) != 0 {
 		t.Fatalf("partial loop results = %#v", results)
+	}
+}
+
+type trackingModel struct {
+	mu          sync.Mutex
+	inFlight    int
+	maxInFlight int
+	calls       int
+	block       time.Duration
+}
+
+func (m *trackingModel) Chat(ctx context.Context, _ integration.Integration, _ string, _ string) (integration.ChatResult, error) {
+	m.mu.Lock()
+	m.inFlight++
+	m.calls++
+	if m.inFlight > m.maxInFlight {
+		m.maxInFlight = m.inFlight
+	}
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.inFlight--
+		m.mu.Unlock()
+	}()
+	select {
+	case <-time.After(m.block):
+		return integration.ChatResult{Content: "ok"}, nil
+	case <-ctx.Done():
+		return integration.ChatResult{}, ctx.Err()
+	}
+}
+
+func TestParallelLoopBoundsAndDeterministicallyAggregatesProviderWork(t *testing.T) {
+	model := &trackingModel{block: 10 * time.Millisecond}
+	config, _ := json.Marshal(map[string]string{"base_url": "https://model.example", "model": "reviewer"})
+	definition := Definition{Key: "parallel", Name: "Parallel", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": []any{"one", "two", "three", "four"}}},
+		{Key: "loop", Type: "loop", Name: "Loop", Config: map[string]any{"max_iterations": 4, "concurrency": 4}},
+		{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"template": "review"}},
+		{Key: "model", Type: "model", Name: "Model", Config: map[string]any{"integration": "model"}},
+	}, Edges: []Edge{
+		{Key: "items", FromNode: "start", FromPort: "event", ToNode: "loop", ToPort: "items"},
+		{Key: "context", FromNode: "loop", FromPort: "item", ToNode: "template", ToPort: "context"},
+		{Key: "prompt", FromNode: "template", FromPort: "prompt", ToNode: "model", ToPort: "prompt"},
+	}}
+	if runner := newScopedRunner(definition, DefaultCatalog(), nil, Adapters{}, map[string]bool{"start": true, "loop": true, "template": true, "model": true}); cap(runner.limits.global) != 8 {
+		t.Fatalf("global execution limit = %d, want 8", cap(runner.limits.global))
+	}
+	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), nil, Adapters{Integrations: memoryIntegrations{"model": encryptedIntegration(t, integration.Integration{Key: "model", Name: "Model", Type: integration.TypeOpenAI, Config: config, Status: integration.StatusActive}, "secret")}, Secrets: testSecrets(t), OpenAI: model})
+	if err != nil || report.Status != "completed" {
+		t.Fatalf("parallel run = %#v, %v", report, err)
+	}
+	model.mu.Lock()
+	maxInFlight, calls := model.maxInFlight, model.calls
+	model.mu.Unlock()
+	if calls != 4 || maxInFlight != 1 {
+		t.Fatalf("provider calls = %d, max concurrent = %d; provider work must serialize", calls, maxInFlight)
+	}
+	if scopes := nodeScopes(report, "model"); len(scopes) != 4 || scopes[0] != "loop:000001" || scopes[3] != "loop:000004" {
+		t.Fatalf("non-deterministic aggregate order: %#v", scopes)
+	}
+}
+
+func TestLoopCancellationWinsOverPartialPolicy(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := &trackingModel{block: time.Second}
+	config, _ := json.Marshal(map[string]string{"base_url": "https://model.example", "model": "reviewer"})
+	definition := Definition{Key: "cancel", Name: "Cancel", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": []any{"one", "two"}}},
+		{Key: "loop", Type: "loop", Name: "Loop", Config: map[string]any{"max_iterations": 2, "concurrency": 2, "on_error": "partial"}},
+		{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"template": "review"}},
+		{Key: "model", Type: "model", Name: "Model", Config: map[string]any{"integration": "model"}},
+	}, Edges: []Edge{{Key: "items", FromNode: "start", FromPort: "event", ToNode: "loop", ToPort: "items"}, {Key: "context", FromNode: "loop", FromPort: "item", ToNode: "template", ToPort: "context"}, {Key: "prompt", FromNode: "template", FromPort: "prompt", ToNode: "model", ToPort: "prompt"}}}
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	report, err := RunWithAdapters(ctx, definition, DefaultCatalog(), nil, Adapters{Integrations: memoryIntegrations{"model": encryptedIntegration(t, integration.Integration{Key: "model", Name: "Model", Type: integration.TypeOpenAI, Config: config, Status: integration.StatusActive}, "secret")}, Secrets: testSecrets(t), OpenAI: model})
+	if !errors.Is(err, context.Canceled) || report.Status != "cancelled" {
+		t.Fatalf("cancellation = %#v, %v", report, err)
 	}
 }
 

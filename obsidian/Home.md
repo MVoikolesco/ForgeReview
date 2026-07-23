@@ -5,5 +5,6 @@
 - [[Feature Map]]
 - [[Decision Log]]
 - [[Change Log]]
+- [[Operational Execution]]
 
 Documentação de entrega: `docs/roadmap.md`.

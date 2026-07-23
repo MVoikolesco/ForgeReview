@@ -71,8 +71,11 @@
   a policy-controlled final event, only through an active configured integration,
   writer adapter, and durable execution-bound idempotency record.
 - Async execution: configured Redis dispatches persisted execution IDs to a
-  worker; execution status remains queryable while queued, running, completed,
-   or failed. Persisted queued work is recoverable when a Redis wake-up is missed.
+	worker; execution status remains queryable while queued, running, completed,
+    failed, cancelled, or dead-lettered. Transient failures retry at most three
+    times; permanent/uncertain and exhausted failures enter DLQ, where an admin
+    can create an audited replay execution. Due and stale-running work is
+    recoverable when a Redis wake-up is missed.
 - Publication reconciliation: transport/5xx/response ambiguity becomes a durable
   `uncertain` record. Admin reconciliation looks up the Gitea idempotency marker,
   completing a match or permitting retry only after an absent marker.

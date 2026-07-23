@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,6 +18,46 @@ import (
 type HTTPGiteaClient struct{ Client *http.Client }
 type HTTPOpenAIClient struct{ Client *http.Client }
 type HTTPOllamaClient struct{ Client *http.Client }
+
+// FailureClass is deliberately small and safe to persist as execution metadata.
+// It never contains an endpoint, request body, or provider response.
+type FailureClass string
+
+const (
+	FailureTransient FailureClass = "transient"
+	FailurePermanent FailureClass = "permanent"
+	FailureUncertain FailureClass = "uncertain"
+)
+
+type HTTPStatusError struct{ StatusCode int }
+
+func (e HTTPStatusError) Error() string {
+	return fmt.Sprintf("provider returned status %d", e.StatusCode)
+}
+
+// ClassifyFailure distinguishes retry-safe failures from failures where a
+// provider may already have accepted an externally visible request.
+func ClassifyFailure(err error) FailureClass {
+	if err == nil {
+		return FailurePermanent
+	}
+	var status HTTPStatusError
+	if errors.As(err, &status) {
+		if status.StatusCode == http.StatusTooManyRequests || status.StatusCode >= 500 {
+			return FailureTransient
+		}
+		return FailurePermanent
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		return FailureTransient
+	}
+	var publication PublicationError
+	if errors.As(err, &publication) && publication.Uncertain {
+		return FailureUncertain
+	}
+	return FailurePermanent
+}
 
 const outboundTimeout = 10 * time.Second
 
@@ -159,7 +201,7 @@ func (a HTTPDiscoveryAdapter) getJSON(ctx context.Context, endpoint, authorizati
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("unexpected status %d", response.StatusCode)
+		return HTTPStatusError{StatusCode: response.StatusCode}
 	}
 	return json.NewDecoder(response.Body).Decode(target)
 }
@@ -301,7 +343,7 @@ func (c HTTPGiteaClient) getJSON(ctx context.Context, endpoint, secret string, t
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("unexpected status %d", response.StatusCode)
+		return HTTPStatusError{StatusCode: response.StatusCode}
 	}
 	return json.NewDecoder(response.Body).Decode(target)
 }
@@ -319,7 +361,7 @@ func (c HTTPGiteaClient) getText(ctx context.Context, endpoint, secret string) (
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("unexpected status %d", response.StatusCode)
+		return "", HTTPStatusError{StatusCode: response.StatusCode}
 	}
 	body, err := io.ReadAll(response.Body)
 	return string(body), err
@@ -422,7 +464,7 @@ func postJSON(ctx context.Context, client *http.Client, endpoint string, payload
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("unexpected status %d", response.StatusCode)
+		return HTTPStatusError{StatusCode: response.StatusCode}
 	}
 	return json.NewDecoder(response.Body).Decode(target)
 }

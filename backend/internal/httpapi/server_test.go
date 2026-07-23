@@ -89,6 +89,68 @@ func TestUserAdminConstraintsRevokeSessionsAndAuditSafely(t *testing.T) {
 	}
 }
 
+func TestDeadLetterReplayRequiresAdminAndAuditsReplay(t *testing.T) {
+	db, err := store.Open("file:" + t.TempDir() + "/dead-letter-replay.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	manager, err := auth.New(db, auth.Config{SigningKey: strings.Repeat("s", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := manager.CreateUser(context.Background(), "admin@example.test", "correct horse battery staple", auth.RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	editor, err := manager.CreateUser(context.Background(), "editor@example.test", "correct horse battery staple", auth.RoleEditor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionID, err := db.Save(context.Background(), workflow.Definition{Key: "dead-letter", Name: "Dead letter", Nodes: []workflow.Node{{Key: "start", Type: "trigger", Name: "Start"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := db.CreateExecution(context.Background(), versionID, map[string]any{"payload": "private"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, claimed, claimErr := db.ClaimExecution(context.Background(), id); claimErr != nil || !claimed {
+		t.Fatalf("claim = %t, %v", claimed, claimErr)
+	}
+	if _, err = db.HandleExecutionFailure(context.Background(), id, "permanent"); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := &recordingDispatcher{}
+	router := NewWithAuth(workflow.DefaultCatalog(), db, manager, workflow.Adapters{Dispatcher: dispatcher})
+	_, editorToken, _, err := manager.Login(context.Background(), editor.Email, "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/executions/"+strconv.FormatInt(id, 10)+"/replay", nil)
+	request.AddCookie(&http.Cookie{Name: auth.CookieName, Value: editorToken})
+	denied := httptest.NewRecorder()
+	router.ServeHTTP(denied, request)
+	if denied.Code != http.StatusForbidden || len(dispatcher.ids) != 0 {
+		t.Fatalf("editor replay = %d, queued=%#v", denied.Code, dispatcher.ids)
+	}
+	_, adminToken, _, err := manager.Login(context.Background(), admin.Email, "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/executions/"+strconv.FormatInt(id, 10)+"/replay", nil)
+	request.AddCookie(&http.Cookie{Name: auth.CookieName, Value: adminToken})
+	accepted := httptest.NewRecorder()
+	router.ServeHTTP(accepted, request)
+	if accepted.Code != http.StatusAccepted || len(dispatcher.ids) != 1 || dispatcher.ids[0] == id {
+		t.Fatalf("admin replay = %d, queued=%#v", accepted.Code, dispatcher.ids)
+	}
+	audit, err := db.AuditEntries(context.Background(), 1)
+	if err != nil || len(audit) != 1 || audit[0].Action != "execution.dead_letter_replayed" || audit[0].ActorID != admin.ID {
+		t.Fatalf("replay audit = %#v, %v", audit, err)
+	}
+}
+
 type recordingDispatcher struct{ ids []int64 }
 
 func (d *recordingDispatcher) Enqueue(_ context.Context, id int64) error {

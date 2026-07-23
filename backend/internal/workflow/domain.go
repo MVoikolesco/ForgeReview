@@ -92,6 +92,34 @@ type ExecutionSummary struct {
 	Review     *ExecutionReviewContext `json:"review,omitempty"`
 }
 
+// ExecutionStatus is the safe per-execution view used by Studio and SSE. Raw
+// inputs, token values, provider responses, and node metadata are deliberately
+// retained outside this contract.
+type ExecutionStatus struct {
+	ID         int64                `json:"execution_id"`
+	Status     string               `json:"status"`
+	StartedAt  string               `json:"started_at"`
+	FinishedAt string               `json:"finished_at,omitempty"`
+	Runs       []ExecutionNodeState `json:"runs"`
+}
+
+type ExecutionNodeState struct {
+	NodeKey  string `json:"node_key"`
+	ScopeKey string `json:"scope_key,omitempty"`
+	Status   string `json:"status"`
+}
+
+// ExecutionEvent is persisted before it is sent through SSE, making replay
+// possible after a browser reconnect or process restart.
+type ExecutionEvent struct {
+	ID          int64               `json:"id"`
+	ExecutionID int64               `json:"execution_id"`
+	Kind        string              `json:"kind"`
+	Status      string              `json:"status"`
+	Node        *ExecutionNodeState `json:"node,omitempty"`
+	CreatedAt   string              `json:"created_at"`
+}
+
 type ExecutionWorkflow struct {
 	Key     string `json:"key"`
 	Name    string `json:"name"`

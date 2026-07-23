@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"time"
 
 	"forgereview/backend/internal/auth"
 	"forgereview/backend/internal/dispatch"
@@ -38,6 +39,9 @@ func main() {
 		log.Fatal(err)
 	}
 	defer workflows.Close()
+	if err = workflows.PruneExecutionSensitiveData(context.Background()); err != nil {
+		log.Fatal(err)
+	}
 	sessions, err := auth.New(workflows, auth.Config{SigningKey: os.Getenv("FORGEREVIEW_SESSION_SIGNING_KEY")})
 	if err != nil {
 		log.Fatal(err)
@@ -82,7 +86,7 @@ func main() {
 			executionQueue = dispatch.NewInProcessQueue()
 		}
 		adapters.Dispatcher = executionQueue
-		queuedIDs, recoveryErr := workflows.QueuedExecutionIDs(context.Background())
+		queuedIDs, recoveryErr := workflows.RecoverableExecutionIDs(context.Background(), 15*time.Minute)
 		if recoveryErr != nil {
 			log.Fatal(recoveryErr)
 		}
@@ -99,8 +103,26 @@ func main() {
 				log.Printf("execution worker stopped: %v", workerErr)
 			}
 		}()
+		go recoverExecutionQueue(workflows, executionQueue)
 	}
 	if err = httpapi.NewWithAuth(workflow.DefaultCatalog(), workflows, sessions, adapters).Run(address); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func recoverExecutionQueue(workflows *store.SQLite, queue dispatch.Queue) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		ids, err := workflows.RecoverableExecutionIDs(context.Background(), 15*time.Minute)
+		if err != nil {
+			log.Printf("execution recovery scan failed: %v", err)
+			continue
+		}
+		for _, id := range ids {
+			if err = queue.Enqueue(context.Background(), id); err != nil {
+				log.Printf("execution recovery enqueue failed: %v", err)
+			}
+		}
 	}
 }

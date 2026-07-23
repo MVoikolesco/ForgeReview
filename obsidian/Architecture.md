@@ -144,6 +144,14 @@ only edges entering a running card, and uses sober status badges and borders.
 Provider adapters return safe model/token usage metadata, which publication uses
 with elapsed time; prompts, responses, and credentials are not telemetry.
 
+Loop concurrency is bounded to four child scopes. The runner has an eight-card
+execution-wide limit; `fetch`, `model`, and `publish` calls are deliberately
+serialized because current adapters cannot enforce a provider-specific ordering
+policy. Aggregated loop results remain input ordered. Worker failure handling
+retries only transient failures up to three times, sends permanent/uncertain or
+exhausted work to `dead_letter`, and permits audited admin replay as a new
+execution. Recovery requeues due work and running work stale for 15 minutes.
+
 Gitea webhook registrations bind an encrypted one-time signing secret to a
 published workflow and one webhook trigger. The public endpoint validates the
 exact raw body with HMAC-SHA-256, requires Gitea event/delivery headers, and uses

@@ -46,6 +46,16 @@ type RunReport struct {
 	Runs   []NodeRun `json:"runs"`
 }
 
+// ExecutionFailure keeps the public error intentionally generic while allowing
+// the durable worker to classify a wrapped provider failure for retry policy.
+type ExecutionFailure struct {
+	NodeKey string
+	Cause   error
+}
+
+func (e *ExecutionFailure) Error() string { return fmt.Sprintf("card %q execution failed", e.NodeKey) }
+func (e *ExecutionFailure) Unwrap() error { return e.Cause }
+
 // ProgressObserver is the minimal runtime boundary for durable live feedback.
 // A node is observed once as running and again with its terminal state.
 type ProgressObserver interface {
@@ -171,7 +181,10 @@ type Adapters struct {
 	Dispatcher    ExecutionDispatcher
 	Cache         Cache
 	Progress      ProgressObserver
-	Telemetry     *ExecutionTelemetry
+	// Cancellation is queried at card boundaries. Publication intentionally
+	// begins atomically in the ledger and is never cancelled once begun.
+	Cancellation func(context.Context) (bool, error)
+	Telemetry    *ExecutionTelemetry
 }
 
 // ExecutionContext identifies the durable execution currently being run.
@@ -277,7 +290,9 @@ func RunFromTriggerWithAdapters(ctx context.Context, definition Definition, cata
 		current := ready[0]
 		ready = ready[1:]
 		if err := runner.runNode(ctx, current, &ready); err != nil {
-			runner.report.Status = "failed"
+			if runner.report.Status != "cancelled" {
+				runner.report.Status = "failed"
+			}
 			return runner.report, err
 		}
 	}
@@ -327,6 +342,12 @@ type scopedRunner struct {
 	report    RunReport
 	results   map[string][]any
 	active    map[string]bool
+	limits    *executionLimits
+}
+
+type executionLimits struct {
+	global   chan struct{}
+	external sync.Mutex
 }
 
 func newScopedRunner(definition Definition, catalog Catalog, input map[string]any, adapters Adapters, active map[string]bool) *scopedRunner {
@@ -343,6 +364,7 @@ func newScopedRunner(definition Definition, catalog Catalog, input map[string]an
 		report:    RunReport{Status: "completed"},
 		results:   map[string][]any{},
 		active:    active,
+		limits:    &executionLimits{global: make(chan struct{}, 8)},
 	}
 	for _, node := range definition.Nodes {
 		runner.nodes[node.Key] = node
@@ -358,6 +380,10 @@ func newScopedRunner(definition Definition, catalog Catalog, input map[string]an
 		runner.incoming[edge.ToNode][edge.ToPort]++
 	}
 	return runner
+}
+
+func (r *scopedRunner) child() *scopedRunner {
+	return &scopedRunner{nodes: r.nodes, inboxes: map[string]map[string]map[string][]Token{}, incoming: r.incoming, edges: r.edges, run: map[nodeScope]bool{}, scopeOnly: r.scopeOnly, catalog: r.catalog, input: r.input, adapters: r.adapters, report: RunReport{Status: "completed"}, results: map[string][]any{}, active: r.active, limits: r.limits}
 }
 
 func loopScopedNodes(definition Definition) map[string]bool {
@@ -434,6 +460,23 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 		return nil
 	}
 	r.run[current] = true
+	if err := r.acquire(ctx, r.nodes[current.NodeKey].Type); err != nil {
+		if errors.Is(err, context.Canceled) {
+			r.report.Status = "cancelled"
+		}
+		return err
+	}
+	defer r.release(r.nodes[current.NodeKey].Type)
+	if r.adapters.Cancellation != nil {
+		cancelled, err := r.adapters.Cancellation(ctx)
+		if err != nil {
+			return err
+		}
+		if cancelled {
+			r.report.Status = "cancelled"
+			return context.Canceled
+		}
+	}
 	started := time.Now()
 	inputs := values(inbox)
 	nodeRun := NodeRun{NodeKey: node.Key, ScopeKey: current.ScopeKey, Status: "running", Inputs: inputs}
@@ -461,7 +504,16 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 	}
 	nodeRun.DurationMS = time.Since(started).Milliseconds()
 	if err != nil {
-		return r.handleFailure(ctx, node, current, nodeRun, ready)
+		if errors.Is(err, context.Canceled) {
+			nodeRun.Status = "cancelled"
+			r.report.Status = "cancelled"
+			r.report.Runs = append(r.report.Runs, nodeRun)
+			if observeErr := r.observe(ctx, nodeRun); observeErr != nil {
+				return fmt.Errorf("persist node progress: %w", observeErr)
+			}
+			return err
+		}
+		return r.handleFailure(ctx, node, current, nodeRun, err, ready)
 	}
 	nodeRun.Status = "completed"
 	card, _ := r.catalog.Get(node.Type)
@@ -487,6 +539,34 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 	return r.observe(ctx, nodeRun)
 }
 
+func (r *scopedRunner) acquire(ctx context.Context, cardType string) error {
+	select {
+	case r.limits.global <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if cardType == "fetch" || cardType == "model" || cardType == "publish" {
+		// sync.Mutex has no context-aware acquisition. Waiting here is bounded by
+		// the in-flight provider call; it avoids a cancellation-path goroutine
+		// acquiring the mutex after its caller has returned and wedging all later
+		// provider calls. Provider calls are deliberately serialized.
+		r.limits.external.Lock()
+		if err := ctx.Err(); err != nil {
+			r.limits.external.Unlock()
+			<-r.limits.global
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *scopedRunner) release(cardType string) {
+	if cardType == "fetch" || cardType == "model" || cardType == "publish" {
+		r.limits.external.Unlock()
+	}
+	<-r.limits.global
+}
+
 func (r *scopedRunner) observe(ctx context.Context, run NodeRun) error {
 	if r.adapters.Progress == nil {
 		return nil
@@ -494,7 +574,7 @@ func (r *scopedRunner) observe(ctx context.Context, run NodeRun) error {
 	return r.adapters.Progress.ObserveNode(ctx, run)
 }
 
-func (r *scopedRunner) handleFailure(ctx context.Context, node Node, current nodeScope, nodeRun NodeRun, ready *[]nodeScope) error {
+func (r *scopedRunner) handleFailure(ctx context.Context, node Node, current nodeScope, nodeRun NodeRun, cause error, ready *[]nodeScope) error {
 	policy := "fail"
 	if node.Type != "error_control" {
 		policy = errorPolicyForNode(node)
@@ -536,7 +616,7 @@ func (r *scopedRunner) handleFailure(ctx context.Context, node Node, current nod
 		if err := r.observe(ctx, nodeRun); err != nil {
 			return fmt.Errorf("persist node progress: %w", err)
 		}
-		return fmt.Errorf("card %q execution failed", node.Key)
+		return &ExecutionFailure{NodeKey: node.Key, Cause: cause}
 	}
 }
 
@@ -691,36 +771,73 @@ func (r *scopedRunner) runLoop(ctx context.Context, node Node, inputs map[string
 		return nil, nil, fmt.Errorf("loop card %q received %d items, exceeding config.max_iterations %d", node.Key, len(items), settings.MaxIterations)
 	}
 	metadata := map[string]any{"max_iterations": settings.MaxIterations, "concurrency": settings.Concurrency, "on_error": settings.OnError}
-	results := make([]any, 0)
+	type outcome struct {
+		report  []NodeRun
+		results []any
+		err     error
+	}
+	outcomes := make([]outcome, len(items))
+	semaphore := make(chan struct{}, settings.Concurrency)
+	var wait sync.WaitGroup
 	for index, item := range items {
 		if err := ctx.Err(); err != nil {
 			return nil, metadata, err
 		}
 		scopeKey := fmt.Sprintf("%s:%06d", node.Key, index+1)
-		ready := make([]nodeScope, 0)
 		itemToken := Token{NodeKey: node.Key, PortKey: "item", Contract: "any", ScopeKey: scopeKey, Value: item}
 		nodeRun.Outputs = append(nodeRun.Outputs, itemToken)
-		for _, edge := range r.edges[node.Key] {
-			if edge.FromPort == "item" {
-				r.route(itemToken, edge, scopeKey, &ready)
+		run := func(index int, scopeKey string, token Token) {
+			select {
+			case semaphore <- struct{}{}:
+			case <-ctx.Done():
+				outcomes[index].err = ctx.Err()
+				return
 			}
-		}
-		for len(ready) > 0 {
-			current := ready[0]
-			ready = ready[1:]
-			if err = r.runNode(ctx, current, &ready); err != nil {
-				if settings.OnError == "route" {
-					r.routeLoopError(node, scopeKey, &ready)
-					continue
+			defer func() { <-semaphore }()
+			child := r.child() // every iteration owns its maps and report; no scoped map is shared.
+			ready := make([]nodeScope, 0)
+			for _, edge := range child.edges[node.Key] {
+				if edge.FromPort == "item" {
+					child.route(token, edge, scopeKey, &ready)
 				}
-				if settings.OnError != "partial" && settings.OnError != "continue" {
-					return nil, metadata, fmt.Errorf("loop card %q scope %q: %w", node.Key, scopeKey, err)
-				}
-				metadata["failed_iterations"] = metadataInt(metadata["failed_iterations"]) + 1
-				break
 			}
+			for len(ready) > 0 {
+				current := ready[0]
+				ready = ready[1:]
+				if runErr := child.runNode(ctx, current, &ready); runErr != nil {
+					if settings.OnError == "route" {
+						child.routeLoopError(node, scopeKey, &ready)
+						continue
+					}
+					outcomes[index].err = runErr
+					break
+				}
+			}
+			outcomes[index].report = child.report.Runs
+			outcomes[index].results = child.results[scopeKey]
 		}
-		results = append(results, r.results[scopeKey]...)
+		if settings.Concurrency == 1 {
+			run(index, scopeKey, itemToken)
+		} else {
+			wait.Add(1)
+			go func() { defer wait.Done(); run(index, scopeKey, itemToken) }()
+		}
+	}
+	wait.Wait()
+	results := make([]any, 0)
+	for index, outcome := range outcomes {
+		r.report.Runs = append(r.report.Runs, outcome.report...)
+		if outcome.err != nil {
+			if errors.Is(outcome.err, context.Canceled) {
+				return nil, metadata, outcome.err
+			}
+			if settings.OnError != "partial" && settings.OnError != "continue" && settings.OnError != "route" {
+				return nil, metadata, fmt.Errorf("loop card %q scope %q: %w", node.Key, fmt.Sprintf("%s:%06d", node.Key, index+1), outcome.err)
+			}
+			metadata["failed_iterations"] = metadataInt(metadata["failed_iterations"]) + 1
+			continue
+		}
+		results = append(results, outcome.results...)
 	}
 	metadata["completed_iterations"] = len(items) - metadataInt(metadata["failed_iterations"])
 	return map[string]any{"results": results}, metadata, nil
@@ -759,8 +876,8 @@ func loopSettingsFor(node Node) (loopSettings, error) {
 			return loopSettings{}, fmt.Errorf("loop card %q requires positive config.concurrency", node.Key)
 		}
 	}
-	if concurrency != 1 {
-		return loopSettings{}, fmt.Errorf("loop card %q supports only config.concurrency 1", node.Key)
+	if concurrency > 4 {
+		return loopSettings{}, fmt.Errorf("loop card %q config.concurrency must not exceed 4", node.Key)
 	}
 	onError := "fail"
 	if value, exists := node.Config["on_error"]; exists {

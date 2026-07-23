@@ -15,6 +15,7 @@ import {
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
+  apiURL,
   getExecutions,
   getHealth,
   getIntegrations,
@@ -98,6 +99,13 @@ export function DashboardWorkspace() {
 
   useEffect(() => {
     void load();
+  }, []);
+  useEffect(() => {
+    const source = new EventSource(`${apiURL}/api/execution-events`, {
+      withCredentials: true,
+    });
+    source.addEventListener("execution", () => void load());
+    return () => source.close();
   }, []);
   const gitea = connections.filter((item) => item.type === "gitea");
   const models = connections.filter((item) => item.type !== "gitea");

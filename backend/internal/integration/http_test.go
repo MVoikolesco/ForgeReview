@@ -4,10 +4,33 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
+
+func TestClassifyFailureDistinguishesRetrySafety(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want FailureClass
+	}{
+		{name: "rate limited", err: HTTPStatusError{StatusCode: http.StatusTooManyRequests}, want: FailureTransient},
+		{name: "server failure", err: HTTPStatusError{StatusCode: http.StatusBadGateway}, want: FailureTransient},
+		{name: "validation failure", err: HTTPStatusError{StatusCode: http.StatusBadRequest}, want: FailurePermanent},
+		{name: "network failure", err: &net.DNSError{IsTimeout: true}, want: FailureTransient},
+		{name: "publication uncertain", err: PublicationError{Uncertain: true}, want: FailureUncertain},
+		{name: "ordinary failure", err: errors.New("invalid workflow"), want: FailurePermanent},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ClassifyFailure(test.err); got != test.want {
+				t.Fatalf("ClassifyFailure(%v) = %q, want %q", test.err, got, test.want)
+			}
+		})
+	}
+}
 
 func testIntegration(t *testing.T, kind, baseURL string) Integration {
 	t.Helper()
