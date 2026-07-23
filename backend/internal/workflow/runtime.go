@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -1144,7 +1145,16 @@ func publishReview(ctx context.Context, node Node, inputs map[string][]any, adap
 	}
 	secret, err := resolveSecret(item, adapters, "publish", node.Key)
 	if err != nil {
-		_ = adapters.Publications.RetryPublication(ctx, key, err)
+		var providerErr integration.PublicationError
+		if errors.As(err, &providerErr) && providerErr.Uncertain {
+			if ledger, ok := adapters.Publications.(interface {
+				UncertainPublication(context.Context, string, error) error
+			}); ok {
+				_ = ledger.UncertainPublication(ctx, key, err)
+			}
+		} else {
+			_ = adapters.Publications.RetryPublication(ctx, key, err)
+		}
 		return nil, err
 	}
 	event := publishEvent(formatted, node.Config)

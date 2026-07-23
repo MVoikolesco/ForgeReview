@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -19,6 +20,28 @@ func testIntegration(t *testing.T, kind, baseURL string) Integration {
 		t.Fatal(err)
 	}
 	return Integration{Key: kind, Name: kind, Type: kind, Config: payload, SecretCiphertext: "test-ciphertext", Status: StatusActive}
+}
+
+func TestGiteaPublicationAmbiguityAndMarkerLookup(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"id":9,"html_url":"https://gitea/reviews/9","body":"ok <!-- forgereview:idempotency=key -->"}]`))
+	}))
+	defer server.Close()
+	client := HTTPGiteaClient{Client: server.Client()}
+	item := testIntegration(t, TypeGitea, server.URL)
+	_, err := client.PublishReview(context.Background(), item, "secret", GiteaReviewRequest{Owner: "o", Repo: "r", Number: 1, Body: "body", Event: "COMMENT", IdempotencyKey: "key"})
+	var publicationErr PublicationError
+	if !errors.As(err, &publicationErr) || !publicationErr.Uncertain {
+		t.Fatalf("5xx classification = %v", err)
+	}
+	receipt, found, err := client.FindReviewByMarker(context.Background(), item, "secret", PullRequestRequest{Owner: "o", Repo: "r", Number: 1}, "key")
+	if err != nil || !found || receipt.CommentID != 9 {
+		t.Fatalf("marker lookup = %#v %v %v", receipt, found, err)
+	}
 }
 
 func TestHTTPGiteaClientReadPullRequestContract(t *testing.T) {

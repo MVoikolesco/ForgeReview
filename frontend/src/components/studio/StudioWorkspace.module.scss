@@ -5,8 +5,8 @@
     position: relative;
     display: grid;
     grid-template-columns: 250px minmax(0, 1fr);
-    grid-template-rows: 58px calc(100vh - 58px);
-    height: 100vh;
+    grid-template-rows: calc(100vh - 62px);
+    height: calc(100vh - 62px);
     background: $surface-root;
 }
 
@@ -14,16 +14,10 @@
     grid-template-columns: 250px minmax(0, 1fr) 310px;
 }
 
-.topbar {
-    position: relative;
-    z-index: 20;
+.actionArea {
     display: flex;
-    grid-column: 1 / -1;
     align-items: center;
     gap: 18px;
-    padding: 0 16px;
-    border-bottom: 1px solid $border-subtle;
-    background: $surface-panel;
 }
 
 .identity {
@@ -31,15 +25,6 @@
     min-width: 0;
     align-items: center;
     gap: 12px;
-}
-
-.identity strong {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    gap: 7px;
-    color: #70a5ff;
-    font-size: 14px;
 }
 
 .identity span {
@@ -79,8 +64,8 @@
     margin-left: auto;
 }
 
-.topbar button,
-.topbar a,
+.actionArea button,
+.actionArea a,
 .overflow summary,
 .runModal button {
     @include control;
@@ -97,8 +82,8 @@
     cursor: pointer;
 }
 
-.topbar button:focus-visible,
-.topbar a:focus-visible,
+.actionArea button:focus-visible,
+.actionArea a:focus-visible,
 .overflow summary:focus-visible,
 .runModal button:focus-visible,
 .runModal input:focus-visible,
@@ -108,7 +93,7 @@
     outline-offset: 2px;
 }
 
-.topbar button:disabled,
+.actionArea button:disabled,
 .menu button:disabled,
 .runModal button:disabled {
     cursor: not-allowed;
@@ -228,16 +213,12 @@
         grid-template-columns: minmax(0, 1fr);
     }
 
-    .topbar {
-        gap: 8px;
-        padding: 0 10px;
-    }
-
     .identity span,
     .status { display: none; }
     .overflow summary span { display: none; }
     .overflow summary { width: 34px; padding: 0; }
-    .topbar button { padding: 7px 9px; }
+    .actionArea { gap: 8px; }
+    .actionArea button { padding: 7px 9px; }
     .menu { right: -104px; }
     .runForm { padding: 18px; }
 }

@@ -176,6 +176,24 @@ type GiteaReviewWriter interface {
 	PublishReview(context.Context, Integration, string, GiteaReviewRequest) (PublicationReceipt, error)
 }
 
+// GiteaReviewMarkerLookup confirms whether a review carrying the durable
+// ForgeReview idempotency marker exists after an uncertain provider outcome.
+type GiteaReviewMarkerLookup interface {
+	FindReviewByMarker(context.Context, Integration, string, PullRequestRequest, string) (PublicationReceipt, bool, error)
+}
+
+// PublicationError distinguishes a definitive provider rejection from an
+// outcome where the provider may have accepted the review before transport or
+// response processing failed.
+type PublicationError struct{ Uncertain bool }
+
+func (e PublicationError) Error() string {
+	if e.Uncertain {
+		return "publication outcome is uncertain"
+	}
+	return "publication was rejected"
+}
+
 type GiteaReviewRequest struct {
 	Owner          string
 	Repo           string

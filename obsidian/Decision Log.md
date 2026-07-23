@@ -1,5 +1,25 @@
 # Decision Log
 
+## 2026-07-23: Shared role-aware content navigation
+
+Standard authenticated pages use a single AppShell so route visibility, active
+state, responsive behavior, breadcrumbs, and action placement cannot drift.
+Visibility is a UI convenience derived from the existing current-user role, not
+an authorization boundary. Studio preserves its dense 58px canvas toolbar rather
+than inheriting the content-page header. See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-23: Fail-closed operational controls
+
+CORS accepts only configured full origins and defaults to the local Studio;
+trusted proxy forwarding remains disabled until valid IP/CIDR entries are set.
+User authorization changes are transactional, cannot strand the installation
+without an active administrator, and revoke all session nonces for the affected
+account. Audit entries retain only allowlisted scalar metadata, excluding
+credentials and ciphertext. Provider transport, 5xx, and response-decoding
+publication failures are `uncertain` rather than automatically retryable, so a
+later reconciliation can prove the idempotency marker is absent before retry.
+See [[Architecture]] and [[Feature Map]].
+
 ## 2026-07-21: Rebuild from POC
 
 The current ForgeReview implementation moved to `POC/`. The new application

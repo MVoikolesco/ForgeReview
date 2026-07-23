@@ -70,6 +70,13 @@ Gin runs in release mode by default and trusts no proxy headers unless operators
 explicitly configure `FORGEREVIEW_TRUSTED_PROXIES` with their reverse-proxy IPs
 or CIDRs.
 
+Security operations use an explicit CORS-origin allowlist (local Studio by
+default) and validate trusted proxy IP/CIDR values at startup. SQLite users have
+an active state; admin role/activation changes are transactional, preserve at
+least one active admin, and revoke all affected session nonces. `audit_log`
+persists actor/action/target/time plus allowlisted scalar metadata. See
+[[Decision Log]] and [[Feature Map]].
+
 The controlled PR-review path after `fetch`/`model` is local to the workflow
 runner: `filter` → `group` → `validate` → `response_filter` → `consolidate` →
 `format`. Findings have the stable `path`, positive `line`, `comment`, and
@@ -90,7 +97,9 @@ observations (`path`, `body`, `new_position`) from the sorted findings. High or
 critical findings propose `REQUEST_CHANGES`, but publication defaults to
 `COMMENT` unless its `allow_autonomous_rejection` setting is true. Medium
 findings remain `COMMENT` unless `medium_severity_event` is `REQUEST_CHANGES`.
-Automated approval and uncertain-result reconciliation are intentionally pending.
+Automated approval remains pending. Ambiguous provider outcomes are durable
+`uncertain` attempts; admin reconciliation searches the Gitea review marker and
+permits retry only after that marker is absent.
 
 LLM provider connections store only transport configuration and encrypted
 credentials. `model_profiles` stores a reusable model name plus the key of its
@@ -196,6 +205,14 @@ React Flow selection handlers and derived error-edge props are memoized. The
 selection handler ignores identical ID reports before setting Studio state, so a
 controlled canvas hydration or graph update cannot re-register a listener and
 create a render/update loop. See [[Decision Log]].
+
+Authenticated content routes share `frontend/src/components/shell/AppShell.tsx`.
+Its navigation and breadcrumb helpers are centralized in `src/lib/navigation.ts`;
+role-aware route visibility is derived from the current session. Standard pages
+provide only page title, eyebrow, and optional actions to the shell. Studio uses
+the compact AppShell variant so its workflow identity, status, and canvas actions
+occupy the shared header's right action area without adding a page heading or
+reducing the fixed-height canvas beyond the shared 62px header.
 
 The Studio Inspector is conditional and absent from the default grid. Card
 selection remains independent from editing; only the card edit action or a

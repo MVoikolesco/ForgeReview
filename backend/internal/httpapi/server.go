@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -53,14 +55,23 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		adapters = adapterSets[0]
 	}
 	router := gin.New()
-	if err := router.SetTrustedProxies(trustedProxies()); err != nil {
+	proxies, err := trustedProxies()
+	if err != nil {
 		panic(fmt.Sprintf("invalid FORGEREVIEW_TRUSTED_PROXIES: %v", err))
 	}
+	if err := router.SetTrustedProxies(proxies); err != nil {
+		panic(fmt.Sprintf("invalid FORGEREVIEW_TRUSTED_PROXIES: %v", err))
+	}
+	origins := corsOrigins()
 	router.Use(func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "http://localhost:3010")
+		origin := c.GetHeader("Origin")
+		if origin != "" && origins[origin] {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Vary", "Origin")
+			c.Header("Access-Control-Allow-Credentials", "true")
+		}
 		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type")
-		c.Header("Access-Control-Allow-Credentials", "true")
 		if c.Request.Method == http.MethodOptions {
 			c.Status(http.StatusNoContent)
 			c.Abort()
@@ -123,7 +134,94 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 			return
 		}
+		_ = workflows.Audit(c.Request.Context(), currentUser(c).ID, "user.created", fmt.Sprintf("user:%d", user.ID), map[string]any{"role": user.Role})
 		c.JSON(http.StatusCreated, user)
+	})
+	api.PATCH("/users/:id", authenticate(manager), requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil || id < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+			return
+		}
+		var request struct {
+			Role   auth.Role `json:"role"`
+			Active *bool     `json:"active"`
+		}
+		if c.ShouldBindJSON(&request) != nil || request.Active == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "role and active are required"})
+			return
+		}
+		actor := currentUser(c)
+		if actor.ID == id && (request.Role != auth.RoleAdmin || !*request.Active) {
+			c.JSON(http.StatusConflict, gin.H{"error": "administrators cannot remove their own admin access or disable themselves"})
+			return
+		}
+		user, err := manager.UpdateUser(c.Request.Context(), id, request.Role, *request.Active)
+		if errors.Is(err, store.ErrUserNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+		if errors.Is(err, store.ErrLastActiveAdmin) {
+			c.JSON(http.StatusConflict, gin.H{"error": "cannot remove the last active admin"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "could not update user"})
+			return
+		}
+		_ = workflows.Audit(c.Request.Context(), actor.ID, "user.updated", fmt.Sprintf("user:%d", user.ID), map[string]any{"role": user.Role, "active": user.Active})
+		c.JSON(http.StatusOK, user)
+	})
+	api.GET("/audit-log", authenticate(manager), requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+		entries, err := workflows.AuditEntries(c.Request.Context(), 100)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not list audit log"})
+			return
+		}
+		c.JSON(http.StatusOK, entries)
+	})
+	api.POST("/publications/:key/reconcile", authenticate(manager), requireRoles(auth.RoleAdmin), func(c *gin.Context) {
+		var request struct {
+			IntegrationKey string `json:"integration_key"`
+			Owner          string `json:"owner"`
+			Repo           string `json:"repo"`
+			Number         int    `json:"number"`
+		}
+		if c.ShouldBindJSON(&request) != nil || request.IntegrationKey == "" || request.Owner == "" || request.Repo == "" || request.Number < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "valid publication coordinates are required"})
+			return
+		}
+		lookup, ok := adapters.GiteaWriter.(integration.GiteaReviewMarkerLookup)
+		if !ok || adapters.Secrets == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "publication reconciliation is unavailable"})
+			return
+		}
+		item, err := workflows.Integration(c.Request.Context(), request.IntegrationKey)
+		if err != nil || item.Type != integration.TypeGitea || item.Status != integration.StatusActive {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "active Gitea integration is required"})
+			return
+		}
+		secret, err := adapters.Secrets.Resolve(item)
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "integration is unavailable"})
+			return
+		}
+		receipt, found, err := lookup.FindReviewByMarker(c.Request.Context(), item, secret, integration.PullRequestRequest{Owner: request.Owner, Repo: request.Repo, Number: request.Number}, c.Param("key"))
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "provider reconciliation failed"})
+			return
+		}
+		if found {
+			err = workflows.ReconcilePublication(c.Request.Context(), c.Param("key"), &receipt)
+		} else {
+			err = workflows.ReconcilePublication(c.Request.Context(), c.Param("key"), nil)
+		}
+		if err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": "publication is not awaiting reconciliation"})
+			return
+		}
+		_ = workflows.Audit(c.Request.Context(), currentUser(c).ID, "publication.reconciled", "publication:"+c.Param("key"), map[string]any{"marker_found": found})
+		c.JSON(http.StatusOK, gin.H{"status": map[bool]string{true: "completed", false: "retryable"}[found]})
 	})
 	if compatibilityMode {
 		// Kept only so pre-authentication package tests can exercise their original
@@ -177,6 +275,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "could not save webhook registration"})
 			return
 		}
+		_ = workflows.Audit(c.Request.Context(), currentUser(c).ID, "webhook.registered", "webhook:"+item.Key, map[string]any{"workflow_key": item.WorkflowKey, "active": item.Active})
 		c.JSON(http.StatusCreated, item)
 	})
 	api.POST("/integrations", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
@@ -213,6 +312,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 			return
 		}
+		_ = workflows.Audit(c.Request.Context(), currentUser(c).ID, "integration.created", "integration:"+item.Key, map[string]any{"type": item.Type, "status": item.Status})
 		c.JSON(http.StatusCreated, item.Summary())
 	})
 	api.GET("/integrations", func(c *gin.Context) {
@@ -340,6 +440,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "could not update connection"})
 			return
 		}
+		_ = workflows.Audit(c.Request.Context(), currentUser(c).ID, "integration.updated", "integration:"+item.Key, map[string]any{"status": item.Status})
 		c.JSON(http.StatusOK, item.Summary())
 	})
 	api.POST("/integrations/:key/disable", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
@@ -348,6 +449,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		} else if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not disable connection"})
 		} else {
+			_ = workflows.Audit(c.Request.Context(), currentUser(c).ID, "integration.disabled", "integration:"+c.Param("key"), nil)
 			c.Status(http.StatusNoContent)
 		}
 	})
@@ -360,6 +462,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		} else if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not delete connection"})
 		} else {
+			_ = workflows.Audit(c.Request.Context(), currentUser(c).ID, "integration.deleted", "integration:"+c.Param("key"), nil)
 			c.Status(http.StatusNoContent)
 		}
 	})
@@ -542,6 +645,7 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		summary, err := workflows.Publish(c.Request.Context(), id, catalog)
 		switch {
 		case err == nil:
+			_ = workflows.Audit(c.Request.Context(), currentUser(c).ID, "workflow.published", fmt.Sprintf("workflow_version:%d", id), nil)
 			c.JSON(http.StatusOK, summary)
 		case errors.Is(err, store.ErrWorkflowVersionNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "workflow draft not found"})
@@ -912,19 +1016,46 @@ func clearSessionCookie(c *gin.Context) {
 	http.SetCookie(c.Writer, &http.Cookie{Name: auth.CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 }
 
-func trustedProxies() []string {
+func currentUser(c *gin.Context) auth.User { return c.MustGet("user").(auth.User) }
+func corsOrigins() map[string]bool {
+	raw := strings.TrimSpace(os.Getenv("FORGEREVIEW_CORS_ALLOWED_ORIGINS"))
+	if raw == "" {
+		return map[string]bool{"http://localhost:3010": true}
+	}
+	result := map[string]bool{}
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		parsed, err := url.ParseRequestURI(item)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || item == "*" {
+			panic("invalid FORGEREVIEW_CORS_ALLOWED_ORIGINS")
+		}
+		result[item] = true
+	}
+	if len(result) == 0 {
+		panic("invalid FORGEREVIEW_CORS_ALLOWED_ORIGINS")
+	}
+	return result
+}
+func trustedProxies() ([]string, error) {
 	raw := strings.TrimSpace(os.Getenv("FORGEREVIEW_TRUSTED_PROXIES"))
 	if raw == "" {
-		return nil // Gin's safe default: never trust forwarded client-address headers.
+		return nil, nil // Gin's safe default: never trust forwarded client-address headers.
 	}
 	items := strings.Split(raw, ",")
 	proxies := make([]string, 0, len(items))
 	for _, item := range items {
-		if item = strings.TrimSpace(item); item != "" {
-			proxies = append(proxies, item)
+		item = strings.TrimSpace(item)
+		if item == "" {
+			return nil, errors.New("empty proxy entry")
 		}
+		if net.ParseIP(item) == nil {
+			if _, _, err := net.ParseCIDR(item); err != nil {
+				return nil, err
+			}
+		}
+		proxies = append(proxies, item)
 	}
-	return proxies
+	return proxies, nil
 }
 func sessionTTL() time.Duration {
 	if raw := os.Getenv("FORGEREVIEW_SESSION_TTL"); raw != "" {

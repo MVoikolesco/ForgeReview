@@ -10,7 +10,6 @@ import {
 } from "@xyflow/react";
 import {
   BookOpen,
-  Braces,
   CirclePlay,
   Copy,
   Download,
@@ -21,7 +20,6 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -74,6 +72,7 @@ import { CardLibrary } from "../workflow/CardLibrary";
 import { WorkflowCanvas } from "../workflow/WorkflowCanvas";
 import styles from "./StudioWorkspace.module.scss";
 import { useCurrentUser } from "../auth/AuthGate";
+import { AppShell } from "../shell/AppShell";
 
 export function StudioWorkspace() {
 	const user = useCurrentUser();
@@ -498,10 +497,8 @@ export function StudioWorkspace() {
     return () => window.removeEventListener("beforeunload", warnBeforeExit);
   }, [dirty]);
   return (
-    <main className={`${styles.studio} ${inspectedCard ? styles.inspectorOpen : ""}`}>
-      <header className={styles.topbar}>
+    <AppShell compact title="Studio" headerActions={<div className={styles.actionArea}>
         <div className={styles.identity}>
-          <strong><Braces size={18} aria-hidden="true" /> ForgeReview</strong>
           <span>{openedVersionID ? `Versão ${openedVersionID}` : metadata.name}</span>
         </div>
         <div className={styles.status} aria-label="Status do workflow">
@@ -519,9 +516,6 @@ export function StudioWorkspace() {
             <div className={styles.menu}>
               <button disabled={!canEdit} onClick={loadReviewTemplate}><BookOpen size={14} /> Template review</button>
               <button disabled={user?.role !== "admin"} onClick={openConnections}><Settings2 size={14} /> Nova integração</button>
-              <Link href="/pipelines">Pipelines</Link>
-              <Link href="/integrations">Gerenciar integrações</Link>
-              <hr />
               <button disabled={!canEdit || busy} onClick={() => openTransfer("clone")}><Copy size={14} /> Clonar workflow</button>
               <button disabled={!canEdit || busy} onClick={() => openTransfer("import")}><Upload size={14} /> Importar JSON</button>
               <button disabled={!canEdit || busy} onClick={() => openTransfer("export")}><Download size={14} /> Exportar JSON</button>
@@ -546,7 +540,8 @@ export function StudioWorkspace() {
            </button>
            {openedVersionPublished && !dirty && <button className={styles.publish} disabled={busy || !canEdit} onClick={() => openManualRun("published")}><CirclePlay size={14} /> Executar publicada</button>}
         </div>
-      </header>
+      </div>}>
+      <div className={`${styles.studio} ${inspectedCard ? styles.inspectorOpen : ""}`}>
       <CardLibrary cards={cards} onAdd={addCard} readOnly={!canEdit} />
       <WorkflowCanvas
         nodes={nodes}
@@ -579,6 +574,7 @@ export function StudioWorkspace() {
           onRegisterWebhook={registerWebhook}
         />
       )}
+      </div>
       {showConnections && (
         <ConnectionWizard
           items={integrations}
@@ -616,6 +612,6 @@ export function StudioWorkspace() {
           </div>
         </ModalShell>
       )}
-    </main>
+    </AppShell>
   );
 }

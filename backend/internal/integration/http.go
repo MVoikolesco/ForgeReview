@@ -235,20 +235,57 @@ func (c HTTPGiteaClient) PublishReview(ctx context.Context, integration Integrat
 	httpRequest.Header.Set("X-ForgeReview-Idempotency-Key", request.IdempotencyKey)
 	response, err := c.client().Do(httpRequest)
 	if err != nil {
-		return PublicationReceipt{}, err
+		return PublicationReceipt{}, PublicationError{Uncertain: true}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return PublicationReceipt{}, fmt.Errorf("unexpected status %d", response.StatusCode)
+		return PublicationReceipt{}, PublicationError{Uncertain: response.StatusCode >= 500}
 	}
 	var published struct {
 		ID      int64  `json:"id"`
 		HTMLURL string `json:"html_url"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&published); err != nil {
-		return PublicationReceipt{}, err
+		return PublicationReceipt{}, PublicationError{Uncertain: true}
 	}
 	return PublicationReceipt{Status: "completed", CommentID: published.ID, URL: published.HTMLURL, IdempotencyKey: request.IdempotencyKey}, nil
+}
+
+func (c HTTPGiteaClient) FindReviewByMarker(ctx context.Context, item Integration, secret string, target PullRequestRequest, key string) (PublicationReceipt, bool, error) {
+	config, err := item.ConfigValues()
+	if err != nil {
+		return PublicationReceipt{}, false, err
+	}
+	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s/pulls/%d/reviews", strings.TrimRight(config["base_url"], "/"), url.PathEscape(target.Owner), url.PathEscape(target.Repo), target.Number)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return PublicationReceipt{}, false, err
+	}
+	req.Header.Set("Authorization", "token "+secret)
+	req.Header.Set("Accept", "application/json")
+	response, err := c.client().Do(req)
+	if err != nil {
+		return PublicationReceipt{}, false, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return PublicationReceipt{}, false, fmt.Errorf("unexpected status %d", response.StatusCode)
+	}
+	var reviews []struct {
+		ID      int64  `json:"id"`
+		HTMLURL string `json:"html_url"`
+		Body    string `json:"body"`
+	}
+	if err = json.NewDecoder(response.Body).Decode(&reviews); err != nil {
+		return PublicationReceipt{}, false, err
+	}
+	marker := "<!-- forgereview:idempotency=" + key + " -->"
+	for _, review := range reviews {
+		if strings.Contains(review.Body, marker) {
+			return PublicationReceipt{Status: "completed", CommentID: review.ID, URL: review.HTMLURL, IdempotencyKey: key}, true, nil
+		}
+	}
+	return PublicationReceipt{}, false, nil
 }
 
 func (c HTTPGiteaClient) getJSON(ctx context.Context, endpoint, secret string, target any) error {

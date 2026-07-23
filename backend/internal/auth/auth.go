@@ -27,15 +27,18 @@ const (
 )
 
 type User struct {
-	ID    int64  `json:"id"`
-	Email string `json:"email"`
-	Role  Role   `json:"role"`
+	ID     int64  `json:"id"`
+	Email  string `json:"email"`
+	Role   Role   `json:"role"`
+	Active bool   `json:"active"`
 }
 type SessionStore interface {
 	CreateUser(context.Context, string, string, Role) (User, error)
 	UserByEmail(context.Context, string) (User, string, error)
 	UserByID(context.Context, int64) (User, error)
 	Users(context.Context) ([]User, error)
+	UpdateUser(context.Context, int64, Role, bool) (User, error)
+	DeleteUserSessions(context.Context, int64) error
 	CreateSession(context.Context, string, int64, time.Time) error
 	DeleteSession(context.Context, string) error
 	SessionValid(context.Context, string, int64, time.Time) (bool, error)
@@ -65,6 +68,7 @@ func New(store SessionStore, config Config) (*Manager, error) {
 	}
 	return &Manager{store: store, key: []byte(config.SigningKey), ttl: config.TTL, now: config.Now}, nil
 }
+
 // Bootstrap creates the first administrator only. Once any user exists, the
 // supplied configuration is deliberately ignored so a changed environment can
 // never replace an existing account.
@@ -99,9 +103,25 @@ func (m *Manager) CreateUser(ctx context.Context, email, password string, role R
 	}
 	return m.store.CreateUser(ctx, strings.ToLower(strings.TrimSpace(email)), string(hash), role)
 }
+
+// UpdateUser changes an account only when it cannot remove the final active
+// administrator. Session nonces are revoked whenever authorization changes.
+func (m *Manager) UpdateUser(ctx context.Context, id int64, role Role, active bool) (User, error) {
+	if !validRole(role) {
+		return User{}, errors.New("a valid role is required")
+	}
+	user, err := m.store.UpdateUser(ctx, id, role, active)
+	if err != nil {
+		return User{}, err
+	}
+	if err = m.store.DeleteUserSessions(ctx, id); err != nil {
+		return User{}, err
+	}
+	return user, nil
+}
 func (m *Manager) Login(ctx context.Context, email, password string) (User, string, time.Time, error) {
 	user, hash, err := m.store.UserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
-	if err != nil || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
+	if err != nil || !user.Active || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		return User{}, "", time.Time{}, errors.New("invalid credentials")
 	}
 	expires := m.now().Add(m.ttl)

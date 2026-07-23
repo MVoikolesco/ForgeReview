@@ -18,6 +18,15 @@ import (
 
 type SQLite struct{ db *sql.DB }
 
+type AuditEntry struct {
+	ID        int64          `json:"id"`
+	ActorID   int64          `json:"actor_id"`
+	Action    string         `json:"action"`
+	Target    string         `json:"target"`
+	Metadata  map[string]any `json:"metadata"`
+	CreatedAt string         `json:"created_at"`
+}
+
 var (
 	ErrWorkflowVersionNotFound  = errors.New("workflow version not found")
 	ErrWorkflowVersionNotDraft  = errors.New("workflow version is not a draft")
@@ -25,6 +34,8 @@ var (
 	ErrIntegrationNotFound      = errors.New("integration not found")
 	ErrIntegrationReferenced    = errors.New("integration has historical workflow references")
 	ErrWebhookDeliveryCollision = errors.New("webhook delivery collision")
+	ErrUserNotFound             = errors.New("user not found")
+	ErrLastActiveAdmin          = errors.New("cannot remove the last active admin")
 )
 
 func Open(path string) (*SQLite, error) {
@@ -53,6 +64,14 @@ func Open(path string) (*SQLite, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = store.ensureUserActiveColumn(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err = store.migratePublicationUncertain(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return store, nil
 }
 
@@ -64,26 +83,26 @@ func (s *SQLite) UserCount(ctx context.Context) (int, error) {
 	return count, err
 }
 func (s *SQLite) CreateUser(ctx context.Context, email, hash string, role auth.Role) (auth.User, error) {
-	result, err := s.db.ExecContext(ctx, `INSERT INTO users(email,password_hash,role) VALUES(?,?,?)`, email, hash, role)
+	result, err := s.db.ExecContext(ctx, `INSERT INTO users(email,password_hash,role,active) VALUES(?,?,?,1)`, email, hash, role)
 	if err != nil {
 		return auth.User{}, err
 	}
 	id, err := result.LastInsertId()
-	return auth.User{ID: id, Email: email, Role: role}, err
+	return auth.User{ID: id, Email: email, Role: role, Active: true}, err
 }
 func (s *SQLite) UserByEmail(ctx context.Context, email string) (auth.User, string, error) {
 	var user auth.User
 	var hash string
-	err := s.db.QueryRowContext(ctx, `SELECT id,email,password_hash,role FROM users WHERE email=?`, email).Scan(&user.ID, &user.Email, &hash, &user.Role)
+	err := s.db.QueryRowContext(ctx, `SELECT id,email,password_hash,role,active FROM users WHERE email=?`, email).Scan(&user.ID, &user.Email, &hash, &user.Role, &user.Active)
 	return user, hash, err
 }
 func (s *SQLite) UserByID(ctx context.Context, id int64) (auth.User, error) {
 	var user auth.User
-	err := s.db.QueryRowContext(ctx, `SELECT id,email,role FROM users WHERE id=?`, id).Scan(&user.ID, &user.Email, &user.Role)
+	err := s.db.QueryRowContext(ctx, `SELECT id,email,role,active FROM users WHERE id=?`, id).Scan(&user.ID, &user.Email, &user.Role, &user.Active)
 	return user, err
 }
 func (s *SQLite) Users(ctx context.Context) ([]auth.User, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,email,role FROM users ORDER BY email`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,email,role,active FROM users ORDER BY email`)
 	if err != nil {
 		return nil, err
 	}
@@ -91,12 +110,45 @@ func (s *SQLite) Users(ctx context.Context) ([]auth.User, error) {
 	users := []auth.User{}
 	for rows.Next() {
 		var user auth.User
-		if err = rows.Scan(&user.ID, &user.Email, &user.Role); err != nil {
+		if err = rows.Scan(&user.ID, &user.Email, &user.Role, &user.Active); err != nil {
 			return nil, err
 		}
 		users = append(users, user)
 	}
 	return users, rows.Err()
+}
+func (s *SQLite) UpdateUser(ctx context.Context, id int64, role auth.Role, active bool) (auth.User, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return auth.User{}, err
+	}
+	defer tx.Rollback()
+	var current auth.User
+	if err = tx.QueryRowContext(ctx, `SELECT id,email,role,active FROM users WHERE id=?`, id).Scan(&current.ID, &current.Email, &current.Role, &current.Active); errors.Is(err, sql.ErrNoRows) {
+		return auth.User{}, ErrUserNotFound
+	} else if err != nil {
+		return auth.User{}, err
+	}
+	if current.Role == auth.RoleAdmin && current.Active && (role != auth.RoleAdmin || !active) {
+		var admins int
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role='admin' AND active=1`).Scan(&admins); err != nil {
+			return auth.User{}, err
+		}
+		if admins <= 1 {
+			return auth.User{}, ErrLastActiveAdmin
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE users SET role=?,active=? WHERE id=?`, role, active, id); err != nil {
+		return auth.User{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return auth.User{}, err
+	}
+	return auth.User{ID: id, Email: current.Email, Role: role, Active: active}, nil
+}
+func (s *SQLite) DeleteUserSessions(ctx context.Context, userID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, userID)
+	return err
 }
 func (s *SQLite) CreateSession(ctx context.Context, nonce string, userID int64, expires time.Time) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions(session_nonce,user_id,expires_at) VALUES(?,?,?)`, nonce, userID, expires.UTC().Format(time.RFC3339))
@@ -110,6 +162,50 @@ func (s *SQLite) SessionValid(ctx context.Context, nonce string, userID int64, n
 	var count int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE session_nonce=? AND user_id=? AND expires_at>?`, nonce, userID, now.UTC().Format(time.RFC3339)).Scan(&count)
 	return count == 1, err
+}
+func (s *SQLite) Audit(ctx context.Context, actorID int64, action, target string, metadata map[string]any) error {
+	payload, err := json.Marshal(safeAuditMetadata(metadata))
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO audit_log(actor_id,action,target,metadata_json) VALUES(?,?,?,?)`, actorID, action, target, string(payload))
+	return err
+}
+func (s *SQLite) AuditEntries(ctx context.Context, limit int) ([]AuditEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,actor_id,action,target,metadata_json,created_at FROM audit_log ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditEntry{}
+	for rows.Next() {
+		var item AuditEntry
+		var payload string
+		if err = rows.Scan(&item.ID, &item.ActorID, &item.Action, &item.Target, &payload, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(payload), &item.Metadata)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+func safeAuditMetadata(values map[string]any) map[string]any {
+	safe := map[string]any{}
+	for key, value := range values {
+		lower := strings.ToLower(key)
+		if strings.Contains(lower, "secret") || strings.Contains(lower, "password") || strings.Contains(lower, "token") || strings.Contains(lower, "cipher") || strings.Contains(lower, "authorization") {
+			continue
+		}
+		switch v := value.(type) {
+		case string:
+			if len(v) <= 256 {
+				safe[key] = v
+			}
+		case bool, float64, int, int64:
+			safe[key] = v
+		}
+	}
+	return safe
 }
 
 func (s *SQLite) CreateIntegration(ctx context.Context, item integration.Integration) error {
@@ -874,6 +970,46 @@ func (s *SQLite) RetryPublication(ctx context.Context, key string, cause error) 
 	}
 	return nil
 }
+func (s *SQLite) UncertainPublication(ctx context.Context, key string, cause error) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE publication_attempts SET status='uncertain',error_message='publication outcome uncertain' WHERE idempotency_key=? AND status='pending'`, key)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return fmt.Errorf("publication %q is not pending", key)
+	}
+	return nil
+}
+func (s *SQLite) ReconcilePublication(ctx context.Context, key string, receipt *integration.PublicationReceipt) error {
+	if receipt != nil {
+		payload, err := json.Marshal(*receipt)
+		if err != nil {
+			return err
+		}
+		result, err := s.db.ExecContext(ctx, `UPDATE publication_attempts SET status='completed',receipt_json=?,completed_at=CURRENT_TIMESTAMP,error_message='' WHERE idempotency_key=? AND status='uncertain'`, string(payload), key)
+		if err != nil {
+			return err
+		}
+		changed, _ := result.RowsAffected()
+		if changed != 1 {
+			return fmt.Errorf("publication %q is not uncertain", key)
+		}
+		return nil
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE publication_attempts SET status='retryable',error_message='' WHERE idempotency_key=? AND status='uncertain'`, key)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return fmt.Errorf("publication %q is not uncertain", key)
+	}
+	return nil
+}
 
 func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.RunReport, error) {
 	var status string
@@ -1052,7 +1188,7 @@ CREATE TABLE IF NOT EXISTS publication_attempts (
  workflow_execution_id INTEGER NOT NULL REFERENCES workflow_executions(id),
  workflow_version_id INTEGER NOT NULL REFERENCES workflow_versions(id),
  node_key TEXT NOT NULL,
- status TEXT NOT NULL CHECK(status IN ('pending','completed','retryable')),
+ status TEXT NOT NULL CHECK(status IN ('pending','completed','retryable','uncertain')),
  attempt INTEGER NOT NULL DEFAULT 1,
  receipt_json TEXT NOT NULL DEFAULT '{}',
  error_message TEXT NOT NULL DEFAULT '',
@@ -1063,7 +1199,16 @@ CREATE TABLE IF NOT EXISTS users (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  email TEXT NOT NULL UNIQUE,
  password_hash TEXT NOT NULL,
- role TEXT NOT NULL CHECK(role IN ('viewer','editor','admin')),
+  role TEXT NOT NULL CHECK(role IN ('viewer','editor','admin')),
+	 active INTEGER NOT NULL DEFAULT 1,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS audit_log (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ actor_id INTEGER NOT NULL REFERENCES users(id),
+ action TEXT NOT NULL,
+ target TEXT NOT NULL,
+ metadata_json TEXT NOT NULL DEFAULT '{}',
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -1090,6 +1235,58 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
  PRIMARY KEY(registration_key,delivery_id)
 );
 `
+
+func (s *SQLite) ensureUserActiveColumn(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(users)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primary int
+		var name, typ string
+		var def any
+		if err = rows.Scan(&cid, &name, &typ, &notNull, &def, &primary); err != nil {
+			return err
+		}
+		if name == "active" {
+			return nil
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1`)
+	return err
+}
+func (s *SQLite) migratePublicationUncertain(ctx context.Context) error {
+	var sqlText string
+	if err := s.db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name='publication_attempts'`).Scan(&sqlText); err != nil {
+		return err
+	}
+	if strings.Contains(sqlText, "'uncertain'") {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `CREATE TABLE publication_attempts_new (id INTEGER PRIMARY KEY AUTOINCREMENT,idempotency_key TEXT NOT NULL UNIQUE,workflow_execution_id INTEGER NOT NULL REFERENCES workflow_executions(id),workflow_version_id INTEGER NOT NULL REFERENCES workflow_versions(id),node_key TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('pending','completed','retryable','uncertain')),attempt INTEGER NOT NULL DEFAULT 1,receipt_json TEXT NOT NULL DEFAULT '{}',error_message TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,completed_at TEXT)`)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO publication_attempts_new SELECT * FROM publication_attempts`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DROP TABLE publication_attempts`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `ALTER TABLE publication_attempts_new RENAME TO publication_attempts`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
 // migrateIntegrationSecrets removes the former environment-variable reference
 // column. Existing records remain as unconfigured connections because a

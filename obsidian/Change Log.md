@@ -1,5 +1,34 @@
 # Change Log
 
+## 2026-07-23: Studio shared navigation alignment
+
+- Migrated Studio to the compact shared AppShell header. It now uses the same
+  wordmark, role-aware active navigation, and responsive menu as Dashboard,
+  Pipelines, Integrations, and Administration; workflow identity, validation
+  status, and canvas controls remain in the header action area. Removed
+  Studio-only navigation/breadcrumb controls and kept the canvas at the shared
+  62px header boundary. Expanded navigation regression coverage to assert the
+  administrator route set. See [[Architecture]] and [[Feature Map]].
+
+## 2026-07-23: Operational navigation and admin surfaces
+
+- Added the shared role-aware AppShell, semantic responsive breadcrumbs, active
+  route state, mobile Escape-close menu, and page action slots. Migrated the
+  dashboard, pipelines, integrations, and administration; Studio keeps its dense
+  toolbar with a compact return affordance.
+- Redesigned Dashboard and Administration as operational surfaces with explicit
+  readiness, lifecycle, activity, loading/error/empty states, user controls, and
+  audit panels. Added pure navigation/breadcrumb tests. See [[Architecture]] and
+  [[Feature Map]].
+
+## 2026-07-23: Security operational phase
+
+- Added fail-closed CORS and trusted-proxy environment controls, user lifecycle
+  protections/session revocation, safe persistent auditing, and an admin UI.
+- Added durable `uncertain` publication outcome state for ambiguous provider
+  results and marker-based admin reconciliation. See [[Architecture]] and
+  [[Feature Map]].
+
 ## 2026-07-23
 
 - Fixed authenticated execution polling: login cookies now have explicit expiry

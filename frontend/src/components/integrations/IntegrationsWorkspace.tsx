@@ -1,7 +1,6 @@
 "use client";
 
-import { Braces, Plus } from "lucide-react";
-import Link from "next/link";
+import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getIntegrations, getModelProfiles } from "../../lib/api";
 import type { Integration, ModelProfile } from "../../lib/types";
@@ -9,6 +8,7 @@ import { ConnectionWizard } from "./ConnectionWizard";
 import { IntegrationList } from "./IntegrationList";
 import styles from "./IntegrationsWorkspace.module.scss";
 import { useCurrentUser } from "../auth/AuthGate";
+import { AppShell } from "../shell/AppShell";
 
 export function IntegrationsWorkspace() {
 	const user = useCurrentUser();
@@ -31,29 +31,15 @@ export function IntegrationsWorkspace() {
     void load();
   }, []);
   return (
-    <main className={styles.page}>
-      <header>
-        <strong>
-          <Braces size={20} /> ForgeReview <small>INTEGRAÇÕES</small>
-        </strong>
-        <nav aria-label="Navegação principal">
-          <Link href="/studio">Studio</Link>
-          <Link href="/pipelines">Pipelines</Link>
-        </nav>
-      </header>
+    <AppShell title="Integrações e modelos" eyebrow="CONEXÕES" actions={<button className={styles.newConnection} disabled={user?.role !== "admin"} onClick={() => setShowWizard(true)}><Plus size={16} /> Nova conexão</button>}>
       <section className={styles.content}>
         <div className={styles.intro}>
           <div>
-            <span>CONEXÕES</span>
-            <h1>Integrações e modelos</h1>
             <p>
               Cadastre conexões reutilizáveis com Token/API key enviado uma vez,
               sem armazenamento no navegador.
             </p>
           </div>
-          <button disabled={user?.role !== "admin"} onClick={() => setShowWizard(true)}>
-            <Plus size={16} /> Nova conexão
-          </button>
         </div>
         {message ? (
           <p className={styles.message} role="status">
@@ -75,6 +61,6 @@ export function IntegrationsWorkspace() {
           }}
         />
       )}
-    </main>
+    </AppShell>
   );
 }

@@ -7,16 +7,87 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 
+	"forgereview/backend/internal/auth"
 	"forgereview/backend/internal/integration"
 	"forgereview/backend/internal/store"
 	"forgereview/backend/internal/workflow"
 )
+
+func TestCORSAndTrustedProxyConfigurationFailSafely(t *testing.T) {
+	t.Setenv("FORGEREVIEW_CORS_ALLOWED_ORIGINS", "https://studio.example, http://localhost:3010")
+	t.Setenv("FORGEREVIEW_TRUSTED_PROXIES", "10.0.0.0/24")
+	db, err := store.Open("file:" + t.TempDir() + "/cors.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	router := New(workflow.DefaultCatalog(), db)
+	allowed := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodOptions, "/health", nil)
+	request.Header.Set("Origin", "https://studio.example")
+	router.ServeHTTP(allowed, request)
+	if allowed.Code != http.StatusNoContent || allowed.Header().Get("Access-Control-Allow-Origin") != "https://studio.example" {
+		t.Fatalf("allowed CORS = %d %#v", allowed.Code, allowed.Header())
+	}
+	denied := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodOptions, "/health", nil)
+	request.Header.Set("Origin", "https://evil.example")
+	router.ServeHTTP(denied, request)
+	if denied.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("unexpected CORS origin: %#v", denied.Header())
+	}
+	t.Setenv("FORGEREVIEW_TRUSTED_PROXIES", "not an address")
+	if _, err := trustedProxies(); err == nil {
+		t.Fatal("invalid proxy accepted")
+	}
+}
+
+func TestUserAdminConstraintsRevokeSessionsAndAuditSafely(t *testing.T) {
+	db, err := store.Open("file:" + t.TempDir() + "/users.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	manager, err := auth.New(db, auth.Config{SigningKey: strings.Repeat("s", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := manager.CreateUser(context.Background(), "admin@example.test", "correct horse battery staple", auth.RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := manager.CreateUser(context.Background(), "editor@example.test", "correct horse battery staple", auth.RoleEditor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, token, _, err := manager.Login(context.Background(), user.Email, "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.UpdateUser(context.Background(), user.ID, auth.RoleViewer, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.Authenticate(context.Background(), token); err == nil {
+		t.Fatal("role change did not revoke session")
+	}
+	if _, err = manager.UpdateUser(context.Background(), admin.ID, auth.RoleViewer, true); !errors.Is(err, store.ErrLastActiveAdmin) {
+		t.Fatalf("last admin lockout = %v", err)
+	}
+	if err = db.Audit(context.Background(), admin.ID, "integration.created", "integration:main", map[string]any{"token": "secret", "status": "active"}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := db.AuditEntries(context.Background(), 10)
+	if err != nil || len(entries) != 1 || entries[0].Metadata["token"] != nil || entries[0].Metadata["status"] != "active" {
+		t.Fatalf("unsafe audit = %#v, %v", entries, err)
+	}
+}
 
 type recordingDispatcher struct{ ids []int64 }
 

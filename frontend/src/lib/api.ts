@@ -39,16 +39,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     response.status === 204
       ? undefined
       : ((await response.json()) as T & { error?: string });
-  if (!response.ok)
-    {
-      const error = new APIError(
+  if (!response.ok) {
+    const error = new APIError(
       payload?.error || "Não foi possível concluir a operação.",
       response.status,
     );
-      if (response.status === 401 && path !== "/api/auth/login")
-        window.dispatchEvent(new CustomEvent("forgereview:session-expired"));
-      throw error;
-    }
+    if (response.status === 401 && path !== "/api/auth/login")
+      window.dispatchEvent(new CustomEvent("forgereview:session-expired"));
+    throw error;
+  }
   return payload as T;
 }
 
@@ -68,6 +67,37 @@ export type CurrentUser = {
   role: "viewer" | "editor" | "admin";
 };
 export const getCurrentUser = () => request<CurrentUser>("/api/auth/me");
+export type ManagedUser = CurrentUser & { active: boolean };
+export type AuditEntry = {
+  id: number;
+  actor_id: number;
+  action: string;
+  target: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+export const getUsers = () => request<ManagedUser[]>("/api/users");
+export const createUser = (
+  email: string,
+  password: string,
+  role: CurrentUser["role"],
+) =>
+  request<ManagedUser>("/api/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, role }),
+  });
+export const updateUser = (
+  id: number,
+  role: CurrentUser["role"],
+  active: boolean,
+) =>
+  request<ManagedUser>(`/api/users/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role, active }),
+  });
+export const getAuditLog = () => request<AuditEntry[]>("/api/audit-log");
 export const login = (email: string, password: string) =>
   request<CurrentUser>("/api/auth/login", {
     method: "POST",
@@ -166,7 +196,11 @@ export const publishWorkflow = (versionID: number) =>
       method: "POST",
     },
   );
-export const executeWorkflow = (versionID: number, triggerNode: string, payload: Record<string, unknown>) =>
+export const executeWorkflow = (
+  versionID: number,
+  triggerNode: string,
+  payload: Record<string, unknown>,
+) =>
   request<{
     execution_id?: number;
     report?: import("./types").ExecutionReport;
@@ -177,7 +211,11 @@ export const executeWorkflow = (versionID: number, triggerNode: string, payload:
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ trigger_node: triggerNode, payload }),
   });
-export const executePublishedWorkflow = (versionID: number, triggerNode: string, payload: Record<string, unknown>) =>
+export const executePublishedWorkflow = (
+  versionID: number,
+  triggerNode: string,
+  payload: Record<string, unknown>,
+) =>
   request<{
     execution_id?: number;
     report?: import("./types").ExecutionReport;
@@ -195,7 +233,15 @@ export const getExecutions = (limit = 10) =>
 export const getWebhookRegistrations = () =>
   request<WebhookRegistration[]>("/api/webhook-registrations");
 export const saveWebhookRegistration = (registration: {
-  key: string; name: string; workflow_key: string; trigger_node_key: string; secret: string; active: boolean;
-}) => request<WebhookRegistration>("/api/webhook-registrations", {
-  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(registration),
-});
+  key: string;
+  name: string;
+  workflow_key: string;
+  trigger_node_key: string;
+  secret: string;
+  active: boolean;
+}) =>
+  request<WebhookRegistration>("/api/webhook-registrations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(registration),
+  });

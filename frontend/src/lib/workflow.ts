@@ -24,21 +24,31 @@ export const categoryAccent = (category: string) =>
   })[category] || "#8e9aaa";
 
 export const isManualTrigger = (card: Pick<CardData, "type" | "config">) =>
-  card.type === "trigger" && [undefined, "", "manual"].includes(
-    card.config.mode as string | undefined,
-  );
+  card.type === "trigger" &&
+  [undefined, "", "manual"].includes(card.config.mode as string | undefined);
 
 const terminalStatusPriority = { completed: 1, partial: 2, failed: 3 } as const;
 
-export function applyExecutionReport(nodes: Node<CardData>[], report: ExecutionReport) {
+export function applyExecutionReport(
+  nodes: Node<CardData>[],
+  report: ExecutionReport,
+) {
   const statuses = new Map<string, CardData["status"]>();
   for (const run of report.runs) {
     const current = statuses.get(run.node_key);
     // Poll responses can overlap. A later stale running record must never
     // replace observed terminal progress for the same card.
-    if (!current || current === "running" || (run.status !== "running" &&
-      terminalStatusPriority[run.status as keyof typeof terminalStatusPriority] >
-        (terminalStatusPriority[current as keyof typeof terminalStatusPriority] ?? 0))) {
+    if (
+      !current ||
+      current === "running" ||
+      (run.status !== "running" &&
+        terminalStatusPriority[
+          run.status as keyof typeof terminalStatusPriority
+        ] >
+          (terminalStatusPriority[
+            current as keyof typeof terminalStatusPriority
+          ] ?? 0))
+    ) {
       statuses.set(run.node_key, run.status);
     }
   }
@@ -49,10 +59,18 @@ export function applyExecutionReport(nodes: Node<CardData>[], report: ExecutionR
 }
 
 export const resetExecutionStatuses = (nodes: Node<CardData>[]) =>
-  nodes.map((node) => ({ ...node, data: { ...node.data, status: "idle" as const } }));
+  nodes.map((node) => ({
+    ...node,
+    data: { ...node.data, status: "idle" as const },
+  }));
 
-export const edgeIsActivelyPropagating = (edge: Edge, nodes: Node<CardData>[]) =>
-  nodes.some((node) => node.id === edge.target && node.data.status === "running");
+export const edgeIsActivelyPropagating = (
+  edge: Edge,
+  nodes: Node<CardData>[],
+) =>
+  nodes.some(
+    (node) => node.id === edge.target && node.data.status === "running",
+  );
 
 export const localCards: CardType[] = [
   {
@@ -113,10 +131,10 @@ const initialData = (
   type: card.key,
   name: card.name,
   category: card.category,
-    inputs: card.inputs,
-    outputs: card.outputs,
-    errorOutput: card.error_output,
-    config,
+  inputs: card.inputs,
+  outputs: card.outputs,
+  errorOutput: card.error_output,
+  config,
   status: "idle",
 });
 
@@ -228,7 +246,10 @@ export function hydrateDefinition(
         id: node.key,
         type: "card",
         position: node.position,
-        data: { ...initialData(card, node.key, node.config || {}), name: node.name },
+        data: {
+          ...initialData(card, node.key, node.config || {}),
+          name: node.name,
+        },
       };
     }),
     edges: definition.edges.map((edge) => ({
@@ -313,61 +334,175 @@ export function validateStudioWorkflow(
   const nodeKeys = new Set<string>();
   for (const node of definition.nodes) {
     const catalogCard = cardByType.get(node.type);
-    if (!node.key || !node.name || !catalogCard || catalogCard.available === false)
-      issues.push({ nodeKey: node.key, message: `O card "${node.key || "sem chave"}" é inválido ou usa um tipo indisponível.` });
-    if (nodeKeys.has(node.key)) issues.push({ nodeKey: node.key, message: `A chave do card "${node.key}" está duplicada.` });
+    if (
+      !node.key ||
+      !node.name ||
+      !catalogCard ||
+      catalogCard.available === false
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `O card "${node.key || "sem chave"}" é inválido ou usa um tipo indisponível.`,
+      });
+    if (nodeKeys.has(node.key))
+      issues.push({
+        nodeKey: node.key,
+        message: `A chave do card "${node.key}" está duplicada.`,
+      });
     if (hasUnsafeConfig(node.config))
-      issues.push({ nodeKey: node.key, message: `O card "${node.key}" contém segredo, token ou ciphertext e não pode ser salvo.` });
+      issues.push({
+        nodeKey: node.key,
+        message: `O card "${node.key}" contém segredo, token ou ciphertext e não pode ser salvo.`,
+      });
     nodeKeys.add(node.key);
-    const policy = configText(node.config.on_error) || (node.type === "error_control" ? "continue" : "fail");
+    const policy =
+      configText(node.config.on_error) ||
+      (node.type === "error_control" ? "continue" : "fail");
     if (node.type === "error_control") {
       if (!["fail", "continue", "fallback"].includes(policy))
-        issues.push({ nodeKey: node.key, message: `O card "${node.name}" usa uma política de erro inválida.` });
+        issues.push({
+          nodeKey: node.key,
+          message: `O card "${node.name}" usa uma política de erro inválida.`,
+        });
       if (policy === "fallback" && !nonEmptyText(node.config.fallback_result))
-        issues.push({ nodeKey: node.key, message: `Defina o resultado de fallback do card "${node.name}".` });
+        issues.push({
+          nodeKey: node.key,
+          message: `Defina o resultado de fallback do card "${node.name}".`,
+        });
     } else if (!["fail", "continue", "partial", "route"].includes(policy)) {
-      issues.push({ nodeKey: node.key, message: `O card "${node.name}" usa uma política de erro inválida.` });
+      issues.push({
+        nodeKey: node.key,
+        message: `O card "${node.name}" usa uma política de erro inválida.`,
+      });
     }
     if (node.type === "template" && !nonEmptyText(node.config.template))
-      issues.push({ nodeKey: node.key, message: `Defina o template do card "${node.name}".` });
+      issues.push({
+        nodeKey: node.key,
+        message: `Defina o template do card "${node.name}".`,
+      });
     if (node.type === "model") {
-      if (!nonEmptyText(node.config.model_profile) && !nonEmptyText(node.config.integration))
-        issues.push({ nodeKey: node.key, message: `Selecione um perfil de modelo para "${node.name}".` });
-      for (const [key, max] of [["retry_limit", 3], ["retry_delay_ms", 60000]] as const) {
+      if (
+        !nonEmptyText(node.config.model_profile) &&
+        !nonEmptyText(node.config.integration)
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `Selecione um perfil de modelo para "${node.name}".`,
+        });
+      for (const [key, max] of [
+        ["retry_limit", 3],
+        ["retry_delay_ms", 60000],
+      ] as const) {
         const value = node.config[key];
-        if (value !== undefined && (!Number.isInteger(value) || (value as number) < 0 || (value as number) > max))
-          issues.push({ nodeKey: node.key, message: `"${node.name}" precisa de ${key} entre 0 e ${max}.` });
+        if (
+          value !== undefined &&
+          (!Number.isInteger(value) ||
+            (value as number) < 0 ||
+            (value as number) > max)
+        )
+          issues.push({
+            nodeKey: node.key,
+            message: `"${node.name}" precisa de ${key} entre 0 e ${max}.`,
+          });
       }
       const maxTokens = node.config.max_tokens;
-      if (maxTokens !== undefined && (!Number.isInteger(maxTokens) || (maxTokens as number) < 1 || (maxTokens as number) > 128000))
-        issues.push({ nodeKey: node.key, message: `"${node.name}" precisa de max_tokens entre 1 e 128000.` });
+      if (
+        maxTokens !== undefined &&
+        (!Number.isInteger(maxTokens) ||
+          (maxTokens as number) < 1 ||
+          (maxTokens as number) > 128000)
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" precisa de max_tokens entre 1 e 128000.`,
+        });
     }
-    if (node.type === "fetch" && (node.config.medium_severity_event !== undefined || node.config.allow_autonomous_rejection !== undefined))
-      issues.push({ nodeKey: node.key, message: `Mova a política de publicação de "${node.name}" para o card Publicar.` });
+    if (
+      node.type === "fetch" &&
+      (node.config.medium_severity_event !== undefined ||
+        node.config.allow_autonomous_rejection !== undefined)
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `Mova a política de publicação de "${node.name}" para o card Publicar.`,
+      });
     if (node.type === "publish") {
       const mediumEvent = node.config.medium_severity_event;
-      if (mediumEvent !== undefined && !["COMMENT", "REQUEST_CHANGES"].includes(configText(mediumEvent)))
-        issues.push({ nodeKey: node.key, message: `Selecione um evento válido para severidade média em "${node.name}".` });
-      if (node.config.allow_autonomous_rejection !== undefined && typeof node.config.allow_autonomous_rejection !== "boolean")
-        issues.push({ nodeKey: node.key, message: `A rejeição autônoma de "${node.name}" deve ser booleana.` });
+      if (
+        mediumEvent !== undefined &&
+        !["COMMENT", "REQUEST_CHANGES"].includes(configText(mediumEvent))
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `Selecione um evento válido para severidade média em "${node.name}".`,
+        });
+      if (
+        node.config.allow_autonomous_rejection !== undefined &&
+        typeof node.config.allow_autonomous_rejection !== "boolean"
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `A rejeição autônoma de "${node.name}" deve ser booleana.`,
+        });
     }
     if (["fetch", "publish"].includes(node.type)) {
-      if (["owner", "repo", "pull_request"].some((key) => Object.prototype.hasOwnProperty.call(node.config, key)))
-        issues.push({ nodeKey: node.key, message: `Remova as coordenadas fixas de PR de "${node.name}".` });
+      if (
+        ["owner", "repo", "pull_request"].some((key) =>
+          Object.prototype.hasOwnProperty.call(node.config, key),
+        )
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `Remova as coordenadas fixas de PR de "${node.name}".`,
+        });
       if (!nonEmptyText(node.config.integration))
-        issues.push({ nodeKey: node.key, message: `Configure a conexão de "${node.name}".` });
+        issues.push({
+          nodeKey: node.key,
+          message: `Configure a conexão de "${node.name}".`,
+        });
     }
-    if (node.type === "trigger" && !["manual", "api", "webhook"].includes(configText(node.config.mode) || "manual"))
-      issues.push({ nodeKey: node.key, message: `Selecione um modo de trigger válido em "${node.name}".` });
-    if (node.type === "loop" && (!positiveInteger(node.config.max_iterations) || (node.config.concurrency !== undefined && node.config.concurrency !== 1)))
-      issues.push({ nodeKey: node.key, message: `"${node.name}" requer máximo de iterações positivo e concorrência 1.` });
-    if (node.type === "group" && (!positiveInteger(node.config.max_files) || !positiveInteger(node.config.max_characters)))
-      issues.push({ nodeKey: node.key, message: `"${node.name}" requer limites positivos de arquivos e caracteres.` });
+    if (
+      node.type === "trigger" &&
+      !["manual", "api", "webhook"].includes(
+        configText(node.config.mode) || "manual",
+      )
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `Selecione um modo de trigger válido em "${node.name}".`,
+      });
+    if (
+      node.type === "loop" &&
+      (!positiveInteger(node.config.max_iterations) ||
+        (node.config.concurrency !== undefined &&
+          node.config.concurrency !== 1))
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `"${node.name}" requer máximo de iterações positivo e concorrência 1.`,
+      });
+    if (
+      node.type === "group" &&
+      (!positiveInteger(node.config.max_files) ||
+        !positiveInteger(node.config.max_characters))
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `"${node.name}" requer limites positivos de arquivos e caracteres.`,
+      });
     if (node.type === "cache") {
       const mode = configText(node.config.mode);
-      if (!nonEmptyText(node.config.key) || !["read", "write", "delete"].includes(mode) ||
-        (mode === "write" && (!positiveInteger(node.config.ttl_seconds) || (node.config.ttl_seconds as number) > 86400)))
-        issues.push({ nodeKey: node.key, message: `"${node.name}" requer chave, operação válida e TTL de 1 a 86400 para gravação.` });
+      if (
+        !nonEmptyText(node.config.key) ||
+        !["read", "write", "delete"].includes(mode) ||
+        (mode === "write" &&
+          (!positiveInteger(node.config.ttl_seconds) ||
+            (node.config.ttl_seconds as number) > 86400))
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" requer chave, operação válida e TTL de 1 a 86400 para gravação.`,
+        });
     }
   }
   const edgeKeys = new Set<string>();
@@ -376,30 +511,58 @@ export function validateStudioWorkflow(
     const target = definition.nodes.find((node) => node.key === edge.to_node);
     const sourceCard = source && cardByType.get(source.type);
     const targetCard = target && cardByType.get(target.type);
-    const sourcePorts = sourceCard && (sourceCard.error_output && source?.config.on_error === "route"
-      ? [...sourceCard.outputs, sourceCard.error_output]
-      : sourceCard.outputs);
+    const sourcePorts =
+      sourceCard &&
+      (sourceCard.error_output && source?.config.on_error === "route"
+        ? [...sourceCard.outputs, sourceCard.error_output]
+        : sourceCard.outputs);
     const output = sourcePorts?.find((port) => port.key === edge.from_port);
     const input = targetCard?.inputs.find((port) => port.key === edge.to_port);
     if (!edge.key || !source || !target || !output || !input) {
-      issues.push({ message: `A conexão "${edge.key || "sem chave"}" referencia um card ou porta inválida.` });
+      issues.push({
+        message: `A conexão "${edge.key || "sem chave"}" referencia um card ou porta inválida.`,
+      });
       continue;
     }
-    if (edgeKeys.has(edge.key)) issues.push({ message: `A chave da conexão "${edge.key}" está duplicada.` });
-    if (output.contract !== "any" && input.contract !== "any" && output.contract !== input.contract)
-      issues.push({ message: `A conexão "${edge.key}" usa contratos incompatíveis.` });
+    if (edgeKeys.has(edge.key))
+      issues.push({
+        message: `A chave da conexão "${edge.key}" está duplicada.`,
+      });
+    if (
+      output.contract !== "any" &&
+      input.contract !== "any" &&
+      output.contract !== input.contract
+    )
+      issues.push({
+        message: `A conexão "${edge.key}" usa contratos incompatíveis.`,
+      });
     edgeKeys.add(edge.key);
   }
   for (const node of definition.nodes) {
     const card = cardByType.get(node.type);
     if (!card) continue;
     for (const input of card.inputs.filter((port) => port.required)) {
-      if (!definition.edges.some((edge) => edge.to_node === node.key && edge.to_port === input.key))
-        issues.push({ nodeKey: node.key, message: `Conecte a entrada obrigatória "${input.label}" do card "${node.name}".` });
+      if (
+        !definition.edges.some(
+          (edge) => edge.to_node === node.key && edge.to_port === input.key,
+        )
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `Conecte a entrada obrigatória "${input.label}" do card "${node.name}".`,
+        });
     }
-    if (node.type !== "error_control" && configText(node.config.on_error) === "route" &&
-      !definition.edges.some((edge) => edge.from_node === node.key && edge.from_port === "error"))
-      issues.push({ nodeKey: node.key, message: `Conecte a rota de erro do card "${node.name}".` });
+    if (
+      node.type !== "error_control" &&
+      configText(node.config.on_error) === "route" &&
+      !definition.edges.some(
+        (edge) => edge.from_node === node.key && edge.from_port === "error",
+      )
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `Conecte a rota de erro do card "${node.name}".`,
+      });
   }
   return issues;
 }
@@ -413,8 +576,11 @@ export function removeSelectedElements(
   const selectedNodes = new Set(nodeIDs);
   const selectedEdges = new Set(edgeIDs);
   const remainingNodes = nodes.filter((node) => !selectedNodes.has(node.id));
-  const removedEdges = edges.filter((edge) =>
-    selectedEdges.has(edge.id) || selectedNodes.has(edge.source) || selectedNodes.has(edge.target),
+  const removedEdges = edges.filter(
+    (edge) =>
+      selectedEdges.has(edge.id) ||
+      selectedNodes.has(edge.source) ||
+      selectedNodes.has(edge.target),
   );
   return {
     nodes: remainingNodes,
@@ -440,7 +606,11 @@ export function parseWorkflowExport(
 ): { envelope?: WorkflowExportEnvelope; error?: string } {
   try {
     const candidate = JSON.parse(text) as WorkflowExportEnvelope;
-    if (candidate?.format !== "forgereview.workflow" || candidate.version !== 1 || !candidate.definition)
+    if (
+      candidate?.format !== "forgereview.workflow" ||
+      candidate.version !== 1 ||
+      !candidate.definition
+    )
       return { error: "O arquivo não usa o envelope ForgeReview Workflow v1." };
     const error = validateWorkflowDefinition(candidate.definition, cards);
     return error ? { error } : { envelope: candidate };
@@ -464,8 +634,14 @@ export function cloneWorkflowDefinition(
   const keys = new Set(workflowKeys);
   const workflowKey = uniqueKey(`${definition.key}-copy`, keys);
   const nodeKeys = new Set<string>();
-  const nodes = definition.nodes.map((node) => ({ ...node, key: uniqueKey(node.key, nodeKeys), config: { ...node.config } }));
-  const remappedNodes = new Map(definition.nodes.map((node, index) => [node.key, nodes[index].key]));
+  const nodes = definition.nodes.map((node) => ({
+    ...node,
+    key: uniqueKey(node.key, nodeKeys),
+    config: { ...node.config },
+  }));
+  const remappedNodes = new Map(
+    definition.nodes.map((node, index) => [node.key, nodes[index].key]),
+  );
   const edgeKeys = new Set<string>();
   return {
     key: workflowKey,
@@ -481,7 +657,9 @@ export function cloneWorkflowDefinition(
   };
 }
 
-export const workflowExportEnvelope = (definition: WorkflowDefinition): WorkflowExportEnvelope => ({
+export const workflowExportEnvelope = (
+  definition: WorkflowDefinition,
+): WorkflowExportEnvelope => ({
   format: "forgereview.workflow",
   version: 1,
   definition,
@@ -518,14 +696,14 @@ export function reviewTemplate(
     id,
     type: "card",
     position: { x, y },
-     data: { ...initialData(cardFor(type), id, config), name },
+    data: { ...initialData(cardFor(type), id, config), name },
   });
   return {
     nodes: [
       node("trigger", "trigger", "Webhook Gitea", 40, 280, { mode: "webhook" }),
       node("fetch", "fetch", "Buscar dados do PR", 315, 280, {
         integration: "",
-       }),
+      }),
       node("filter", "filter", "Filtrar arquivos", 610, 125, {
         include_extensions: [".go", ".ts", ".tsx", ".php"],
         ignore_generated: true,

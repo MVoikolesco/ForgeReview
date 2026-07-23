@@ -19,21 +19,33 @@ export function reviewPipelineState(
   profiles: ModelProfile[],
 ) {
   if (!definition) {
-    return { readiness: "Pipeline oficial não publicada", safe: false, steps: [] as string[] };
+    return {
+      readiness: "Pipeline oficial não publicada",
+      safe: false,
+      steps: [] as string[],
+    };
   }
-  const node = (type: string) => definition.nodes.find((item) => item.type === type);
+  const node = (type: string) =>
+    definition.nodes.find((item) => item.type === type);
   const fetch = node("fetch");
   const publish = node("publish");
   const model = node("model");
   const activeConnection = (key: unknown) =>
     typeof key === "string" &&
     integrations.some(
-      (item) => item.key === key && item.status === "active" && item.secret_configured,
+      (item) =>
+        item.key === key && item.status === "active" && item.secret_configured,
     );
   const hasInput = (nodeKey: string | undefined, port: string) =>
-    Boolean(nodeKey && definition.edges.some((edge) => edge.to_node === nodeKey && edge.to_port === port));
+    Boolean(
+      nodeKey &&
+      definition.edges.some(
+        (edge) => edge.to_node === nodeKey && edge.to_port === port,
+      ),
+    );
   const profile = profiles.find(
-    (item) => item.key === model?.config.model_profile && item.status === "active",
+    (item) =>
+      item.key === model?.config.model_profile && item.status === "active",
   );
   const ready =
     activeConnection(fetch?.config.integration) &&

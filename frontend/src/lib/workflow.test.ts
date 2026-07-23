@@ -34,17 +34,39 @@ test("execution reports update card state and animate only edges entering runnin
       { node_key: "transform", status: "running" },
     ],
   });
-  assert.equal(nodes.find((node) => node.id === "trigger")?.data.status, "completed");
-  assert.equal(nodes.find((node) => node.id === "transform")?.data.status, "running");
+  assert.equal(
+    nodes.find((node) => node.id === "trigger")?.data.status,
+    "completed",
+  );
+  assert.equal(
+    nodes.find((node) => node.id === "transform")?.data.status,
+    "running",
+  );
   assert.equal(edgeIsActivelyPropagating(starterEdges[0], nodes), true);
   assert.equal(edgeIsActivelyPropagating(starterEdges[1], nodes), false);
 });
 
 test("terminal execution progress replaces stale running state and each run resets cards", () => {
-  const running = applyExecutionReport(starterNodes, { status: "running", runs: [{ node_key: "trigger", status: "running" }] });
-  const terminal = applyExecutionReport(running, { status: "completed", runs: [{ node_key: "trigger", status: "completed" }, { node_key: "trigger", status: "running" }] });
-  assert.equal(terminal.find((node) => node.id === "trigger")?.data.status, "completed");
-  assert.ok(resetExecutionStatuses(terminal).every((node) => node.data.status === "idle"));
+  const running = applyExecutionReport(starterNodes, {
+    status: "running",
+    runs: [{ node_key: "trigger", status: "running" }],
+  });
+  const terminal = applyExecutionReport(running, {
+    status: "completed",
+    runs: [
+      { node_key: "trigger", status: "completed" },
+      { node_key: "trigger", status: "running" },
+    ],
+  });
+  assert.equal(
+    terminal.find((node) => node.id === "trigger")?.data.status,
+    "completed",
+  );
+  assert.ok(
+    resetExecutionStatuses(terminal).every(
+      (node) => node.data.status === "idle",
+    ),
+  );
 });
 
 test("saved definitions hydrate canvas cards, edges, and configuration", () => {
@@ -132,21 +154,92 @@ test("saving an opened canvas preserves its workflow identity", () => {
 
 test("catalog availability and bounded model/publish configuration are validated", () => {
   const cards = [
-    { key: "workflow", name: "Workflow", category: "Controle", description: "", inputs: [], outputs: [], available: false, unavailable_reason: "Ainda não suportado" },
-    { key: "model", name: "Modelo", category: "IA", description: "", inputs: [], outputs: [] },
-    { key: "fetch", name: "Buscar", category: "Dados", description: "", inputs: [], outputs: [] },
-    { key: "publish", name: "Publicar", category: "Saída", description: "", inputs: [], outputs: [] },
+    {
+      key: "workflow",
+      name: "Workflow",
+      category: "Controle",
+      description: "",
+      inputs: [],
+      outputs: [],
+      available: false,
+      unavailable_reason: "Ainda não suportado",
+    },
+    {
+      key: "model",
+      name: "Modelo",
+      category: "IA",
+      description: "",
+      inputs: [],
+      outputs: [],
+    },
+    {
+      key: "fetch",
+      name: "Buscar",
+      category: "Dados",
+      description: "",
+      inputs: [],
+      outputs: [],
+    },
+    {
+      key: "publish",
+      name: "Publicar",
+      category: "Saída",
+      description: "",
+      inputs: [],
+      outputs: [],
+    },
   ];
   const definition = {
-    key: "truthful", name: "Truthful", description: "", edges: [],
+    key: "truthful",
+    name: "Truthful",
+    description: "",
+    edges: [],
     nodes: [
-      { key: "child", type: "workflow", name: "Child", config: {}, position: { x: 0, y: 0 } },
-      { key: "model", type: "model", name: "Model", config: { model_profile: "reviewer", max_tokens: 128001 }, position: { x: 0, y: 0 } },
-      { key: "fetch", type: "fetch", name: "Fetch", config: { integration: "gitea", owner: "acme", repo: "api", pull_request: 1, allow_autonomous_rejection: true }, position: { x: 0, y: 0 } },
-      { key: "publish", type: "publish", name: "Publish", config: { integration: "gitea", owner: "acme", repo: "api", pull_request: 1, medium_severity_event: "APPROVE" }, position: { x: 0, y: 0 } },
+      {
+        key: "child",
+        type: "workflow",
+        name: "Child",
+        config: {},
+        position: { x: 0, y: 0 },
+      },
+      {
+        key: "model",
+        type: "model",
+        name: "Model",
+        config: { model_profile: "reviewer", max_tokens: 128001 },
+        position: { x: 0, y: 0 },
+      },
+      {
+        key: "fetch",
+        type: "fetch",
+        name: "Fetch",
+        config: {
+          integration: "gitea",
+          owner: "acme",
+          repo: "api",
+          pull_request: 1,
+          allow_autonomous_rejection: true,
+        },
+        position: { x: 0, y: 0 },
+      },
+      {
+        key: "publish",
+        type: "publish",
+        name: "Publish",
+        config: {
+          integration: "gitea",
+          owner: "acme",
+          repo: "api",
+          pull_request: 1,
+          medium_severity_event: "APPROVE",
+        },
+        position: { x: 0, y: 0 },
+      },
     ],
   };
-  const messages = validateStudioWorkflow(definition, cards).map((issue) => issue.message);
+  const messages = validateStudioWorkflow(definition, cards).map(
+    (issue) => issue.message,
+  );
   assert.ok(messages.some((message) => message.includes("tipo indisponível")));
   assert.ok(messages.some((message) => message.includes("max_tokens")));
   assert.ok(messages.some((message) => message.includes("Mova a política")));
@@ -156,27 +249,67 @@ test("catalog availability and bounded model/publish configuration are validated
 
 test("workflow export envelope validates safe graphs and rejects credential fields", () => {
   const definition = toDefinition(starterNodes, starterEdges);
-  const parsed = parseWorkflowExport(JSON.stringify(workflowExportEnvelope(definition)), localCards);
+  const parsed = parseWorkflowExport(
+    JSON.stringify(workflowExportEnvelope(definition)),
+    localCards,
+  );
   assert.equal(parsed.envelope?.definition.key, "studio-check");
   definition.nodes[0].config = { nested: { secret: "not-exportable" } };
-  assert.match(validateWorkflowDefinition(definition, localCards) || "", /segredo/);
+  assert.match(
+    validateWorkflowDefinition(definition, localCards) || "",
+    /segredo/,
+  );
 });
 
 test("cloning creates a new workflow identity and only disambiguates duplicate graph keys", () => {
   const source = {
-    key: "review", name: "Review", description: "", nodes: [
-      { key: "node", type: "trigger", name: "One", config: {}, position: { x: 0, y: 0 } },
-      { key: "node", type: "trigger", name: "Two", config: {}, position: { x: 1, y: 1 } },
-    ], edges: [
-      { key: "edge", from_node: "node", from_port: "event", to_node: "node", to_port: "event" },
-      { key: "edge", from_node: "node", from_port: "event", to_node: "node", to_port: "event" },
+    key: "review",
+    name: "Review",
+    description: "",
+    nodes: [
+      {
+        key: "node",
+        type: "trigger",
+        name: "One",
+        config: {},
+        position: { x: 0, y: 0 },
+      },
+      {
+        key: "node",
+        type: "trigger",
+        name: "Two",
+        config: {},
+        position: { x: 1, y: 1 },
+      },
+    ],
+    edges: [
+      {
+        key: "edge",
+        from_node: "node",
+        from_port: "event",
+        to_node: "node",
+        to_port: "event",
+      },
+      {
+        key: "edge",
+        from_node: "node",
+        from_port: "event",
+        to_node: "node",
+        to_port: "event",
+      },
     ],
   };
   const clone = cloneWorkflowDefinition(source, ["review-copy"]);
   assert.equal(clone.key, "review-copy-2");
   assert.equal(clone.name, "Review (cópia)");
-  assert.deepEqual(clone.nodes.map((node) => node.key), ["node", "node-2"]);
-  assert.deepEqual(clone.edges.map((edge) => edge.key), ["edge", "edge-2"]);
+  assert.deepEqual(
+    clone.nodes.map((node) => node.key),
+    ["node", "node-2"],
+  );
+  assert.deepEqual(
+    clone.edges.map((edge) => edge.key),
+    ["edge", "edge-2"],
+  );
 });
 
 test("catalog cards without ports normalize to empty lists", () => {
@@ -248,27 +381,96 @@ test("error routes require the explicit error output edge", () => {
 });
 
 test("local Studio validation reports actionable identity, graph, configuration, and error-route failures", () => {
-  const issues = validateStudioWorkflow({
-    key: "", name: "", description: "", nodes: [
-      { key: "template", type: "template", name: "Template", config: { on_error: "route" }, position: { x: 0, y: 0 } },
-      { key: "model", type: "model", name: "Model", config: {}, position: { x: 1, y: 0 } },
-    ], edges: [],
-  }, [
-    { key: "template", name: "Template", category: "Test", description: "", inputs: [], outputs: [], error_output: { key: "error", label: "Erro", contract: "error", required: false } },
-    { key: "model", name: "Model", category: "Test", description: "", inputs: [{ key: "prompt", label: "Prompt", contract: "prompt", required: true }], outputs: [] },
-  ]);
-  assert.deepEqual(issues.map((issue) => issue.nodeKey), [undefined, "template", "model", "template", "model"]);
-  assert.match(issues.map((issue) => issue.message).join("\n"), /chave e o nome/);
+  const issues = validateStudioWorkflow(
+    {
+      key: "",
+      name: "",
+      description: "",
+      nodes: [
+        {
+          key: "template",
+          type: "template",
+          name: "Template",
+          config: { on_error: "route" },
+          position: { x: 0, y: 0 },
+        },
+        {
+          key: "model",
+          type: "model",
+          name: "Model",
+          config: {},
+          position: { x: 1, y: 0 },
+        },
+      ],
+      edges: [],
+    },
+    [
+      {
+        key: "template",
+        name: "Template",
+        category: "Test",
+        description: "",
+        inputs: [],
+        outputs: [],
+        error_output: {
+          key: "error",
+          label: "Erro",
+          contract: "error",
+          required: false,
+        },
+      },
+      {
+        key: "model",
+        name: "Model",
+        category: "Test",
+        description: "",
+        inputs: [
+          {
+            key: "prompt",
+            label: "Prompt",
+            contract: "prompt",
+            required: true,
+          },
+        ],
+        outputs: [],
+      },
+    ],
+  );
+  assert.deepEqual(
+    issues.map((issue) => issue.nodeKey),
+    [undefined, "template", "model", "template", "model"],
+  );
+  assert.match(
+    issues.map((issue) => issue.message).join("\n"),
+    /chave e o nome/,
+  );
   assert.match(issues.map((issue) => issue.message).join("\n"), /template/);
-  assert.match(issues.map((issue) => issue.message).join("\n"), /perfil de modelo/);
+  assert.match(
+    issues.map((issue) => issue.message).join("\n"),
+    /perfil de modelo/,
+  );
   assert.match(issues.map((issue) => issue.message).join("\n"), /rota de erro/);
-  assert.match(issues.map((issue) => issue.message).join("\n"), /entrada obrigatória/);
+  assert.match(
+    issues.map((issue) => issue.message).join("\n"),
+    /entrada obrigatória/,
+  );
 });
 
 test("removing selected cards also removes their connected edges without touching other graph elements", () => {
-  const result = removeSelectedElements(starterNodes, starterEdges, ["transform"], ["condition-log"]);
-  assert.deepEqual(result.nodes.map((node) => node.id), ["trigger", "condition", "log"]);
-  assert.deepEqual(result.edges.map((edge) => edge.id), []);
+  const result = removeSelectedElements(
+    starterNodes,
+    starterEdges,
+    ["transform"],
+    ["condition-log"],
+  );
+  assert.deepEqual(
+    result.nodes.map((node) => node.id),
+    ["trigger", "condition", "log"],
+  );
+  assert.deepEqual(
+    result.edges.map((edge) => edge.id),
+    [],
+  );
   assert.equal(result.removedEdges, 3);
 });
 
@@ -276,15 +478,31 @@ test("Studio manual execution only offers trigger cards in manual mode", () => {
   const trigger = starterNodes.find((node) => node.id === "trigger");
   assert.ok(trigger);
   assert.equal(isManualTrigger(trigger.data), true);
-  assert.equal(isManualTrigger({ ...trigger.data, config: { mode: "api" } }), false);
-  assert.equal(isManualTrigger({ ...trigger.data, config: { mode: "webhook" } }), false);
-  assert.equal(isManualTrigger({ ...trigger.data, type: "fetch", config: { mode: "manual" } }), false);
+  assert.equal(
+    isManualTrigger({ ...trigger.data, config: { mode: "api" } }),
+    false,
+  );
+  assert.equal(
+    isManualTrigger({ ...trigger.data, config: { mode: "webhook" } }),
+    false,
+  );
+  assert.equal(
+    isManualTrigger({
+      ...trigger.data,
+      type: "fetch",
+      config: { mode: "manual" },
+    }),
+    false,
+  );
 });
 
 test("repeated React Flow selection reports do not require another Studio state update", () => {
   assert.equal(selectionHasChanged(["transform"], ["transform"]), false);
   assert.equal(selectionHasChanged(["transform"], ["condition"]), true);
-  assert.equal(selectionHasChanged(["transform"], ["transform", "condition"]), true);
+  assert.equal(
+    selectionHasChanged(["transform"], ["transform", "condition"]),
+    true,
+  );
 });
 
 test("workflow version lifecycle exposes publishable drafts only", () => {
@@ -349,36 +567,124 @@ test("review template scopes group review through loop before one root publicati
     template.nodes.find((node) => node.id === "loop")?.data.config,
     { max_iterations: 20, concurrency: 1, on_error: "fail" },
   );
-  assert.deepEqual(template.nodes.find((node) => node.id === "model")?.data.config, {
-    model_profile: "",
-    max_tokens: 2000,
-    retry_limit: 0,
-    retry_delay_ms: 0,
-  });
-  assert.deepEqual(template.nodes.find((node) => node.id === "publish")?.data.config, {
-    integration: "",
-    medium_severity_event: "COMMENT",
-    allow_autonomous_rejection: false,
-  });
+  assert.deepEqual(
+    template.nodes.find((node) => node.id === "model")?.data.config,
+    {
+      model_profile: "",
+      max_tokens: 2000,
+      retry_limit: 0,
+      retry_delay_ms: 0,
+    },
+  );
+  assert.deepEqual(
+    template.nodes.find((node) => node.id === "publish")?.data.config,
+    {
+      integration: "",
+      medium_severity_event: "COMMENT",
+      allow_autonomous_rejection: false,
+    },
+  );
 });
 
 test("dashboard derives official review readiness and conservative publication safety", () => {
   const definition = {
-    key: "official-gitea-pr-review", name: "Official", description: "", edges: [
-      { key: "event", from_node: "trigger", from_port: "event", to_node: "fetch", to_port: "event" },
-      { key: "target", from_node: "fetch", from_port: "pull_request", to_node: "publish", to_port: "pull_request" },
-    ], nodes: [
-      { key: "trigger", type: "trigger", name: "Trigger", config: {}, position: { x: 0, y: 0 } },
-      { key: "fetch", type: "fetch", name: "Fetch", config: { integration: "gitea" }, position: { x: 0, y: 0 } },
-      { key: "model", type: "model", name: "Model", config: { model_profile: "reviewer" }, position: { x: 0, y: 0 } },
-      { key: "publish", type: "publish", name: "Publish", config: { integration: "gitea", allow_autonomous_rejection: false, medium_severity_event: "COMMENT" }, position: { x: 0, y: 0 } },
+    key: "official-gitea-pr-review",
+    name: "Official",
+    description: "",
+    edges: [
+      {
+        key: "event",
+        from_node: "trigger",
+        from_port: "event",
+        to_node: "fetch",
+        to_port: "event",
+      },
+      {
+        key: "target",
+        from_node: "fetch",
+        from_port: "pull_request",
+        to_node: "publish",
+        to_port: "pull_request",
+      },
+    ],
+    nodes: [
+      {
+        key: "trigger",
+        type: "trigger",
+        name: "Trigger",
+        config: {},
+        position: { x: 0, y: 0 },
+      },
+      {
+        key: "fetch",
+        type: "fetch",
+        name: "Fetch",
+        config: { integration: "gitea" },
+        position: { x: 0, y: 0 },
+      },
+      {
+        key: "model",
+        type: "model",
+        name: "Model",
+        config: { model_profile: "reviewer" },
+        position: { x: 0, y: 0 },
+      },
+      {
+        key: "publish",
+        type: "publish",
+        name: "Publish",
+        config: {
+          integration: "gitea",
+          allow_autonomous_rejection: false,
+          medium_severity_event: "COMMENT",
+        },
+        position: { x: 0, y: 0 },
+      },
     ],
   };
-  const state = reviewPipelineState(definition, [
-    { key: "gitea", name: "Gitea", type: "gitea", config: { base_url: "https://gitea.example" }, secret_configured: true, status: "active" },
-    { key: "models", name: "Models", type: "openai", config: { base_url: "https://models.example" }, secret_configured: true, status: "active" },
-  ], [{ key: "reviewer", name: "Reviewer", integration_key: "models", model: "review", status: "active" }]);
+  const state = reviewPipelineState(
+    definition,
+    [
+      {
+        key: "gitea",
+        name: "Gitea",
+        type: "gitea",
+        config: { base_url: "https://gitea.example" },
+        secret_configured: true,
+        status: "active",
+      },
+      {
+        key: "models",
+        name: "Models",
+        type: "openai",
+        config: { base_url: "https://models.example" },
+        secret_configured: true,
+        status: "active",
+      },
+    ],
+    [
+      {
+        key: "reviewer",
+        name: "Reviewer",
+        integration_key: "models",
+        model: "review",
+        status: "active",
+      },
+    ],
+  );
   assert.equal(state.readiness, "Pronta para revisão");
   assert.equal(state.safe, true);
-  assert.equal(publishedOfficialVersion([{ key: "official-gitea-pr-review", name: "Official", description: "", versions: [{ version_id: 1, version: 1, status: "published", created_at: "" }] }])?.version_id, 1);
+  assert.equal(
+    publishedOfficialVersion([
+      {
+        key: "official-gitea-pr-review",
+        name: "Official",
+        description: "",
+        versions: [
+          { version_id: 1, version: 1, status: "published", created_at: "" },
+        ],
+      },
+    ])?.version_id,
+    1,
+  );
 });

@@ -1,12 +1,12 @@
 "use client";
 
-import { Braces, RefreshCw } from "lucide-react";
-import Link from "next/link";
+import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getWorkflows, publishWorkflow } from "../../lib/api";
 import type { WorkflowSummary } from "../../lib/types";
 import { PipelinesList } from "./PipelinesList";
 import styles from "./PipelinesWorkspace.module.scss";
+import { AppShell } from "../shell/AppShell";
 
 export function PipelinesWorkspace() {
   const [items, setItems] = useState<WorkflowSummary[]>([]);
@@ -53,29 +53,15 @@ export function PipelinesWorkspace() {
   };
 
   return (
-    <main className={styles.page}>
-      <header>
-        <strong>
-          <Braces size={20} /> ForgeReview <small>PIPELINES</small>
-        </strong>
-        <nav aria-label="Navegação principal">
-          <Link href="/studio">Studio</Link>
-          <Link href="/integrations">Integrações</Link>
-        </nav>
-      </header>
+    <AppShell title="Pipelines e versões" eyebrow="CICLO DE VIDA" actions={<button className={styles.refresh} disabled={Boolean(publishingID)} onClick={() => void load()}><RefreshCw size={16} /> Atualizar</button>}>
       <section className={styles.content}>
         <div className={styles.intro}>
           <div>
-            <span>CICLO DE VIDA</span>
-            <h1>Pipelines e versões</h1>
             <p>
               Rascunhos podem ser publicados. A publicação arquiva a versão
               publicada anterior do mesmo pipeline.
             </p>
           </div>
-          <button disabled={Boolean(publishingID)} onClick={() => void load()}>
-            <RefreshCw size={16} /> Atualizar
-          </button>
         </div>
         {loading ? (
           <p className={styles.message} role="status">
@@ -96,6 +82,6 @@ export function PipelinesWorkspace() {
           </>
         )}
       </section>
-    </main>
+    </AppShell>
   );
 }

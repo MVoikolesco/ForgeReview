@@ -106,6 +106,7 @@
     font-size: 12px;
     background: #12251a;
 }
+.newConnection { @include control; display:flex; align-items:center; gap:6px; padding:10px 13px; border-color:$brand-border; color:#fff; font-size:12px; background:$brand; }
 
 @media (max-width: $breakpoint-mobile) {
     .content {

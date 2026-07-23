@@ -8,7 +8,13 @@
   save/publish/run drafts, and admins manage integrations, model profiles, and
   users (including the admin user list/create API). The responsive dark login
   gate explains first-run configuration without displaying secrets and separates
-  invalid credentials from an unavailable backend.
+   invalid credentials from an unavailable backend.
+- Security operations: admins use `/admin` and protected user/audit APIs to
+  create users, adjust roles, and activate/deactivate accounts. Self-destructive
+  changes and removal of the final active admin are blocked; authorization
+  changes revoke sessions. Safe audit records cover these administrative changes
+  and sensitive lifecycle actions. CORS origins and proxy trust are explicit
+  environment allowlists.
 - Workflow catalog: initial backend foundation implemented.
 - Studio canvas: initial visual prototype implemented.
 - Studio validation: saves and executes a local card graph, then reflects node
@@ -31,7 +37,14 @@
 - Frontend routes: `/` is the operational dashboard with safe connection health,
   official review readiness/safety, and recent PR-context execution summaries;
   `/studio` contains the workflow editor; `/integrations` provides the reusable
-  connection wizard and connection/model list.
+   connection wizard and connection/model list.
+- Shared navigation: standard authenticated pages use a responsive AppShell with
+  active route state, semantic truncating breadcrumbs, per-page action slots, and
+  role-aware visibility (viewer: overview/pipelines; editor: Studio; admin:
+  integrations/administration). Studio retains its dense toolbar and compact
+  return affordance. Dashboard and Administration now present operational
+  readiness, lifecycle, user, audit, loading, error, and empty states in the
+  same visual system.
 - Integration lifecycle UX: connection details, edit, resource management,
   disable, and delete are focus-managed ModalShell flows with busy, success, and
   sanitized error feedback; modal and spinner transitions respect reduced motion.
@@ -59,7 +72,10 @@
   writer adapter, and durable execution-bound idempotency record.
 - Async execution: configured Redis dispatches persisted execution IDs to a
   worker; execution status remains queryable while queued, running, completed,
-  or failed. Persisted queued work is recoverable when a Redis wake-up is missed.
+   or failed. Persisted queued work is recoverable when a Redis wake-up is missed.
+- Publication reconciliation: transport/5xx/response ambiguity becomes a durable
+  `uncertain` record. Admin reconciliation looks up the Gitea idempotency marker,
+  completing a match or permitting retry only after an absent marker.
 - Typed triggers: each trigger can be manual, authenticated API, or signed Gitea
   webhook. Manual execution targets a selected card and accepts an optional JSON
   test payload; API execution targets a published workflow and trigger under

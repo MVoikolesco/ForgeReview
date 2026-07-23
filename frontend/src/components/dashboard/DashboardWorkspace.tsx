@@ -3,7 +3,6 @@
 import {
   Activity,
   ArrowUpRight,
-  Braces,
   CheckCircle2,
   CircleAlert,
   Clock3,
@@ -12,7 +11,6 @@ import {
   PlugZap,
   RefreshCw,
   ShieldCheck,
-  Workflow,
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -24,7 +22,10 @@ import {
   getWorkflowVersion,
   getWorkflows,
 } from "../../lib/api";
-import { publishedOfficialVersion, reviewPipelineState } from "../../lib/dashboard";
+import {
+  publishedOfficialVersion,
+  reviewPipelineState,
+} from "../../lib/dashboard";
 import type {
   ExecutionSummary,
   Integration,
@@ -32,34 +33,53 @@ import type {
   WorkflowDefinition,
   WorkflowSummary,
 } from "../../lib/types";
-import styles from "./DashboardWorkspace.module.scss";
 import { useCurrentUser } from "../auth/AuthGate";
+import { AppShell } from "../shell/AppShell";
+import styles from "./DashboardWorkspace.module.scss";
 
 type LoadState = "loading" | "ready" | "error";
 
 export function DashboardWorkspace() {
-	const user = useCurrentUser();
+  const user = useCurrentUser();
   const [connections, setConnections] = useState<Integration[]>([]);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [executions, setExecutions] = useState<ExecutionSummary[]>([]);
   const [official, setOfficial] = useState<WorkflowDefinition>();
   const [states, setStates] = useState<Record<string, LoadState>>({
-    health: "loading", connections: "loading", workflows: "loading", executions: "loading",
+    health: "loading",
+    connections: "loading",
+    workflows: "loading",
+    executions: "loading",
   });
 
   const load = async () => {
-    setStates({ health: "loading", connections: "loading", workflows: "loading", executions: "loading" });
-    const [health, connectionData, profileData, workflowData, executionData] = await Promise.allSettled([
-      getHealth(), getIntegrations(), getModelProfiles(), getWorkflows(), getExecutions(10),
-    ]);
+    setStates({
+      health: "loading",
+      connections: "loading",
+      workflows: "loading",
+      executions: "loading",
+    });
+    const [health, connectionData, profileData, workflowData, executionData] =
+      await Promise.allSettled([
+        getHealth(),
+        getIntegrations(),
+        getModelProfiles(),
+        getWorkflows(),
+        getExecutions(10),
+      ]);
     setStates({
       health: health.status === "fulfilled" ? "ready" : "error",
-      connections: connectionData.status === "fulfilled" && profileData.status === "fulfilled" ? "ready" : "error",
+      connections:
+        connectionData.status === "fulfilled" &&
+        profileData.status === "fulfilled"
+          ? "ready"
+          : "error",
       workflows: workflowData.status === "fulfilled" ? "ready" : "error",
       executions: executionData.status === "fulfilled" ? "ready" : "error",
     });
-    if (connectionData.status === "fulfilled") setConnections(connectionData.value);
+    if (connectionData.status === "fulfilled")
+      setConnections(connectionData.value);
     if (profileData.status === "fulfilled") setProfiles(profileData.value);
     if (workflowData.status === "fulfilled") {
       setWorkflows(workflowData.value);
@@ -72,72 +92,247 @@ export function DashboardWorkspace() {
         }
       } else setOfficial(undefined);
     }
-    if (executionData.status === "fulfilled") setExecutions(executionData.value);
+    if (executionData.status === "fulfilled")
+      setExecutions(executionData.value);
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+  }, []);
   const gitea = connections.filter((item) => item.type === "gitea");
   const models = connections.filter((item) => item.type !== "gitea");
   const connectionReady = (items: Integration[]) =>
     items.some((item) => item.status === "active" && item.secret_configured);
   const pipeline = reviewPipelineState(official, connections, profiles);
 
-  return <main className={styles.page}>
-    <header className={styles.header}>
-      <Link className={styles.brand} href="/" aria-label="ForgeReview dashboard"><Braces size={19} /> ForgeReview <span>CONTROL</span></Link>
-      <nav aria-label="Navegação principal">
-        <Link aria-current="page" href="/">Visão geral</Link>
-        {user?.role !== "viewer" && <Link href="/studio">Studio</Link>}
-        <Link href="/pipelines">Pipelines</Link>
-        {user?.role === "admin" && <Link href="/integrations">Integrações</Link>}
-      </nav>
-      <button className={styles.refresh} onClick={() => void load()} aria-label="Atualizar dashboard"><RefreshCw size={16} /> <span>Atualizar</span></button>
-    </header>
+  return (
+    <AppShell
+      title="Painel de controle"
+      eyebrow="OPERAÇÕES DE REVISÃO"
+      actions={
+        <button className={styles.refresh} onClick={() => void load()}>
+          <RefreshCw size={16} /> Atualizar
+        </button>
+      }
+    >
+      <section className={styles.hero} aria-label="Resumo operacional">
+        <div>
+          <p>PRONTIDÃO DE REVISÃO</p>
+          <span>
+            Estado seguro das conexões, da pipeline oficial e das execuções
+            recentes.
+          </span>
+        </div>
+        <div
+          className={`${styles.service} ${states.health === "ready" ? styles.ok : styles.alert}`}
+          role="status"
+        >
+          <Activity size={16} />{" "}
+          {states.health === "loading"
+            ? "Verificando serviço"
+            : states.health === "ready"
+              ? "Serviço disponível"
+              : "Serviço indisponível"}
+        </div>
+      </section>
 
-    <section className={styles.hero} aria-labelledby="dashboard-title">
-      <div><p>OPERAÇÕES DE REVISÃO</p><h1 id="dashboard-title">Painel de controle</h1><span>Estado seguro das conexões, da pipeline oficial e das execuções recentes.</span></div>
-      <div className={`${styles.service} ${states.health === "ready" ? styles.ok : styles.alert}`} role="status">
-        <Activity size={16} /> {states.health === "loading" ? "Verificando serviço" : states.health === "ready" ? "Serviço disponível" : "Serviço indisponível"}
+      <section aria-labelledby="connections-title">
+        <div className={styles.sectionHeading}>
+          <div>
+            <p>CONEXÕES</p>
+            <h2 id="connections-title">Saúde operacional</h2>
+          </div>
+          {user?.role === "admin" && (
+            <Link href="/integrations">
+              Gerenciar <ArrowUpRight size={15} />
+            </Link>
+          )}
+        </div>
+        {states.connections === "error" ? (
+          <PanelError text="Não foi possível carregar o estado das conexões." />
+        ) : (
+          <div className={styles.connectionGrid}>
+            <ConnectionCard
+              icon={<PlugZap size={19} />}
+              label="Gitea"
+              items={gitea}
+              ready={connectionReady(gitea)}
+              loading={states.connections === "loading"}
+            />
+            <ConnectionCard
+              icon={<Network size={19} />}
+              label="Modelos"
+              items={models}
+              ready={connectionReady(models)}
+              loading={states.connections === "loading"}
+            />
+          </div>
+        )}
+      </section>
+
+      <div className={styles.mainGrid}>
+        <section className={styles.pipeline} aria-labelledby="pipeline-title">
+          <div className={styles.sectionHeading}>
+            <div>
+              <p>PIPELINE OFICIAL</p>
+              <h2 id="pipeline-title">Revisão Gitea de PR</h2>
+            </div>
+            <Link href="/pipelines">
+              Ver versões <ArrowUpRight size={15} />
+            </Link>
+          </div>
+          {states.workflows === "error" ? (
+            <PanelError text="Não foi possível carregar a pipeline oficial." />
+          ) : states.workflows === "loading" ? (
+            <p className={styles.muted} role="status">
+              Carregando definição publicada…
+            </p>
+          ) : !official ? (
+            <p className={styles.empty}>
+              Nenhuma versão oficial publicada foi encontrada.
+            </p>
+          ) : (
+            <>
+              <div className={styles.pipelineStatus}>
+                <span
+                  className={
+                    pipeline.readiness === "Pronta para revisão"
+                      ? styles.ok
+                      : styles.warning
+                  }
+                >
+                  <CheckCircle2 size={15} /> {pipeline.readiness}
+                </span>
+                <span className={pipeline.safe ? styles.ok : styles.warning}>
+                  <ShieldCheck size={15} />{" "}
+                  {pipeline.safe
+                    ? "Publicação conservadora"
+                    : "Política requer revisão"}
+                </span>
+              </div>
+              <ol
+                className={styles.steps}
+                aria-label="Etapas da definição publicada"
+              >
+                {pipeline.steps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+              <p className={styles.note}>
+                A definição publicada é exibida sem configurações ou
+                credenciais.
+              </p>
+            </>
+          )}
+        </section>
+
+        <section
+          className={styles.executions}
+          aria-labelledby="executions-title"
+        >
+          <div className={styles.sectionHeading}>
+            <div>
+              <p>ATIVIDADE</p>
+              <h2 id="executions-title">Execuções recentes</h2>
+            </div>
+          </div>
+          {states.executions === "error" ? (
+            <PanelError text="Não foi possível carregar as execuções." />
+          ) : states.executions === "loading" ? (
+            <p className={styles.muted} role="status">
+              Carregando execuções…
+            </p>
+          ) : executions.length === 0 ? (
+            <p className={styles.empty}>Ainda não há execuções registradas.</p>
+          ) : (
+            <ul className={styles.executionList}>
+              {executions.map((execution) => (
+                <li key={execution.execution_id}>
+                  <span
+                    className={`${styles.status} ${styles[execution.status] ?? ""}`}
+                    aria-label={`Status: ${execution.status}`}
+                  >
+                    {execution.status}
+                  </span>
+                  <div>
+                    <strong>{execution.workflow.name}</strong>
+                    <small>
+                      {execution.review ? (
+                        <>
+                          <GitPullRequest size={13} /> {execution.review.owner}/
+                          {execution.review.repo} #
+                          {execution.review.pull_request}
+                        </>
+                      ) : (
+                        "Contexto de PR não configurado"
+                      )}
+                    </small>
+                  </div>
+                  <time dateTime={execution.started_at}>
+                    <Clock3 size={13} /> {formatDate(execution.started_at)}
+                  </time>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </div>
-    </section>
-
-    <section aria-labelledby="connections-title">
-      <div className={styles.sectionHeading}><div><p>CONEXÕES</p><h2 id="connections-title">Saúde operacional</h2></div>{user?.role === "admin" && <Link href="/integrations">Gerenciar <ArrowUpRight size={15} /></Link>}</div>
-      {states.connections === "error" ? <PanelError text="Não foi possível carregar o estado das conexões." /> : <div className={styles.connectionGrid}>
-        <ConnectionCard icon={<PlugZap size={19} />} label="Gitea" items={gitea} ready={connectionReady(gitea)} loading={states.connections === "loading"} />
-        <ConnectionCard icon={<Network size={19} />} label="Modelos" items={models} ready={connectionReady(models)} loading={states.connections === "loading"} />
-      </div>}
-    </section>
-
-    <div className={styles.mainGrid}>
-      <section className={styles.pipeline} aria-labelledby="pipeline-title">
-        <div className={styles.sectionHeading}><div><p>PIPELINE OFICIAL</p><h2 id="pipeline-title">Revisão Gitea de PR</h2></div><Link href="/pipelines">Ver versões <ArrowUpRight size={15} /></Link></div>
-        {states.workflows === "error" ? <PanelError text="Não foi possível carregar a pipeline oficial." /> : states.workflows === "loading" ? <p className={styles.muted} role="status">Carregando definição publicada…</p> : !official ? <p className={styles.empty}>Nenhuma versão oficial publicada foi encontrada.</p> : <>
-          <div className={styles.pipelineStatus}><span className={pipeline.readiness === "Pronta para revisão" ? styles.ok : styles.warning}><CheckCircle2 size={15} /> {pipeline.readiness}</span><span className={pipeline.safe ? styles.ok : styles.warning}><ShieldCheck size={15} /> {pipeline.safe ? "Publicação conservadora" : "Política requer revisão"}</span></div>
-          <ol className={styles.steps} aria-label="Etapas da definição publicada">{pipeline.steps.map((step) => <li key={step}>{step}</li>)}</ol>
-          <p className={styles.note}>A definição publicada é exibida sem configurações ou credenciais.</p>
-        </>}
-      </section>
-
-      <section className={styles.executions} aria-labelledby="executions-title">
-        <div className={styles.sectionHeading}><div><p>ATIVIDADE</p><h2 id="executions-title">Execuções recentes</h2></div></div>
-        {states.executions === "error" ? <PanelError text="Não foi possível carregar as execuções." /> : states.executions === "loading" ? <p className={styles.muted} role="status">Carregando execuções…</p> : executions.length === 0 ? <p className={styles.empty}>Ainda não há execuções registradas.</p> : <ul className={styles.executionList}>{executions.map((execution) => <li key={execution.execution_id}>
-          <span className={`${styles.status} ${styles[execution.status] ?? ""}`} aria-label={`Status: ${execution.status}`}>{execution.status}</span>
-          <div><strong>{execution.workflow.name}</strong><small>{execution.review ? <><GitPullRequest size={13} /> {execution.review.owner}/{execution.review.repo} #{execution.review.pull_request}</> : "Contexto de PR não configurado"}</small></div>
-          <time dateTime={execution.started_at}><Clock3 size={13} /> {formatDate(execution.started_at)}</time>
-        </li>)}</ul>}
-      </section>
-    </div>
-  </main>;
+    </AppShell>
+  );
 }
 
-function ConnectionCard({ icon, label, items, ready, loading }: { icon: React.ReactNode; label: string; items: Integration[]; ready: boolean; loading: boolean }) {
-  return <article className={styles.connectionCard}><div className={styles.cardIcon}>{icon}</div><div><p>{label}</p><strong>{loading ? "Carregando" : ready ? "Pronta" : "Atenção necessária"}</strong><small>{loading ? "Consultando estado seguro…" : items.length ? `${items.length} conexão(ões) cadastrada(s)` : "Nenhuma conexão cadastrada"}</small></div><span className={ready ? styles.ok : styles.warning}>{ready ? <CheckCircle2 size={15} /> : <CircleAlert size={15} />}</span></article>;
+function ConnectionCard({
+  icon,
+  label,
+  items,
+  ready,
+  loading,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  items: Integration[];
+  ready: boolean;
+  loading: boolean;
+}) {
+  return (
+    <article className={styles.connectionCard}>
+      <div className={styles.cardIcon}>{icon}</div>
+      <div>
+        <p>{label}</p>
+        <strong>
+          {loading ? "Carregando" : ready ? "Pronta" : "Atenção necessária"}
+        </strong>
+        <small>
+          {loading
+            ? "Consultando estado seguro…"
+            : items.length
+              ? `${items.length} conexão(ões) cadastrada(s)`
+              : "Nenhuma conexão cadastrada"}
+        </small>
+      </div>
+      <span className={ready ? styles.ok : styles.warning}>
+        {ready ? <CheckCircle2 size={15} /> : <CircleAlert size={15} />}
+      </span>
+    </article>
+  );
 }
 
-function PanelError({ text }: { text: string }) { return <p className={styles.error} role="alert">{text}</p>; }
+function PanelError({ text }: { text: string }) {
+  return (
+    <p className={styles.error} role="alert">
+      {text}
+    </p>
+  );
+}
 
 function formatDate(value: string) {
-  const date = new Date(value.replace(" ", "T") + (value.endsWith("Z") ? "" : "Z"));
-  return Number.isNaN(date.valueOf()) ? "Data indisponível" : new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(date);
+  const date = new Date(
+    value.replace(" ", "T") + (value.endsWith("Z") ? "" : "Z"),
+  );
+  return Number.isNaN(date.valueOf())
+    ? "Data indisponível"
+    : new Intl.DateTimeFormat("pt-BR", {
+        dateStyle: "short",
+        timeStyle: "short",
+      }).format(date);
 }
