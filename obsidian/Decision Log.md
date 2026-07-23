@@ -295,3 +295,15 @@ resource cards add selection counts and selected/hover feedback while preserving
 keyboard, focus, disabled, screen-reader, and reduced-motion behavior. Viewer
 authorization remains read-only independently of visual presentation. See
 [[Architecture]] and [[Feature Map]].
+
+## 2026-07-23: Persisted live progress and safe review telemetry
+
+Node execution start and completion are persisted through an observer boundary
+so polling can represent the active card without exposing its payload. Final
+execution persistence replaces progress rows to avoid duplicates. The Studio
+animates only an edge whose target is running and uses restrained status badges,
+borders, and reduced-motion-safe emphasis. Model adapters return only model and
+token counters; publication combines available counters with elapsed time and a
+deterministic Portuguese finding summary. Missing telemetry is omitted, never
+invented. Manual-trigger UX is intentionally deferred until its product model is
+agreed with the user. See [[Architecture]] and [[Feature Map]].

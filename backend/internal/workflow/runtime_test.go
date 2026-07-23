@@ -42,6 +42,29 @@ func (c *memoryCache) Delete(_ context.Context, key string) error {
 	return nil
 }
 
+func TestRuntimeObservesRunningAndTerminalNodeProgress(t *testing.T) {
+	definition := Definition{Key: "progress", Name: "Progress", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start"},
+		{Key: "transform", Type: "transform", Name: "Transform"},
+	}, Edges: []Edge{{Key: "event", FromNode: "start", FromPort: "event", ToNode: "transform", ToPort: "input"}}}
+	observed := []NodeRun{}
+	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), map[string]any{"value": 1}, Adapters{Progress: ProgressObserverFunc(func(_ context.Context, run NodeRun) error {
+		observed = append(observed, run)
+		return nil
+	})})
+	if err != nil || report.Status != "completed" {
+		t.Fatalf("run = %#v, %v", report, err)
+	}
+	if len(observed) != 4 {
+		t.Fatalf("observed = %#v", observed)
+	}
+	for index, want := range []struct{ node, status, scope string }{{"start", "running", "root"}, {"start", "completed", "root"}, {"transform", "running", "root"}, {"transform", "completed", "root"}} {
+		if observed[index].NodeKey != want.node || observed[index].Status != want.status || observed[index].ScopeKey != want.scope {
+			t.Fatalf("progress %d = %#v; want %#v", index, observed[index], want)
+		}
+	}
+}
+
 const workflowTestEncryptionKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
 func testSecrets(t *testing.T) *integration.EncryptedSecrets {

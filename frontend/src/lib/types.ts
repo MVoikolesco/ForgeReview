@@ -88,7 +88,7 @@ export type ExecutionReport = {
   status: string;
   runs: Array<{
     node_key: string;
-    status: "completed" | "failed" | "partial";
+    status: "running" | "completed" | "failed" | "partial";
     error?: string;
   }>;
 };

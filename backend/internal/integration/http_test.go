@@ -90,8 +90,8 @@ func TestHTTPChatClientRequestContracts(t *testing.T) {
 		name, kind, path, response string
 		client                     ChatClient
 	}{
-		{"openai", TypeOpenAI, "/v1/chat/completions", `{"choices":[{"message":{"content":"openai response"}}]}`, HTTPOpenAIClient{}},
-		{"ollama", TypeOllama, "/api/chat", `{"message":{"content":"ollama response"}}`, HTTPOllamaClient{}},
+		{"openai", TypeOpenAI, "/v1/chat/completions", `{"model":"gpt-review","choices":[{"message":{"content":"openai response"}}],"usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20}}`, HTTPOpenAIClient{}},
+		{"ollama", TypeOllama, "/api/chat", `{"model":"qwen-review","message":{"content":"ollama response"},"prompt_eval_count":7,"eval_count":5}`, HTTPOllamaClient{}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -144,8 +144,8 @@ func TestHTTPChatClientRequestContracts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("chat: %v", err)
 			}
-			if response != test.name+" response" {
-				t.Fatalf("response = %q", response)
+			if response.Content != test.name+" response" || response.Model == "" || response.Usage.Total <= 0 {
+				t.Fatalf("response = %#v", response)
 			}
 		})
 	}

@@ -295,58 +295,71 @@ func (c HTTPGiteaClient) client() *http.Client {
 	return http.DefaultClient
 }
 
-func (c HTTPOpenAIClient) Chat(ctx context.Context, integration Integration, secret, prompt string) (string, error) {
+func (c HTTPOpenAIClient) Chat(ctx context.Context, integration Integration, secret, prompt string) (ChatResult, error) {
 	if integration.Type != TypeOpenAI {
-		return "", fmt.Errorf("integration %q is not an OpenAI-compatible integration", integration.Key)
+		return ChatResult{}, fmt.Errorf("integration %q is not an OpenAI-compatible integration", integration.Key)
 	}
 	config, err := integration.ConfigValues()
 	if err != nil {
-		return "", err
+		return ChatResult{}, err
 	}
 	payload := map[string]any{"model": config["model"], "messages": []map[string]string{{"role": "user", "content": prompt}}}
 	if maxTokens, parseErr := strconv.Atoi(config["max_tokens"]); parseErr == nil && maxTokens > 0 {
 		payload["max_tokens"] = maxTokens
 	}
 	var response struct {
+		Model   string `json:"model"`
 		Choices []struct {
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
 	}
 	if err = postJSON(ctx, c.Client, openAIEndpoint(config["base_url"], "chat/completions"), payload, "Bearer "+secret, &response); err != nil {
-		return "", fmt.Errorf("OpenAI-compatible chat: %w", err)
+		return ChatResult{}, fmt.Errorf("OpenAI-compatible chat: %w", err)
 	}
 	if len(response.Choices) == 0 || response.Choices[0].Message.Content == "" {
-		return "", fmt.Errorf("OpenAI-compatible chat returned no message")
+		return ChatResult{}, fmt.Errorf("OpenAI-compatible chat returned no message")
 	}
-	return response.Choices[0].Message.Content, nil
+	return ChatResult{Content: response.Choices[0].Message.Content, Model: response.Model, Usage: TokenUsage{Prompt: response.Usage.PromptTokens, Completion: response.Usage.CompletionTokens, Total: response.Usage.TotalTokens}}, nil
 }
 
-func (c HTTPOllamaClient) Chat(ctx context.Context, integration Integration, secret, prompt string) (string, error) {
+func (c HTTPOllamaClient) Chat(ctx context.Context, integration Integration, secret, prompt string) (ChatResult, error) {
 	if integration.Type != TypeOllama {
-		return "", fmt.Errorf("integration %q is not an Ollama integration", integration.Key)
+		return ChatResult{}, fmt.Errorf("integration %q is not an Ollama integration", integration.Key)
 	}
 	config, err := integration.ConfigValues()
 	if err != nil {
-		return "", err
+		return ChatResult{}, err
 	}
 	payload := map[string]any{"model": config["model"], "messages": []map[string]string{{"role": "user", "content": prompt}}, "stream": false}
 	if maxTokens, parseErr := strconv.Atoi(config["max_tokens"]); parseErr == nil && maxTokens > 0 {
 		payload["options"] = map[string]any{"num_predict": maxTokens}
 	}
 	var response struct {
+		Model   string `json:"model"`
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
+		PromptEvalCount int `json:"prompt_eval_count"`
+		EvalCount       int `json:"eval_count"`
 	}
 	if err = postJSON(ctx, c.Client, strings.TrimRight(config["base_url"], "/")+"/api/chat", payload, "Bearer "+secret, &response); err != nil {
-		return "", fmt.Errorf("Ollama chat: %w", err)
+		return ChatResult{}, fmt.Errorf("Ollama chat: %w", err)
 	}
 	if response.Message.Content == "" {
-		return "", fmt.Errorf("Ollama chat returned no message")
+		return ChatResult{}, fmt.Errorf("Ollama chat returned no message")
 	}
-	return response.Message.Content, nil
+	usage := TokenUsage{Prompt: response.PromptEvalCount, Completion: response.EvalCount}
+	if usage.Prompt > 0 || usage.Completion > 0 {
+		usage.Total = usage.Prompt + usage.Completion
+	}
+	return ChatResult{Content: response.Message.Content, Model: response.Model, Usage: usage}, nil
 }
 
 func postJSON(ctx context.Context, client *http.Client, endpoint string, payload any, authorization string, target any) error {

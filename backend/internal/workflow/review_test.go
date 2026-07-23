@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"forgereview/backend/internal/integration"
@@ -344,20 +345,34 @@ func TestPublishEventUsesSafeSeverityDefaults(t *testing.T) {
 	}
 }
 
+func TestFormattedReviewBodyUsesSafeOptionalTelemetryInPortuguese(t *testing.T) {
+	review := FormattedReview{Summary: ReviewSummary{Total: 2, High: 1, Medium: 1}}
+	body := formattedReviewBody(review, "COMMENT", TelemetrySnapshot{ElapsedMS: 43501, Models: []string{"gpt-review"}, Prompt: 12, Completion: 8, Total: 20})
+	for _, expected := range []string{"> status: comentado", "> tempo decorrido: 43.501s", "> modelo: gpt-review", "> tokens: 20 (prompt: 12, completion: 8)", "Foram identificados 2 achados relevantes", "Review automatizada concluída."} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("body missing %q: %s", expected, body)
+		}
+	}
+	withoutUnknowns := formattedReviewBody(FormattedReview{}, "COMMENT", TelemetrySnapshot{ElapsedMS: 1})
+	if strings.Contains(withoutUnknowns, "> modelo:") || strings.Contains(withoutUnknowns, "> tokens:") {
+		t.Fatalf("unknown telemetry was invented: %s", withoutUnknowns)
+	}
+}
+
 type responseModel string
 
-func (model responseModel) Chat(context.Context, integration.Integration, string, string) (string, error) {
-	return string(model), nil
+func (model responseModel) Chat(context.Context, integration.Integration, string, string) (integration.ChatResult, error) {
+	return integration.ChatResult{Content: string(model)}, nil
 }
 
 type responseModels map[string]string
 
-func (models responseModels) Chat(_ context.Context, _ integration.Integration, _ string, prompt string) (string, error) {
+func (models responseModels) Chat(_ context.Context, _ integration.Integration, _ string, prompt string) (integration.ChatResult, error) {
 	response, ok := models[prompt]
 	if !ok {
-		return "", errors.New("unexpected prompt")
+		return integration.ChatResult{}, errors.New("unexpected prompt")
 	}
-	return response, nil
+	return integration.ChatResult{Content: response}, nil
 }
 
 type sequentialModel struct {
@@ -365,13 +380,13 @@ type sequentialModel struct {
 	calls     int
 }
 
-func (model *sequentialModel) Chat(context.Context, integration.Integration, string, string) (string, error) {
+func (model *sequentialModel) Chat(context.Context, integration.Integration, string, string) (integration.ChatResult, error) {
 	if model.calls >= len(model.responses) {
-		return "", errors.New("unexpected model call")
+		return integration.ChatResult{}, errors.New("unexpected model call")
 	}
 	response := model.responses[model.calls]
 	model.calls++
-	return response, nil
+	return integration.ChatResult{Content: response}, nil
 }
 
 type recordingPublisher struct {

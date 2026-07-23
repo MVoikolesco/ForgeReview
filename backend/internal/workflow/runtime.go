@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"forgereview/backend/internal/integration"
@@ -44,6 +45,107 @@ type RunReport struct {
 	Runs   []NodeRun `json:"runs"`
 }
 
+// ProgressObserver is the minimal runtime boundary for durable live feedback.
+// A node is observed once as running and again with its terminal state.
+type ProgressObserver interface {
+	ObserveNode(context.Context, NodeRun) error
+}
+
+type ProgressObserverFunc func(context.Context, NodeRun) error
+
+func (observe ProgressObserverFunc) ObserveNode(ctx context.Context, run NodeRun) error {
+	return observe(ctx, run)
+}
+
+// ExecutionTelemetry accumulates only safe provider accounting fields. It must
+// never contain prompts, responses, provider payloads, or credentials.
+type ExecutionTelemetry struct {
+	mu         sync.Mutex
+	startedAt  time.Time
+	models     []string
+	prompt     int
+	completion int
+	total      int
+	lastModel  string
+	lastUsage  integration.TokenUsage
+}
+
+type TelemetrySnapshot struct {
+	ElapsedMS  int64
+	Models     []string
+	Prompt     int
+	Completion int
+	Total      int
+}
+
+func NewExecutionTelemetry(startedAt time.Time) *ExecutionTelemetry {
+	return &ExecutionTelemetry{startedAt: startedAt}
+}
+
+func (telemetry *ExecutionTelemetry) Record(result integration.ChatResult) {
+	if telemetry == nil {
+		return
+	}
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	if model := strings.TrimSpace(result.Model); model != "" {
+		seen := false
+		for _, existing := range telemetry.models {
+			seen = seen || existing == model
+		}
+		if !seen {
+			telemetry.models = append(telemetry.models, model)
+		}
+	}
+	telemetry.prompt += positiveInt(result.Usage.Prompt)
+	telemetry.completion += positiveInt(result.Usage.Completion)
+	telemetry.total += positiveInt(result.Usage.Total)
+	telemetry.lastModel = strings.TrimSpace(result.Model)
+	telemetry.lastUsage = result.Usage
+}
+
+func (telemetry *ExecutionTelemetry) LastCallMetadata() map[string]any {
+	if telemetry == nil {
+		return nil
+	}
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	metadata := map[string]any{}
+	if telemetry.lastModel != "" {
+		metadata["model"] = telemetry.lastModel
+	}
+	if telemetry.lastUsage.Prompt > 0 {
+		metadata["prompt_tokens"] = telemetry.lastUsage.Prompt
+	}
+	if telemetry.lastUsage.Completion > 0 {
+		metadata["completion_tokens"] = telemetry.lastUsage.Completion
+	}
+	if telemetry.lastUsage.Total > 0 {
+		metadata["total_tokens"] = telemetry.lastUsage.Total
+	}
+	return metadata
+}
+
+func (telemetry *ExecutionTelemetry) Snapshot() TelemetrySnapshot {
+	if telemetry == nil {
+		return TelemetrySnapshot{}
+	}
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	total := telemetry.total
+	if total == 0 && (telemetry.prompt > 0 || telemetry.completion > 0) {
+		total = telemetry.prompt + telemetry.completion
+	}
+	return TelemetrySnapshot{ElapsedMS: time.Since(telemetry.startedAt).Milliseconds(), Models: append([]string(nil), telemetry.models...), Prompt: telemetry.prompt, Completion: telemetry.completion, Total: total}
+}
+
+func positiveInt(value int) int {
+	if value > 0 {
+		return value
+	}
+	return 0
+}
+
 // Execution is the worker-only execution payload. Its input is not included in
 // the public execution-status response.
 type Execution struct {
@@ -67,6 +169,8 @@ type Adapters struct {
 	Execution     ExecutionContext
 	Dispatcher    ExecutionDispatcher
 	Cache         Cache
+	Progress      ProgressObserver
+	Telemetry     *ExecutionTelemetry
 }
 
 // ExecutionContext identifies the durable execution currently being run.
@@ -150,6 +254,9 @@ func RunFromTriggerWithAdapters(ctx context.Context, definition Definition, cata
 			return RunReport{}, fmt.Errorf("selected trigger %q does not exist", triggerNodeKey)
 		}
 		active = reachableNodes(definition, triggerNodeKey)
+	}
+	if adapters.Telemetry == nil {
+		adapters.Telemetry = NewExecutionTelemetry(time.Now())
 	}
 	runner := newScopedRunner(definition, catalog, input, adapters, active)
 	ready := make([]nodeScope, 0)
@@ -328,7 +435,10 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 	r.run[current] = true
 	started := time.Now()
 	inputs := values(inbox)
-	nodeRun := NodeRun{NodeKey: node.Key, ScopeKey: current.ScopeKey, Status: "completed", Inputs: inputs}
+	nodeRun := NodeRun{NodeKey: node.Key, ScopeKey: current.ScopeKey, Status: "running", Inputs: inputs}
+	if err := r.observe(ctx, nodeRun); err != nil {
+		return fmt.Errorf("persist node progress: %w", err)
+	}
 	var outputs map[string]any
 	var err error
 	if node.Type == "loop" {
@@ -343,12 +453,16 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 		outputs, err = execute(ctx, node, inputs, r.input, r.adapters, current.ScopeKey)
 		if node.Type == "model" && err == nil {
 			nodeRun.Metadata = map[string]any{"attempt_count": 1, "provider_calls": []any{map[string]any{"attempt": 1, "status": "completed"}}}
+			for key, value := range r.adapters.Telemetry.LastCallMetadata() {
+				nodeRun.Metadata[key] = value
+			}
 		}
 	}
 	nodeRun.DurationMS = time.Since(started).Milliseconds()
 	if err != nil {
-		return r.handleFailure(node, current, nodeRun, ready)
+		return r.handleFailure(ctx, node, current, nodeRun, ready)
 	}
+	nodeRun.Status = "completed"
 	card, _ := r.catalog.Get(node.Type)
 	for _, port := range card.Outputs {
 		value, present := outputs[port.Key]
@@ -369,10 +483,17 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 		}
 	}
 	r.report.Runs = append(r.report.Runs, nodeRun)
-	return nil
+	return r.observe(ctx, nodeRun)
 }
 
-func (r *scopedRunner) handleFailure(node Node, current nodeScope, nodeRun NodeRun, ready *[]nodeScope) error {
+func (r *scopedRunner) observe(ctx context.Context, run NodeRun) error {
+	if r.adapters.Progress == nil {
+		return nil
+	}
+	return r.adapters.Progress.ObserveNode(ctx, run)
+}
+
+func (r *scopedRunner) handleFailure(ctx context.Context, node Node, current nodeScope, nodeRun NodeRun, ready *[]nodeScope) error {
 	policy := "fail"
 	if node.Type != "error_control" {
 		policy = errorPolicyForNode(node)
@@ -390,12 +511,12 @@ func (r *scopedRunner) handleFailure(node Node, current nodeScope, nodeRun NodeR
 		nodeRun.Status = "failed"
 		nodeRun.Metadata["error_action"] = "continued"
 		r.report.Runs = append(r.report.Runs, nodeRun)
-		return nil
+		return r.observe(ctx, nodeRun)
 	case "partial":
 		nodeRun.Status = "partial"
 		nodeRun.Metadata["error_action"] = "partial"
 		r.report.Runs = append(r.report.Runs, nodeRun)
-		return nil
+		return r.observe(ctx, nodeRun)
 	case "route":
 		nodeRun.Status = "failed"
 		nodeRun.Metadata["error_action"] = "routed"
@@ -407,10 +528,13 @@ func (r *scopedRunner) handleFailure(node Node, current nodeScope, nodeRun NodeR
 			}
 		}
 		r.report.Runs = append(r.report.Runs, nodeRun)
-		return nil
+		return r.observe(ctx, nodeRun)
 	default:
 		nodeRun.Status = "failed"
 		r.report.Runs = append(r.report.Runs, nodeRun)
+		if err := r.observe(ctx, nodeRun); err != nil {
+			return fmt.Errorf("persist node progress: %w", err)
+		}
 		return fmt.Errorf("card %q execution failed", node.Key)
 	}
 }
@@ -517,7 +641,7 @@ func (r *scopedRunner) runValidate(ctx context.Context, node Node, current nodeS
 			return nil, metadata, err
 		}
 		providerCalls = append(providerCalls, call)
-		value, portKey = validateResponse([]any{response}, inputs["files"], node.Config)
+		value, portKey = validateResponse([]any{response.Content}, inputs["files"], node.Config)
 		validationAttempts = append(validationAttempts, map[string]any{"attempt": retry + 1, "status": portKey})
 		metadata["attempt_count"] = len(validationAttempts)
 		metadata["validation_attempts"] = validationAttempts
@@ -863,7 +987,7 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"response": response}, nil
+		return map[string]any{"response": response.Content}, nil
 	default:
 		return nil, fmt.Errorf("card type %q has no configured executor", node.Type)
 	}
@@ -911,10 +1035,10 @@ func executeCache(ctx context.Context, node Node, inputs map[string][]any, adapt
 	}
 }
 
-func modelResponse(ctx context.Context, node Node, prompt string, adapters Adapters) (string, error) {
+func modelResponse(ctx context.Context, node Node, prompt string, adapters Adapters) (integration.ChatResult, error) {
 	item, err := configuredModelIntegration(ctx, node, adapters)
 	if err != nil {
-		return "", err
+		return integration.ChatResult{}, err
 	}
 	var client integration.ChatClient
 	switch item.Type {
@@ -923,32 +1047,33 @@ func modelResponse(ctx context.Context, node Node, prompt string, adapters Adapt
 	case integration.TypeOllama:
 		client = adapters.Ollama
 	default:
-		return "", fmt.Errorf("model card %q integration %q must be type %q or %q", node.Key, item.Key, integration.TypeOpenAI, integration.TypeOllama)
+		return integration.ChatResult{}, fmt.Errorf("model card %q integration %q must be type %q or %q", node.Key, item.Key, integration.TypeOpenAI, integration.TypeOllama)
 	}
 	if client == nil {
-		return "", fmt.Errorf("model card %q requires an injected %s adapter", node.Key, item.Type)
+		return integration.ChatResult{}, fmt.Errorf("model card %q requires an injected %s adapter", node.Key, item.Type)
 	}
 	secret, err := resolveSecret(item, adapters, "model", node.Key)
 	if err != nil {
-		return "", err
+		return integration.ChatResult{}, err
 	}
 	settings, err := modelSettingsFor(node)
 	if err != nil {
-		return "", err
+		return integration.ChatResult{}, err
 	}
 	config, err := item.ConfigValues()
 	if err != nil {
-		return "", err
+		return integration.ChatResult{}, err
 	}
 	config["max_tokens"] = strconv.Itoa(settings.MaxTokens)
 	item.Config, err = json.Marshal(config)
 	if err != nil {
-		return "", err
+		return integration.ChatResult{}, err
 	}
 	response, err := client.Chat(ctx, item, secret, prompt)
 	if err != nil {
-		return "", fmt.Errorf("model card %q: %w", node.Key, err)
+		return integration.ChatResult{}, fmt.Errorf("model card %q: %w", node.Key, err)
 	}
+	adapters.Telemetry.Record(response)
 	return response, nil
 }
 
@@ -1022,7 +1147,8 @@ func publishReview(ctx context.Context, node Node, inputs map[string][]any, adap
 		_ = adapters.Publications.RetryPublication(ctx, key, err)
 		return nil, err
 	}
-	receipt, err := adapters.GiteaWriter.PublishReview(ctx, item, secret, integration.GiteaReviewRequest{Owner: request.Owner, Repo: request.Repo, Number: request.Number, Body: formattedReviewBody(formatted), Event: publishEvent(formatted, node.Config), Comments: giteaReviewComments(formatted.Observations), IdempotencyKey: key})
+	event := publishEvent(formatted, node.Config)
+	receipt, err := adapters.GiteaWriter.PublishReview(ctx, item, secret, integration.GiteaReviewRequest{Owner: request.Owner, Repo: request.Repo, Number: request.Number, Body: formattedReviewBody(formatted, event, adapters.Telemetry.Snapshot()), Event: event, Comments: giteaReviewComments(formatted.Observations), IdempotencyKey: key})
 	if err != nil {
 		_ = adapters.Publications.RetryPublication(ctx, key, err)
 		return nil, fmt.Errorf("publish card %q: %w", node.Key, err)
@@ -1041,11 +1167,37 @@ func publicationKey(execution ExecutionContext, nodeKey, scopeKey string) string
 	return fmt.Sprintf("forgereview:publication:%d:%d:%s:%s", execution.ID, execution.VersionID, nodeKey, scopeKey)
 }
 
-func formattedReviewBody(review FormattedReview) string {
-	lines := []string{fmt.Sprintf("## ForgeReview: %d finding(s)", review.Summary.Total), fmt.Sprintf("Status: %s", review.Summary.Status)}
-	for _, finding := range review.Findings {
-		lines = append(lines, fmt.Sprintf("- **%s** `%s:%d` — %s", strings.ToUpper(finding.Severity), finding.Path, finding.Line, finding.Comment))
+func formattedReviewBody(review FormattedReview, event string, telemetry TelemetrySnapshot) string {
+	status := "comentado"
+	if event == "REQUEST_CHANGES" {
+		status = "alterações solicitadas"
+	} else if review.Summary.Total == 0 {
+		status = "sem achados"
 	}
+	lines := []string{"> status: " + status}
+	if telemetry.ElapsedMS >= 0 {
+		lines = append(lines, fmt.Sprintf("> tempo decorrido: %.3fs", float64(telemetry.ElapsedMS)/1000))
+	}
+	if len(telemetry.Models) > 0 {
+		lines = append(lines, "> modelo: "+strings.Join(telemetry.Models, ", "))
+	}
+	if telemetry.Total > 0 {
+		if telemetry.Prompt > 0 || telemetry.Completion > 0 {
+			lines = append(lines, fmt.Sprintf("> tokens: %d (prompt: %d, completion: %d)", telemetry.Total, telemetry.Prompt, telemetry.Completion))
+		} else {
+			lines = append(lines, fmt.Sprintf("> tokens: %d", telemetry.Total))
+		}
+	}
+	lines = append(lines, "")
+	switch review.Summary.Total {
+	case 0:
+		lines = append(lines, "Nenhum problema relevante foi encontrado.")
+	case 1:
+		lines = append(lines, "Foi identificado 1 achado relevante; o comentário inline indica o ponto revisado.")
+	default:
+		lines = append(lines, fmt.Sprintf("Foram identificados %d achados relevantes; os comentários inline indicam os pontos revisados.", review.Summary.Total))
+	}
+	lines = append(lines, "", "Review automatizada concluída.")
 	return strings.Join(lines, "\n")
 }
 

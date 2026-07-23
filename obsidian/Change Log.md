@@ -2,6 +2,12 @@
 
 ## 2026-07-23
 
+- Added persisted live node progress, intermediate Studio polling feedback,
+  active-path edge animation, and sober card status treatments. Native Gitea
+  review bodies now include status, elapsed time, model, optional provider token
+  usage, a meaningful finding summary, completion text, and the idempotency
+  marker. Manual-trigger UX was recorded as pending product modelling. See
+  [[Architecture]] and [[Decision Log]].
 - Replaced native checkbox presentation with a shared accessible switch for all
   Inspector booleans and repository/model selection. Resource choices now use
   provider-identified selectable cards and selection counts, and viewer access

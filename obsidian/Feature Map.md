@@ -117,6 +117,14 @@
 - Safe execution summaries: `GET /api/executions?limit=10` exposes bounded
   status/timestamp/workflow metadata and canonical runtime PR context only;
   it excludes node data, errors, execution inputs, and secret material.
+- Live execution feedback: SQLite stores safe running/terminal node progress;
+  Studio applies intermediate polling reports, animates only edges entering the
+  active card, and distinguishes running, completed, partial, and failed cards
+  with restrained badges and borders.
+- Informative Gitea reviews: publication includes status, elapsed time, model,
+  optional provider-reported token usage, deterministic finding summary, final
+  completion text, and the existing idempotency marker. Unknown telemetry is
+  omitted. The final manual-trigger experience remains pending user modelling.
 - Accessible selection controls: a shared polished switch replaces native
   checkbox presentation across Inspector booleans and repository/model
   multi-selection. Resource rows show provider identity, selection count,

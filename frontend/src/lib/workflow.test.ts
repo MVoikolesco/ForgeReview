@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { normalizeCard } from "./api";
 import {
+  applyExecutionReport,
   canConnect,
   canPublishVersion,
+  edgeIsActivelyPropagating,
   hasErrorRoute,
   hydrateDefinition,
   isManualTrigger,
@@ -22,6 +24,20 @@ import {
   workflowVersionStatusLabel,
 } from "./workflow";
 import { publishedOfficialVersion, reviewPipelineState } from "./dashboard";
+
+test("execution reports update card state and animate only edges entering running cards", () => {
+  const nodes = applyExecutionReport(starterNodes, {
+    status: "running",
+    runs: [
+      { node_key: "trigger", status: "completed" },
+      { node_key: "transform", status: "running" },
+    ],
+  });
+  assert.equal(nodes.find((node) => node.id === "trigger")?.data.status, "completed");
+  assert.equal(nodes.find((node) => node.id === "transform")?.data.status, "running");
+  assert.equal(edgeIsActivelyPropagating(starterEdges[0], nodes), true);
+  assert.equal(edgeIsActivelyPropagating(starterEdges[1], nodes), false);
+});
 
 test("saved definitions hydrate canvas cards, edges, and configuration", () => {
   const hydrated = hydrateDefinition(
@@ -82,7 +98,7 @@ test("saved definitions hydrate canvas cards, edges, and configuration", () => {
     sourceHandle: "out-event",
     target: "saved-trigger",
     targetHandle: "in-event",
-    animated: true,
+    animated: false,
   });
 });
 

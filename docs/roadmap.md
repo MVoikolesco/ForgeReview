@@ -195,6 +195,8 @@ docs/      Arquitetura, auditoria e este roadmap
 
 ### 3. Execução durável e observabilidade
 
+- Modelar com o usuário a experiência definitiva do disparo manual antes de
+  ampliar esse modo; o fluxo atual permanece apenas como apoio técnico.
 - SSE ou WebSocket para atualizar execução no canvas sem polling.
 - Cancelamento, reprocessamento de card/grupo e retomada segura.
 - Paralelismo de loop acima de `concurrency: 1`, com limites por pipeline/card.

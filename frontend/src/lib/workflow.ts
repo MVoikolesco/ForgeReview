@@ -7,6 +7,7 @@ import type {
   WorkflowMetadata,
   WorkflowExportEnvelope,
   WorkflowVersionStatus,
+  ExecutionReport,
 } from "./types";
 
 export const categoryAccent = (category: string) =>
@@ -26,6 +27,25 @@ export const isManualTrigger = (card: Pick<CardData, "type" | "config">) =>
   card.type === "trigger" && [undefined, "", "manual"].includes(
     card.config.mode as string | undefined,
   );
+
+const statusPriority = { completed: 1, partial: 2, failed: 3, running: 4 } as const;
+
+export function applyExecutionReport(nodes: Node<CardData>[], report: ExecutionReport) {
+  const statuses = new Map<string, CardData["status"]>();
+  for (const run of report.runs) {
+    const current = statuses.get(run.node_key);
+    if (!current || statusPriority[run.status] > (statusPriority[current as keyof typeof statusPriority] ?? 0)) {
+      statuses.set(run.node_key, run.status);
+    }
+  }
+  return nodes.map((node) => ({
+    ...node,
+    data: { ...node.data, status: statuses.get(node.id) ?? "idle" },
+  }));
+}
+
+export const edgeIsActivelyPropagating = (edge: Edge, nodes: Node<CardData>[]) =>
+  nodes.some((node) => node.id === edge.target && node.data.status === "running");
 
 export const localCards: CardType[] = [
   {
@@ -127,7 +147,7 @@ export const starterEdges: Edge[] = [
     sourceHandle: "out-event",
     target: "transform",
     targetHandle: "in-input",
-    animated: true,
+    animated: false,
   },
   {
     id: "transform-condition",
@@ -135,7 +155,7 @@ export const starterEdges: Edge[] = [
     sourceHandle: "out-output",
     target: "condition",
     targetHandle: "in-input",
-    animated: true,
+    animated: false,
   },
   {
     id: "condition-log",
@@ -143,7 +163,7 @@ export const starterEdges: Edge[] = [
     sourceHandle: "out-false",
     target: "log",
     targetHandle: "in-input",
-    animated: true,
+    animated: false,
   },
 ];
 
@@ -210,7 +230,7 @@ export function hydrateDefinition(
       sourceHandle: `out-${edge.from_port}`,
       target: edge.to_node,
       targetHandle: `in-${edge.to_port}`,
-      animated: true,
+      animated: false,
     })),
   };
 }
@@ -557,7 +577,7 @@ export function reviewTemplate(
       sourceHandle,
       target,
       targetHandle,
-      animated: true,
+      animated: false,
     })),
   };
 }

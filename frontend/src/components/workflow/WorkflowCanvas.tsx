@@ -11,7 +11,7 @@ import {
   type OnEdgesChange,
   type OnNodesChange,
 } from "@xyflow/react";
-import type { WorkflowValidationIssue } from "../../lib/workflow";
+import { edgeIsActivelyPropagating, type WorkflowValidationIssue } from "../../lib/workflow";
 import "@xyflow/react/dist/style.css";
 import type { CardData } from "../../lib/types";
 import { useCallback, useMemo } from "react";
@@ -55,18 +55,19 @@ export function WorkflowCanvas({
   readOnly = false,
 }: WorkflowCanvasProps) {
   const visibleEdges = useMemo(
-    () => edges.map((edge) =>
-      edge.sourceHandle === "out-error"
+    () => edges.map((edge) => {
+      const animated = edgeIsActivelyPropagating(edge, nodes);
+      return edge.sourceHandle === "out-error"
         ? {
             ...edge,
-            animated: true,
+            animated,
             label: "erro",
             style: { stroke: "#e87b91", strokeDasharray: "5 4" },
             labelStyle: { fill: "#e87b91", fontSize: 10 },
           }
-        : edge,
-    ),
-    [edges],
+        : { ...edge, animated };
+    }),
+    [edges, nodes],
   );
   const handleSelectionChange = useCallback(
     ({ nodes: selectedNodes, edges: selectedEdges }: { nodes: Node[]; edges: Edge[] }) =>

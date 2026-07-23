@@ -589,7 +589,43 @@ func (s *SQLite) SaveExecution(ctx context.Context, versionID int64, report work
 	return id, s.CompleteExecution(ctx, id, report)
 }
 
-// CompleteExecution persists node reports and makes the final status visible.
+// SaveNodeProgress upserts one node/scope attempt so live running state can be
+// queried without creating a second row when the terminal update arrives.
+func (s *SQLite) SaveNodeProgress(ctx context.Context, id int64, run workflow.NodeRun) error {
+	metadata, scopeKey, err := nodeRunValues(run)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `INSERT INTO workflow_node_runs(workflow_execution_id,node_key,scope_key,status,started_at,finished_at,metadata_json)
+		VALUES(?,?,?,?,CURRENT_TIMESTAMP,CASE WHEN ?='running' THEN NULL ELSE CURRENT_TIMESTAMP END,?)
+		ON CONFLICT(workflow_execution_id,node_key,scope_key,attempt) DO UPDATE SET
+		status=excluded.status,finished_at=excluded.finished_at,metadata_json=excluded.metadata_json`, id, run.NodeKey, scopeKey, run.Status, run.Status, string(metadata))
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return fmt.Errorf("execution %d node progress was not persisted", id)
+	}
+	return nil
+}
+
+func nodeRunValues(run workflow.NodeRun) ([]byte, string, error) {
+	metadata, err := json.Marshal(map[string]any{"inputs": run.Inputs, "outputs": run.Outputs, "error": run.Error, "duration_ms": run.DurationMS, "metadata": run.Metadata})
+	if err != nil {
+		return nil, "", err
+	}
+	scopeKey := run.ScopeKey
+	if scopeKey == "" {
+		scopeKey = "root"
+	}
+	return metadata, scopeKey, nil
+}
+
+// CompleteExecution upserts final node reports and makes the final status visible.
 func (s *SQLite) CompleteExecution(ctx context.Context, id int64, report workflow.RunReport) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -608,15 +644,13 @@ func (s *SQLite) CompleteExecution(ctx context.Context, id int64, report workflo
 		return fmt.Errorf("execution %d is not running", id)
 	}
 	for _, run := range report.Runs {
-		metadata, err := json.Marshal(map[string]any{"inputs": run.Inputs, "outputs": run.Outputs, "error": run.Error, "duration_ms": run.DurationMS, "metadata": run.Metadata})
+		metadata, scopeKey, err := nodeRunValues(run)
 		if err != nil {
 			return err
 		}
-		scopeKey := run.ScopeKey
-		if scopeKey == "" {
-			scopeKey = "root"
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO workflow_node_runs(workflow_execution_id,node_key,scope_key,status,finished_at,metadata_json) VALUES(?,?,?,?,CURRENT_TIMESTAMP,?)`, id, run.NodeKey, scopeKey, run.Status, string(metadata)); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO workflow_node_runs(workflow_execution_id,node_key,scope_key,status,started_at,finished_at,metadata_json)
+			VALUES(?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?)
+			ON CONFLICT(workflow_execution_id,node_key,scope_key,attempt) DO UPDATE SET status=excluded.status,finished_at=CURRENT_TIMESTAMP,metadata_json=excluded.metadata_json`, id, run.NodeKey, scopeKey, run.Status, string(metadata)); err != nil {
 			return err
 		}
 	}
@@ -1004,6 +1038,7 @@ CREATE TABLE IF NOT EXISTS workflow_node_runs (
  finished_at TEXT,
  metadata_json TEXT NOT NULL DEFAULT '{}'
 );
+CREATE UNIQUE INDEX IF NOT EXISTS workflow_node_run_attempt ON workflow_node_runs(workflow_execution_id,node_key,scope_key,attempt);
 CREATE TABLE IF NOT EXISTS publication_attempts (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  idempotency_key TEXT NOT NULL UNIQUE,

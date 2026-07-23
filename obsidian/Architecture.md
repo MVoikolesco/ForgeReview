@@ -122,6 +122,14 @@ trigger's reachable branch runs even when multiple branches later converge.
 Trigger modes are `manual`, authenticated `api`, or signed `webhook`; an absent
 mode remains legacy-compatible `manual`.
 
+The runner reports node start and terminal transitions through a progress
+boundary backed by SQLite. In-progress status reads expose only safe node
+identity, status, and scope while execution is active; final persistence replaces
+progress rows without duplication. Studio applies every polled report, animates
+only edges entering a running card, and uses sober status badges and borders.
+Provider adapters return safe model/token usage metadata, which publication uses
+with elapsed time; prompts, responses, and credentials are not telemetry.
+
 Gitea webhook registrations bind an encrypted one-time signing secret to a
 published workflow and one webhook trigger. The public endpoint validates the
 exact raw body with HMAC-SHA-256, requires Gitea event/delivery headers, and uses
@@ -148,8 +156,8 @@ workflow lifecycle data, model profiles, and bounded execution summaries in
 parallel. It loads the official published definition only to derive displayed
 node labels, readiness, and conservative publish-policy state; it does not show
 definition configuration or credentials. `GET /api/executions?limit=10` returns
-only execution status/times, workflow identity/version, and matching configured
-fetch/publish PR coordinates. The `limit` is validated from 1 through 100. It excludes execution input, nodes, errors,
+only execution status/times, workflow identity/version, and canonical runtime PR
+context. The `limit` is validated from 1 through 100. It excludes execution input, nodes, errors,
 integration configuration, and secrets.
 Studio state and API calls live in reusable frontend components and `src/lib/`;
 the Pipelines workspace reads grouped safe workflow summaries and owns list

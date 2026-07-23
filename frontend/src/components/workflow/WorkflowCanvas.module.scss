@@ -7,8 +7,21 @@
 }
 
 .canvas :global(.react-flow__edge-path) {
-    stroke: #5d8ee5;
+    stroke: #41536f;
     stroke-width: 2;
+    transition: stroke .18s ease, filter .18s ease;
+}
+
+.canvas :global(.react-flow__edge.animated .react-flow__edge-path) {
+    stroke: #78a9ff;
+    filter: drop-shadow(0 0 3px #4b8cff66);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .canvas :global(.react-flow__edge.animated .react-flow__edge-path) {
+        animation: none;
+        stroke-dasharray: none;
+    }
 }
 
 .message {

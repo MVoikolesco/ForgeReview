@@ -47,6 +47,7 @@ import type {
   WebhookRegistration,
 } from "../../lib/types";
 import {
+  applyExecutionReport,
   canConnect,
   cardOutputPorts,
   defaultWorkflowMetadata,
@@ -231,7 +232,7 @@ export function StudioWorkspace() {
       );
       return;
     }
-    setEdges((all) => addEdge({ ...connection, animated: true }, all));
+    setEdges((all) => addEdge({ ...connection, animated: false }, all));
     setDirty(true);
   }, [nodes, setEdges]);
   const patchInspected = (patch: Partial<CardData>) => {
@@ -246,17 +247,7 @@ export function StudioWorkspace() {
     setDirty(true);
   };
   const applyReport = (report: ExecutionReport) =>
-    setNodes((all) =>
-      all.map((node) => ({
-        ...node,
-        data: {
-          ...node.data,
-          status:
-            report.runs.find((run) => run.node_key === node.id)?.status ||
-            "idle",
-        },
-      })),
-    );
+    setNodes((all) => applyExecutionReport(all, report));
   const saveDraft = async () => {
     if (validationIssues.length) {
       setMessage("Corrija os ajustes indicados antes de salvar o rascunho.");
@@ -329,12 +320,7 @@ export function StudioWorkspace() {
       const saved = await saveWorkflow(definition);
       setDirty(false);
       setMessage("Executando versão salva...");
-      setNodes((all) =>
-        all.map((node) => ({
-          ...node,
-          data: { ...node.data, status: "running" },
-        })),
-      );
+      setNodes((all) => all.map((node) => ({ ...node, data: { ...node.data, status: "idle" } })));
       const started = await executeWorkflow(saved.version_id, trigger.key, testPayload);
       let report = started.report;
       if (started.status === "queued" && started.execution_id)
@@ -342,6 +328,7 @@ export function StudioWorkspace() {
           await new Promise((resolve) => setTimeout(resolve, 500));
           try {
             const pending = await getExecution(started.execution_id);
+            applyReport(pending);
             if (pending.status !== "queued" && pending.status !== "running") {
               report = pending;
               break;

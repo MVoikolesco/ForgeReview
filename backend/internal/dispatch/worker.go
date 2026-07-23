@@ -10,6 +10,7 @@ import (
 type ExecutionStore interface {
 	ClaimExecution(context.Context, int64) (workflow.Execution, bool, error)
 	Load(context.Context, int64) (workflow.Definition, error)
+	SaveNodeProgress(context.Context, int64, workflow.NodeRun) error
 	CompleteExecution(context.Context, int64, workflow.RunReport) error
 }
 
@@ -46,6 +47,9 @@ func (w Worker) Process(ctx context.Context, id int64) error {
 	}
 	adapters := w.Adapters
 	adapters.Execution = workflow.ExecutionContext{ID: execution.ID, VersionID: execution.VersionID}
+	adapters.Progress = workflow.ProgressObserverFunc(func(progressCtx context.Context, run workflow.NodeRun) error {
+		return w.Store.SaveNodeProgress(progressCtx, execution.ID, run)
+	})
 	report, _ := workflow.RunFromTriggerWithAdapters(ctx, definition, w.Catalog, execution.TriggerNodeKey, execution.Input, adapters)
 	return w.Store.CompleteExecution(ctx, id, report)
 }

@@ -10,19 +10,24 @@
 }
 
 .card.running {
-    box-shadow: 0 0 0 1px #e8bd67, $shadow-panel;
+    border-color: #d9ad59;
+    box-shadow: 0 0 0 1px #d9ad5955, 0 0 22px #d9ad5914, $shadow-panel;
+    animation: executionPulse 1.8s ease-in-out infinite;
 }
 
 .card.completed {
     border-color: #4e9f78;
+    box-shadow: 0 0 0 1px #4e9f7833, $shadow-panel;
 }
 
 .card.failed {
     border-color: #df6575;
+    box-shadow: 0 0 0 1px #df657544, $shadow-panel;
 }
 
 .card.partial {
     border-color: #e8bd67;
+    box-shadow: 0 0 0 1px #e8bd6733, $shadow-panel;
 }
 
 .card header {
@@ -46,7 +51,27 @@
 
 .card header em {
     margin-left: auto;
-    color: #7e8c9e;
+    padding: 3px 6px;
+    border: 1px solid #384252;
+    border-radius: 999px;
+    color: #9ba9ba;
     font-size: 8px;
+    font-weight: 800;
     font-style: normal;
+    letter-spacing: .05em;
+    background: #171c24;
+}
+
+.card.running header em { border-color: #8f713c; color: #f1ce89; background: #2b2417; }
+.card.completed header em { border-color: #386f57; color: #91d8b5; background: #17271f; }
+.card.failed header em { border-color: #87404d; color: #f2a7b3; background: #2d181d; }
+.card.partial header em { border-color: #8f713c; color: #f1ce89; background: #2b2417; }
+
+@keyframes executionPulse {
+    0%, 100% { box-shadow: 0 0 0 1px #d9ad5944, 0 0 14px #d9ad590d, $shadow-panel; }
+    50% { box-shadow: 0 0 0 1px #d9ad5980, 0 0 26px #d9ad5924, $shadow-panel; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .card.running { animation: none; }
 }

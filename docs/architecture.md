@@ -128,7 +128,10 @@ The workflow runner starts cards without required inputs, forwards typed tokens
 through declared edges, and starts a downstream card only after all required
 ports receive a token. Tokens and node reports carry `scope_key`; ordinary
 execution uses `root`. Each completed or failed card is persisted in the
-execution report. The safe local executors currently cover trigger, transform,
+execution report. Node progress is also persisted as `running` and updated to
+its terminal state, allowing the polling status API to expose safe live progress
+without returning prompts, provider bodies, or secrets. The safe local executors
+currently cover trigger, transform,
 variable, log, cache, filter, group, loop, template, condition, merge, validate,
 response_filter, consolidate and format. A collecting input port waits for all
 of its declared incoming edges; `merge.inputs` and `consolidate.comments` use
@@ -230,6 +233,10 @@ they do not create comments or call an external destination.
   `medium_severity_event` is `REQUEST_CHANGES`. Both controls belong only to
   `publish`; definitions that place them on `fetch` are rejected. Approval is never automated.
   Arbitrary URLs, bodies, and credentials cannot be supplied by the workflow.
+  The review body includes a Portuguese status and finding summary, elapsed
+  execution time, resolved model identity, and token totals/breakdown when the
+  provider supplies usage. Unknown telemetry is omitted rather than inferred;
+  the durable idempotency marker remains in the footer.
 
 ## Publication idempotency
 

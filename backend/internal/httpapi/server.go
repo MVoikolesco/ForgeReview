@@ -611,6 +611,9 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		}
 		runAdapters := adapters
 		runAdapters.Execution = workflow.ExecutionContext{ID: executionID, VersionID: id}
+		runAdapters.Progress = workflow.ProgressObserverFunc(func(progressCtx context.Context, run workflow.NodeRun) error {
+			return workflows.SaveNodeProgress(progressCtx, executionID, run)
+		})
 		report, runErr := workflow.RunFromTriggerWithAdapters(c.Request.Context(), definition, catalog, triggerNode, input, runAdapters)
 		if err = workflows.CompleteExecution(c.Request.Context(), executionID, report); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist execution"})

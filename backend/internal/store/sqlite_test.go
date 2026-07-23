@@ -27,8 +27,46 @@ func (items integrationLookup) Integration(_ context.Context, key string) (integ
 
 type modelResponse string
 
-func (m modelResponse) Chat(context.Context, integration.Integration, string, string) (string, error) {
-	return string(m), nil
+func (m modelResponse) Chat(context.Context, integration.Integration, string, string) (integration.ChatResult, error) {
+	return integration.ChatResult{Content: string(m)}, nil
+}
+
+func TestNodeProgressUpsertsRunningToTerminalWithoutDuplicateRows(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/progress.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	versionID, err := database.Save(context.Background(), workflow.Definition{Key: "progress", Name: "Progress", Nodes: []workflow.Node{{Key: "start", Type: "trigger", Name: "Start"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionID, err := database.CreateExecution(context.Background(), versionID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, claimed, claimErr := database.ClaimExecution(context.Background(), executionID); claimErr != nil || !claimed {
+		t.Fatalf("claim = %t, %v", claimed, claimErr)
+	}
+	if err = database.SaveNodeProgress(context.Background(), executionID, workflow.NodeRun{NodeKey: "start", ScopeKey: "root", Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	live, err := database.Execution(context.Background(), executionID)
+	if err != nil || live.Status != "running" || len(live.Runs) != 1 || live.Runs[0].Status != "running" {
+		t.Fatalf("live report = %#v, %v", live, err)
+	}
+	final := workflow.RunReport{Status: "completed", Runs: []workflow.NodeRun{{NodeKey: "start", ScopeKey: "root", Status: "completed", DurationMS: 2}}}
+	if err = database.CompleteExecution(context.Background(), executionID, final); err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	if err = database.db.QueryRow(`SELECT COUNT(*) FROM workflow_node_runs WHERE workflow_execution_id=?`, executionID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := database.Execution(context.Background(), executionID)
+	if err != nil || rows != 1 || len(completed.Runs) != 1 || completed.Runs[0].Status != "completed" || completed.Runs[0].ScopeKey != "root" {
+		t.Fatalf("completed = %#v, rows=%d, err=%v", completed, rows, err)
+	}
 }
 
 func TestPublicationIsIdempotentAcrossDuplicateExecutionRun(t *testing.T) {

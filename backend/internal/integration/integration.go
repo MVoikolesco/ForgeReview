@@ -201,5 +201,20 @@ type PublicationReceipt struct {
 }
 
 type ChatClient interface {
-	Chat(context.Context, Integration, string, string) (string, error)
+	Chat(context.Context, Integration, string, string) (ChatResult, error)
+}
+
+// ChatResult contains only the provider response needed by the workflow and
+// safe billing telemetry. Prompts, credentials, and raw provider payloads are
+// deliberately excluded.
+type ChatResult struct {
+	Content string
+	Model   string
+	Usage   TokenUsage
+}
+
+type TokenUsage struct {
+	Prompt     int
+	Completion int
+	Total      int
 }
