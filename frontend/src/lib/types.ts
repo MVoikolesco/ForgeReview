@@ -18,6 +18,34 @@ export type CardType = {
   unavailable_reason?: string;
 };
 
+export type ResponseContract = {
+  key: string;
+  name: string;
+  description: string;
+  version: number;
+  schema: Record<string, unknown>;
+  editable: false;
+};
+
+export type ReviewCheck = {
+  check_id: string;
+  description: string;
+  category: string;
+  minimum_context: string;
+};
+
+export type ReviewChecklistSnapshot = {
+  key: string;
+  name: string;
+  version: number;
+  items: ReviewCheck[];
+};
+
+export type ReviewChecklist = ReviewChecklistSnapshot & {
+  description: string;
+  editable: false;
+};
+
 export type CardStatus =
   | "idle"
   | "running"

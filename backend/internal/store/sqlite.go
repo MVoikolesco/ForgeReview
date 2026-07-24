@@ -523,12 +523,14 @@ func (s *SQLite) EnsureOfficialReviewWorkflow(ctx context.Context, catalog workf
 	if err == nil {
 		var stored workflow.Definition
 		legacyJSON, _ := json.Marshal(workflow.PreviousOfficialReviewDefinition())
+		previousJSON, _ := json.Marshal(workflow.PreviousVerifiableReviewDefinition())
+		previousCandidateJSON, _ := json.Marshal(workflow.PreviousCandidateReviewDefinition())
 		storedJSON := []byte(existingPayload)
 		if json.Unmarshal(storedJSON, &stored) != nil {
 			return workflow.VersionSummary{}, false, fmt.Errorf("decode existing official workflow")
 		}
 		normalized, _ := json.Marshal(stored)
-		if string(normalized) != string(legacyJSON) {
+		if string(normalized) != string(legacyJSON) && string(normalized) != string(previousJSON) && string(normalized) != string(previousCandidateJSON) {
 			if err = tx.Commit(); err != nil {
 				return workflow.VersionSummary{}, false, err
 			}

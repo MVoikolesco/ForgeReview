@@ -633,6 +633,7 @@ test("review template scopes group review through loop before one root publicati
     "template",
     "model",
     "validate",
+    "candidate_validator",
     "response_filter",
     "consolidate",
     "format",
@@ -665,7 +666,9 @@ test("review template scopes group review through loop before one root publicati
       ["template", "out-prompt", "model", "in-prompt"],
       ["model", "out-response", "validate", "in-response"],
       ["loop", "out-item", "validate", "in-files"],
-      ["validate", "out-valid", "response-filter", "in-response"],
+      ["validate", "out-valid", "candidate-validator", "in-candidates"],
+      ["loop", "out-item", "candidate-validator", "in-files"],
+      ["candidate-validator", "out-confirmed", "response-filter", "in-response"],
       ["loop", "out-results", "consolidate", "in-comments"],
       ["consolidate", "out-review", "format", "in-review"],
       ["format", "out-formatted", "publish", "in-formatted_review"],
@@ -676,15 +679,19 @@ test("review template scopes group review through loop before one root publicati
     template.nodes.find((node) => node.id === "loop")?.data.config,
     { max_iterations: 20, concurrency: 1, on_error: "fail" },
   );
-  assert.deepEqual(
-    template.nodes.find((node) => node.id === "model")?.data.config,
-    {
-      model_profile: "",
-      max_tokens: 2000,
-      retry_limit: 0,
-      retry_delay_ms: 0,
-    },
-  );
+  const modelConfig = template.nodes.find(
+    (node) => node.id === "model",
+  )?.data.config;
+  assert.equal(modelConfig?.model_profile, "");
+  assert.equal(modelConfig?.max_tokens, 2000);
+  assert.equal(modelConfig?.retry_limit, 0);
+  assert.equal(modelConfig?.retry_delay_ms, 0);
+  const checklist = modelConfig?.review_checklist as
+    | { key: string; version: number; items: unknown[] }
+    | undefined;
+  assert.equal(checklist?.key, "official.pull-request.v1");
+  assert.equal(checklist?.version, 1);
+  assert.equal(checklist?.items.length, 6);
   assert.deepEqual(
     template.nodes.find((node) => node.id === "publish")?.data.config,
     {

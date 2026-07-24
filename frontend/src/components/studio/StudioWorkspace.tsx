@@ -33,6 +33,8 @@ import {
   getIntegrations,
   getModelProfiles,
   getPublishedWorkflow,
+  getResponseContracts,
+  getReviewChecklists,
   getWebhookRegistrations,
   getWorkflows,
   getWorkflowVersion,
@@ -57,6 +59,8 @@ import type {
   ExecutionReport,
   Integration,
   ModelProfile,
+  ResponseContract,
+  ReviewChecklist,
   WebhookRegistration,
   WorkflowMetadata,
   WorkflowSummary,
@@ -82,25 +86,60 @@ import {
 } from "../../lib/workflow";
 import { useCurrentUser } from "../auth/AuthGate";
 import { ModalShell } from "../common/ModalShell";
-import { CardExecutionLogModal } from "./CardExecutionLogModal";
 import { ConnectionWizard } from "../integrations/ConnectionWizard";
 import { AppShell } from "../shell/AppShell";
 import { CardInspector } from "../workflow/CardInspector";
 import { CardLibrary } from "../workflow/CardLibrary";
 import { WorkflowCanvas } from "../workflow/WorkflowCanvas";
+import { CardExecutionLogModal } from "./CardExecutionLogModal";
 import styles from "./StudioWorkspace.module.scss";
 import { WorkflowTransferModal } from "./WorkflowTransferModal";
 
 const executionStatusLabel = (status: string) => {
-  const labels: Record<string, string> = { running: "Em execução", completed: "Concluído", failed: "Falhou", partial: "Parcial", cancelled: "Cancelado" };
+  const labels: Record<string, string> = {
+    running: "Em execução",
+    completed: "Concluído",
+    failed: "Falhou",
+    partial: "Parcial",
+    cancelled: "Cancelado",
+  };
   return labels[status] ?? status;
 };
 
 const executionFactLabel = (key: string, value: unknown) => {
-  const labels: Record<string, string> = { attempt_count: "Tentativas", retry_limit: "Limite", retry_delay_ms: "Intervalo", completed_iterations: "Iterações concluídas", failed_iterations: "Iterações falhas", max_iterations: "Limite de iterações", concurrency: "Concorrência", model: "Modelo", prompt_tokens: "Tokens de entrada", completion_tokens: "Tokens de saída", total_tokens: "Tokens totais", error_code: "Código", error_policy: "Política", error_action: "Ação" };
+  const labels: Record<string, string> = {
+    attempt_count: "Tentativas",
+    retry_limit: "Limite",
+    retry_delay_ms: "Intervalo",
+    completed_iterations: "Iterações concluídas",
+    failed_iterations: "Iterações falhas",
+    max_iterations: "Limite de iterações",
+    concurrency: "Concorrência",
+    model: "Modelo",
+    prompt_tokens: "Tokens de entrada",
+    completion_tokens: "Tokens de saída",
+    total_tokens: "Tokens totais",
+    error_code: "Código",
+    error_policy: "Política",
+    error_action: "Ação",
+    candidate_count: "Candidatos",
+    confirmed_count: "Confirmados",
+    rejected_count: "Rejeitados",
+    needs_context_count: "Precisam de contexto",
+    not_observable_count: "Não observáveis",
+    not_applicable_count: "Não aplicáveis",
+    duplicate_count: "Duplicados removidos",
+  };
   if (key === "validation_attempts" || key === "provider_calls") {
     if (!Array.isArray(value)) return "";
-    return value.map((item) => typeof item === "object" && item ? `Tentativa ${String((item as Record<string, unknown>).attempt ?? "?")}: ${String((item as Record<string, unknown>).status ?? "registrada")}` : "").filter(Boolean).join(" · ");
+    return value
+      .map((item) =>
+        typeof item === "object" && item
+          ? `Tentativa ${String((item as Record<string, unknown>).attempt ?? "?")}: ${String((item as Record<string, unknown>).status ?? "registrada")}`
+          : "",
+      )
+      .filter(Boolean)
+      .join(" · ");
   }
   if (!labels[key]) return "";
   return `${labels[key]}: ${key === "retry_delay_ms" ? `${String(value)} ms` : String(value)}`;
@@ -122,6 +161,12 @@ export function StudioWorkspace() {
   const [busy, setBusy] = useState(false);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
+  const [responseContracts, setResponseContracts] = useState<
+    ResponseContract[]
+  >([]);
+  const [reviewChecklists, setReviewChecklists] = useState<ReviewChecklist[]>(
+    [],
+  );
   const [showConnections, setShowConnections] = useState(false);
   const [metadata, setMetadata] = useState<WorkflowMetadata>(
     defaultWorkflowMetadata,
@@ -194,6 +239,16 @@ export function StudioWorkspace() {
       setMessage("Não foi possível carregar as integrações.");
     }
   };
+  useEffect(() => {
+    void Promise.all([getResponseContracts(), getReviewChecklists()])
+      .then(([contracts, checklists]) => {
+        setResponseContracts(contracts);
+        setReviewChecklists(checklists);
+      })
+      .catch(() =>
+        setMessage("Não foi possível carregar os contratos e checklists."),
+      );
+  }, []);
   useEffect(() => {
     setBusy(true);
     setMessage(
@@ -292,7 +347,9 @@ export function StudioWorkspace() {
       .catch(() => undefined);
   }, []);
   useEffect(() => {
-    void getWorkflows().then(setWorkflowSummaries).catch(() => undefined);
+    void getWorkflows()
+      .then(setWorkflowSummaries)
+      .catch(() => undefined);
   }, [openedVersionID, dirty]);
   useEffect(() => {
     if (user?.role === "admin")
@@ -1179,6 +1236,8 @@ export function StudioWorkspace() {
             selected={inspectedCard}
             integrations={integrations}
             modelProfiles={modelProfiles}
+            responseContracts={responseContracts}
+            reviewChecklists={reviewChecklists}
             workflows={workflowSummaries}
             hasErrorRoute={hasErrorRoute(edges, inspectedCard.key)}
             onChange={(patch) => canEdit && patchInspected(patch)}

@@ -124,7 +124,7 @@ func TestValidateRequiresExplicitTypedErrorRoute(t *testing.T) {
 
 func TestOfficialReviewDefinitionIsAValidFullGraphWithSafePublicationDefaults(t *testing.T) {
 	definition := OfficialReviewDefinition()
-	if definition.Key != OfficialReviewWorkflowKey || len(definition.Nodes) != 12 || len(definition.Edges) != 13 {
+	if definition.Key != OfficialReviewWorkflowKey || len(definition.Nodes) != 13 || len(definition.Edges) != 15 {
 		t.Fatalf("official definition shape = %#v", definition)
 	}
 	if err := Validate(definition, DefaultCatalog()); err != nil {
@@ -139,6 +139,9 @@ func TestOfficialReviewDefinitionIsAValidFullGraphWithSafePublicationDefaults(t 
 	}
 	if configs["model"]["model_profile"] != "" || configs["model"]["retry_limit"] != 0 || configs["model"]["retry_delay_ms"] != 0 {
 		t.Fatalf("model defaults = %#v", configs["model"])
+	}
+	if configs["candidate-validator"]["model_profile"] != "" || configs["validate"]["response_contract_key"] != "review.candidate-findings.v1" {
+		t.Fatalf("candidate validation defaults = %#v / %#v", configs["candidate-validator"], configs["validate"])
 	}
 	if configs["publish"]["allow_autonomous_rejection"] != false || configs["publish"]["medium_severity_event"] != "COMMENT" {
 		t.Fatalf("publish defaults = %#v", configs["publish"])

@@ -408,7 +408,7 @@ func TestRunAggregatesScopedReviewFindingsAndPublishesOnceAtRoot(t *testing.T) {
 	if request.Event != "COMMENT" || len(request.Comments) != 2 || request.Comments[0] != (integration.GiteaReviewComment{Path: "a.go", Body: "first", NewPosition: 2}) {
 		t.Fatalf("published review = %#v", request)
 	}
-	for _, expected := range []string{"Resumo da implementação: revisa processamento em grupos.", "Nenhum problema foi confirmado automaticamente; os 2 pontos destacados servem como apoio"} {
+	for _, expected := range []string{"Resumo da implementação: revisa processamento em grupos.", "Os 2 pontos destacados passaram pelas validações configuradas"} {
 		if !strings.Contains(request.Body, expected) {
 			t.Fatalf("published review body missing %q: %s", expected, request.Body)
 		}
@@ -438,6 +438,14 @@ func TestValidateResponseAcceptsOnlyAddedLines(t *testing.T) {
 	value, port = validateResponse([]any{`[{"path":"app/main.go","line":11,"comment":"right line","severity":"medium"}]`}, files, map[string]any{"validate_paths": true})
 	if port != "valid" {
 		t.Fatalf("valid line rejected: %#v", value)
+	}
+}
+
+func TestAttachReviewIdentityUsesRepositoryAndBaseCommit(t *testing.T) {
+	files := []map[string]any{{"filename": "app.go"}}
+	attachReviewIdentity(files, map[string]any{"base": map[string]any{"sha": "base123"}}, integration.PullRequestRequest{Owner: "acme", Repo: "review", Number: 7})
+	if files[0]["_forgereview_repository"] != "acme/review" || files[0]["_forgereview_base_commit"] != "base123" {
+		t.Fatalf("identity = %#v", files[0])
 	}
 }
 

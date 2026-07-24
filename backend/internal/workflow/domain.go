@@ -224,13 +224,23 @@ func Validate(definition Definition, catalog Catalog) error {
 				return err
 			}
 		}
-		if node.Type == "model" {
+		if node.Type == "model" || node.Type == "candidate_validator" {
 			if _, err := modelSettingsFor(node); err != nil {
 				return err
 			}
 			if _, profile := node.Config["model_profile"].(string); !profile {
 				if _, legacy := node.Config["integration"].(string); !legacy {
-					return fmt.Errorf("model card %q requires config.model_profile", node.Key)
+					return fmt.Errorf("%s card %q requires config.model_profile", node.Type, node.Key)
+				}
+			}
+			if _, _, err := reviewChecklistFromConfig(node.Config); err != nil {
+				return fmt.Errorf("%s card %q config.review_checklist: %w", node.Type, node.Key, err)
+			}
+		}
+		if node.Type == "validate" {
+			if schema, exists := responseSchemaFromConfig(node.Config); exists {
+				if _, err := validateResponseSchema(schema); err != nil {
+					return fmt.Errorf("validate card %q config.response_schema: %w", node.Key, err)
 				}
 			}
 		}

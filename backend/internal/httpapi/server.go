@@ -240,6 +240,12 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		api.Use(authenticate(manager, cookie))
 	}
 	api.GET("/cards", func(c *gin.Context) { c.JSON(http.StatusOK, catalog.All()) })
+	api.GET("/response-contracts", func(c *gin.Context) {
+		c.JSON(http.StatusOK, workflow.ResponseContracts())
+	})
+	api.GET("/review-checklists", func(c *gin.Context) {
+		c.JSON(http.StatusOK, workflow.ReviewChecklists())
+	})
 	api.GET("/webhook-registrations", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
 		items, err := workflows.WebhookRegistrations(c.Request.Context())
 		if err != nil {

@@ -282,7 +282,7 @@ func SafeExecutionLogFacts(metadata map[string]any) map[string]any {
 	if len(metadata) == 0 {
 		return nil
 	}
-	allowed := map[string]bool{"attempt_count": true, "retry_limit": true, "retry_delay_ms": true, "completed_iterations": true, "failed_iterations": true, "max_iterations": true, "concurrency": true, "model": true, "validation_error": true, "error_code": true, "error_policy": true, "error_action": true, "error_scope": true, "cost_usd": true, "fallback_used": true, "workflow_version_id": true, "child_runs": true, "merge_mode": true, "received_inputs": true, "timed_out": true}
+	allowed := map[string]bool{"attempt_count": true, "retry_limit": true, "retry_delay_ms": true, "completed_iterations": true, "failed_iterations": true, "max_iterations": true, "concurrency": true, "model": true, "validation_error": true, "error_code": true, "error_policy": true, "error_action": true, "error_scope": true, "cost_usd": true, "fallback_used": true, "workflow_version_id": true, "child_runs": true, "merge_mode": true, "received_inputs": true, "timed_out": true, "candidate_count": true, "confirmed_count": true, "rejected_count": true, "needs_context_count": true, "not_observable_count": true, "not_applicable_count": true, "duplicate_count": true}
 	result := map[string]any{}
 	for key := range allowed {
 		value, ok := metadata[key]
@@ -739,6 +739,8 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 		}
 	} else if node.Type == "validate" {
 		outputs, nodeRun.Metadata, err = r.runValidate(ctx, node, current, inbox, inputs)
+	} else if node.Type == "candidate_validator" {
+		outputs, nodeRun.Metadata, err = r.runCandidateValidator(ctx, node, inputs)
 	} else if node.Type == "variable" {
 		outputs, err = r.runVariable(node, current, inputs)
 	} else if node.Type == "workflow" {
@@ -958,7 +960,7 @@ func (r *scopedRunner) acquire(ctx context.Context, cardType string) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	if cardType == "fetch" || cardType == "model" || cardType == "publish" {
+	if cardType == "fetch" || cardType == "model" || cardType == "candidate_validator" || cardType == "publish" {
 		// sync.Mutex has no context-aware acquisition. Waiting here is bounded by
 		// the in-flight provider call; it avoids a cancellation-path goroutine
 		// acquiring the mutex after its caller has returned and wedging all later
@@ -1270,6 +1272,106 @@ func validationFailureDetail(value any) string {
 		return ""
 	}
 	return strings.Join(failure.Errors, "; ")
+}
+
+func (r *scopedRunner) runCandidateValidator(ctx context.Context, node Node, inputs map[string][]any) (map[string]any, map[string]any, error) {
+	candidates, err := candidateFindings(inputs["candidates"])
+	if err != nil {
+		return nil, nil, err
+	}
+	allowedChecks, checklistConfigured, err := checklistCheckIDs(node.Config)
+	if err != nil {
+		return nil, nil, err
+	}
+	filesByPath := map[string]map[string]any{}
+	if len(inputs["files"]) > 0 {
+		files, fileErr := workflowFiles(inputs["files"])
+		if fileErr != nil {
+			return nil, nil, fmt.Errorf("candidate validator card %q requires valid observed files", node.Key)
+		}
+		for _, file := range files {
+			filesByPath[file["filename"].(string)] = file
+		}
+	}
+	confirmed := make([]Finding, 0, len(candidates))
+	metadata := map[string]any{"candidate_count": len(candidates)}
+	seenFingerprints := map[string]int{}
+	for index := range candidates {
+		candidate := &candidates[index]
+		file := filesByPath[candidate.Path]
+		if file == nil {
+			candidate.Status = CandidateNotObservable
+			candidate.DecisionReason = "the affected file is not present in the observed context"
+			continue
+		}
+		if !lineIsAddedInPatch(file, candidate.Line) {
+			candidate.Status = CandidateRejected
+			candidate.DecisionReason = "the claimed line is not an added line in the observed patch"
+			continue
+		}
+		candidate.Fingerprint = candidateFingerprint(*candidate, file)
+		if checklistConfigured && !allowedChecks[candidate.CheckID] {
+			candidate.Status = CandidateNotApplicable
+			candidate.DecisionReason = "check_id is not part of the configured checklist version"
+			continue
+		}
+		if first, duplicate := seenFingerprints[candidate.Fingerprint]; duplicate {
+			candidate.Status = CandidateRejected
+			candidate.DecisionReason = fmt.Sprintf("duplicate of candidate %d with fingerprint %s", first, candidate.Fingerprint)
+			metadata["duplicate_count"] = metricCount(metadata, "duplicate_count") + 1
+			continue
+		}
+		seenFingerprints[candidate.Fingerprint] = index
+		prompt, promptErr := candidateValidationPrompt(*candidate, file)
+		if promptErr != nil {
+			return nil, metadata, promptErr
+		}
+		response, callErr := modelResponse(ctx, node, prompt, r.adapters)
+		if callErr != nil {
+			return nil, metadata, callErr
+		}
+		decision, decisionErr := parseCandidateDecision(response.Content)
+		if decisionErr != nil {
+			return nil, metadata, fmt.Errorf("candidate validator card %q candidate %d: %w", node.Key, index, decisionErr)
+		}
+		candidate.Status = decision.Decision
+		candidate.DecisionReason = decision.Reason
+		if candidate.Status == CandidateConfirmed {
+			confirmed = append(confirmed, confirmedFinding(*candidate))
+		}
+	}
+	for _, candidate := range candidates {
+		switch candidate.Status {
+		case CandidateConfirmed:
+			metadata["confirmed_count"] = metricCount(metadata, "confirmed_count") + 1
+		case CandidateRejected:
+			metadata["rejected_count"] = metricCount(metadata, "rejected_count") + 1
+		case CandidateNeedsContext:
+			metadata["needs_context_count"] = metricCount(metadata, "needs_context_count") + 1
+		case CandidateNotObservable:
+			metadata["not_observable_count"] = metricCount(metadata, "not_observable_count") + 1
+		case CandidateNotApplicable:
+			metadata["not_applicable_count"] = metricCount(metadata, "not_applicable_count") + 1
+		}
+	}
+	return map[string]any{"confirmed": confirmed, "decisions": candidates}, metadata, nil
+}
+
+func metricCount(metadata map[string]any, key string) int {
+	value, _ := metadata[key].(int)
+	return value
+}
+
+func candidateValidationPrompt(candidate CandidateFinding, file map[string]any) (string, error) {
+	candidatePayload, err := json.Marshal(candidate)
+	if err != nil {
+		return "", fmt.Errorf("serialize candidate: %w", err)
+	}
+	filePayload, err := json.Marshal(file)
+	if err != nil {
+		return "", fmt.Errorf("serialize candidate evidence: %w", err)
+	}
+	return "Você é um validador independente. Avalie somente o candidato recebido; não procure novos problemas. A ausência de algo no diff não prova ausência no sistema. Confirme apenas quando a alegação, o cenário e o impacto forem sustentados por evidência concreta no contexto observado. Responda somente JSON puro no formato {\"decision\":\"CONFIRMED|REJECTED|NEEDS_CONTEXT\",\"reason\":\"justificativa objetiva\"}.\n\nCandidato:\n" + string(candidatePayload) + "\n\nContexto observado:\n" + string(filePayload), nil
 }
 
 func (r *scopedRunner) correctiveModel(current nodeScope, inbox map[string][]Token) (Node, string, modelSettings, bool) {
@@ -1671,6 +1773,7 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 			return nil, fmt.Errorf("fetch card %q: %w", node.Key, err)
 		}
 		pullRequest.Target = request
+		attachReviewIdentity(pullRequest.Files, pullRequest.Metadata, request)
 		if len(pullRequest.Files) > 0 && reviewableFileCount(pullRequest.Files) == 0 {
 			return nil, fmt.Errorf("fetch card %q received %d changed file(s) without reviewable patch content", node.Key, len(pullRequest.Files))
 		}
@@ -1680,6 +1783,10 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		if !ok || prompt == "" {
 			return nil, fmt.Errorf("model card %q requires a prompt input", node.Key)
 		}
+		prompt, err := reviewPromptWithChecklist(prompt, node.Config)
+		if err != nil {
+			return nil, fmt.Errorf("model card %q: %w", node.Key, err)
+		}
 		response, err := modelResponse(ctx, node, prompt, adapters)
 		if err != nil {
 			return nil, err
@@ -1688,6 +1795,34 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 	default:
 		return nil, fmt.Errorf("card type %q has no configured executor", node.Type)
 	}
+}
+
+func attachReviewIdentity(files []map[string]any, metadata map[string]any, request integration.PullRequestRequest) {
+	repository := strings.TrimSpace(request.Owner) + "/" + strings.TrimSpace(request.Repo)
+	baseCommit := pullRequestBaseCommit(metadata)
+	if baseCommit == "" {
+		baseCommit = fmt.Sprintf("pr:%d", request.Number)
+	}
+	for _, file := range files {
+		file["_forgereview_repository"] = repository
+		file["_forgereview_base_commit"] = baseCommit
+	}
+}
+
+func pullRequestBaseCommit(metadata map[string]any) string {
+	for _, key := range []string{"base_commit", "base_sha"} {
+		if value, _ := metadata[key].(string); strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	if base, ok := metadata["base"].(map[string]any); ok {
+		for _, key := range []string{"sha", "id"} {
+			if value, _ := base[key].(string); strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return ""
 }
 
 // renderTemplatePrompt makes the typed context available to the model. Existing
@@ -1712,7 +1847,11 @@ func renderTemplatePrompt(template string, contextValues []any) (string, error) 
 		template += "\n\n" + contextBlock
 	}
 	if containsFileGroup(contextValues) {
-		template += "\n\nContrato obrigatório para a review: responda somente JSON puro, sem markdown. Cada achado deve seguir [{\"path\":\"arquivo.ext\",\"line\":12,\"comment\":\"explicação objetiva\",\"severity\":\"low|medium|high|critical\"}]. Analise somente comportamentos concretos introduzidos pelo diff e sustentados pelo código mostrado. Antes de apontar um problema, considere as validações, fallbacks e verificações presentes no mesmo fluxo. Não reporte riscos meramente hipotéticos, manutenção futura, preferência de estilo ou falha que o próprio trecho já trata. Use um único achado por causa raiz e não repita a mesma observação em arquivos diferentes. O campo line deve ser a linha do arquivo NOVO indicada pelo cabeçalho @@ e introduzida por uma linha '+' do diff; escolha a linha adicionada que causa ou demonstra diretamente o ponto, nunca uma linha de contexto, comentário, documentação, chave ou linha apenas próxima. Não invente linha, caminho ou achado para arquivo sem hunk. Se não houver ponto concreto e acionável, responda []. Os achados auxiliam um revisor humano e não confirmam automaticamente que exista um problema."
+		if strings.Contains(strings.ToLower(template), "candidatefinding") || strings.Contains(strings.ToLower(template), "candidato") {
+			template += "\n\nContrato obrigatório: responda somente JSON puro, sem markdown. Cada candidato deve conter check_id, claim, scenario, impact, evidence (lista não vazia), confidence entre 0 e 1, required_context, symbol, issue_type, affected_entity, path, line, comment e severity (low|medium|high|critical). Use symbol=\"<file>\" para problemas de escopo de arquivo. issue_type e affected_entity devem ser identificadores semânticos estáveis, independentes da redação do comentário. Não inclua status nem fingerprint: ambos pertencem ao sistema. Analise somente comportamentos concretos introduzidos pelo diff e sustentados pelo código mostrado. O campo line deve apontar para uma linha '+' do arquivo novo. Não invente evidência, caminho ou linha. Se não houver candidato concreto e acionável, responda []."
+		} else {
+			template += "\n\nContrato obrigatório para a review: responda somente JSON puro, sem markdown. Cada achado deve seguir [{\"path\":\"arquivo.ext\",\"line\":12,\"comment\":\"explicação objetiva\",\"severity\":\"low|medium|high|critical\"}]. Analise somente comportamentos concretos introduzidos pelo diff e sustentados pelo código mostrado. Antes de apontar um problema, considere as validações, fallbacks e verificações presentes no mesmo fluxo. Não reporte riscos meramente hipotéticos, manutenção futura, preferência de estilo ou falha que o próprio trecho já trata. Use um único achado por causa raiz e não repita a mesma observação em arquivos diferentes. O campo line deve ser a linha do arquivo NOVO indicada pelo cabeçalho @@ e introduzida por uma linha '+' do diff; escolha a linha adicionada que causa ou demonstra diretamente o ponto, nunca uma linha de contexto, comentário, documentação, chave ou linha apenas próxima. Não invente linha, caminho ou achado para arquivo sem hunk. Se não houver ponto concreto e acionável, responda []. Os achados auxiliam um revisor humano e não confirmam automaticamente que exista um problema."
+		}
 	}
 	return template, nil
 }
@@ -1988,9 +2127,9 @@ func formattedReviewBody(review FormattedReview, event string, telemetry Telemet
 	if review.Summary.Total == 0 {
 		lines = append(lines, "Nenhum problema foi confirmado automaticamente; a decisão final permanece com o revisor.")
 	} else if review.Summary.Total == 1 {
-		lines = append(lines, "Nenhum problema foi confirmado automaticamente; o ponto destacado serve como apoio e deve ser avaliado pelo revisor.")
+		lines = append(lines, "O ponto destacado passou pelas validações configuradas, serve como apoio e deve ser avaliado pelo revisor.")
 	} else {
-		lines = append(lines, fmt.Sprintf("Nenhum problema foi confirmado automaticamente; os %d pontos destacados servem como apoio e devem ser avaliados pelo revisor.", review.Summary.Total))
+		lines = append(lines, fmt.Sprintf("Os %d pontos destacados passaram pelas validações configuradas, servem como apoio e devem ser avaliados pelo revisor.", review.Summary.Total))
 	}
 	return strings.Join(lines, "\n")
 }

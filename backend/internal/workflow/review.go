@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,13 +17,51 @@ var severityRank = map[string]int{"low": 1, "medium": 2, "high": 3, "critical": 
 
 // Finding is the controlled finding contract produced by a validated model response.
 type Finding struct {
-	Path     string `json:"path"`
-	Line     int    `json:"line"`
-	Comment  string `json:"comment"`
-	Severity string `json:"severity"`
+	Path        string `json:"path"`
+	Line        int    `json:"line"`
+	Comment     string `json:"comment"`
+	Severity    string `json:"severity"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+const (
+	CandidatePending       = "PENDING"
+	CandidateConfirmed     = "CONFIRMED"
+	CandidateRejected      = "REJECTED"
+	CandidateNotApplicable = "NOT_APPLICABLE"
+	CandidateNeedsContext  = "NEEDS_CONTEXT"
+	CandidateNotObservable = "NOT_OBSERVABLE"
+)
+
+// CandidateFinding is an internal proposal. It is never publishable until an
+// independent validator marks it CONFIRMED and converts it to Finding.
+type CandidateFinding struct {
+	CheckID         string   `json:"check_id"`
+	Claim           string   `json:"claim"`
+	Scenario        string   `json:"scenario"`
+	Impact          string   `json:"impact"`
+	Evidence        []string `json:"evidence"`
+	Confidence      float64  `json:"confidence"`
+	RequiredContext []string `json:"required_context"`
+	Symbol          string   `json:"symbol"`
+	IssueType       string   `json:"issue_type"`
+	AffectedEntity  string   `json:"affected_entity"`
+	Path            string   `json:"path"`
+	Line            int      `json:"line"`
+	Comment         string   `json:"comment"`
+	Severity        string   `json:"severity"`
+	Status          string   `json:"status"`
+	DecisionReason  string   `json:"decision_reason,omitempty"`
+	Fingerprint     string   `json:"fingerprint,omitempty"`
+}
+
+type CandidateValidationDecision struct {
+	Decision string `json:"decision"`
+	Reason   string `json:"reason"`
 }
 
 type ValidationFailure struct {
+	Code   string   `json:"code,omitempty"`
 	Errors []string `json:"errors"`
 }
 
@@ -150,24 +189,162 @@ func groupFiles(values []any, config map[string]any) ([]FileGroup, error) {
 func validateResponse(responseValues, fileValues []any, config map[string]any) (any, string) {
 	response, ok := firstValue(responseValues).(string)
 	if !ok {
-		return ValidationFailure{Errors: []string{"model response must be a JSON finding list"}}, "invalid"
+		return ValidationFailure{Code: "invalid_json", Errors: []string{"model response must be JSON text"}}, "invalid"
+	}
+	schemaValue, hasSchema := responseSchemaFromConfig(config)
+	if hasSchema {
+		parsed, err := parseJSONResponse(response)
+		if err != nil {
+			return ValidationFailure{Code: "invalid_json", Errors: []string{err.Error()}}, "invalid"
+		}
+		schema, err := validateResponseSchema(schemaValue)
+		if err != nil {
+			return ValidationFailure{Code: "invalid_schema", Errors: []string{err.Error()}}, "invalid"
+		}
+		if err = schema.Validate(parsed); err != nil {
+			return ValidationFailure{Code: "schema_mismatch", Errors: []string{err.Error()}}, "invalid"
+		}
+		validatePaths, configErr := configuredBool(config, "validate_paths", false)
+		if configErr != nil {
+			return ValidationFailure{Code: "additional_rule", Errors: []string{configErr.Error()}}, "invalid"
+		}
+		if !validatePaths {
+			return parsed, "valid"
+		}
+		findings, findingErr := findingsFromValue(parsed)
+		if findingErr != nil {
+			return ValidationFailure{Code: "additional_rule", Errors: []string{"config.validate_paths requires a Finding[] compatible response"}}, "invalid"
+		}
+		validated, port := validateFindingRules(findings, fileValues, true)
+		if port == "invalid" {
+			return validated, port
+		}
+		return parsed, "valid"
 	}
 	findings, err := parseFindings(response)
 	if err != nil {
-		return ValidationFailure{Errors: []string{err.Error()}}, "invalid"
+		return ValidationFailure{Code: "invalid_json", Errors: []string{err.Error()}}, "invalid"
 	}
 	validatePaths, err := configuredBool(config, "validate_paths", false)
 	if err != nil {
-		return ValidationFailure{Errors: []string{err.Error()}}, "invalid"
+		return ValidationFailure{Code: "additional_rule", Errors: []string{err.Error()}}, "invalid"
 	}
+	return validateFindingRules(findings, fileValues, validatePaths)
+}
+
+func candidateFindings(values []any) ([]CandidateFinding, error) {
+	var candidates []CandidateFinding
+	for _, value := range values {
+		switch typed := value.(type) {
+		case []CandidateFinding:
+			candidates = append(candidates, typed...)
+		case CandidateFinding:
+			candidates = append(candidates, typed)
+		default:
+			payload, err := json.Marshal(value)
+			if err != nil {
+				return nil, fmt.Errorf("candidate validator requires CandidateFinding[]")
+			}
+			var decoded []CandidateFinding
+			if err = json.Unmarshal(payload, &decoded); err != nil || decoded == nil {
+				return nil, fmt.Errorf("candidate validator requires CandidateFinding[]")
+			}
+			candidates = append(candidates, decoded...)
+		}
+	}
+	for index := range candidates {
+		candidate := &candidates[index]
+		if candidate.Status == "" {
+			candidate.Status = CandidatePending
+		}
+		if candidate.Status != CandidatePending {
+			return nil, fmt.Errorf("candidate %d must enter validation with status PENDING", index)
+		}
+		if strings.TrimSpace(candidate.CheckID) == "" ||
+			strings.TrimSpace(candidate.Claim) == "" ||
+			strings.TrimSpace(candidate.Scenario) == "" ||
+			strings.TrimSpace(candidate.Impact) == "" ||
+			strings.TrimSpace(candidate.Symbol) == "" ||
+			strings.TrimSpace(candidate.IssueType) == "" ||
+			strings.TrimSpace(candidate.AffectedEntity) == "" ||
+			strings.TrimSpace(candidate.Path) == "" ||
+			candidate.Line < 1 ||
+			strings.TrimSpace(candidate.Comment) == "" ||
+			len(candidate.Evidence) == 0 ||
+			candidate.Confidence < 0 || candidate.Confidence > 1 {
+			return nil, fmt.Errorf("candidate %d does not satisfy the CandidateFinding contract", index)
+		}
+		if _, allowed := severityRank[candidate.Severity]; !allowed {
+			return nil, fmt.Errorf("candidate %d severity %q is not allowed", index, candidate.Severity)
+		}
+		for _, evidence := range candidate.Evidence {
+			if strings.TrimSpace(evidence) == "" {
+				return nil, fmt.Errorf("candidate %d contains empty evidence", index)
+			}
+		}
+	}
+	return candidates, nil
+}
+
+func parseCandidateDecision(response string) (CandidateValidationDecision, error) {
+	decoder := json.NewDecoder(strings.NewReader(response))
+	decoder.DisallowUnknownFields()
+	var decision CandidateValidationDecision
+	if err := decoder.Decode(&decision); err != nil {
+		return decision, fmt.Errorf("candidate validator response must be a decision object: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return decision, fmt.Errorf("candidate validator response must contain one decision object")
+	}
+	if decision.Decision != CandidateConfirmed && decision.Decision != CandidateRejected && decision.Decision != CandidateNeedsContext {
+		return decision, fmt.Errorf("candidate validator decision must be CONFIRMED, REJECTED, or NEEDS_CONTEXT")
+	}
+	if strings.TrimSpace(decision.Reason) == "" {
+		return decision, fmt.Errorf("candidate validator decision reason is required")
+	}
+	return decision, nil
+}
+
+func confirmedFinding(candidate CandidateFinding) Finding {
+	return Finding{Path: candidate.Path, Line: candidate.Line, Comment: candidate.Comment, Severity: candidate.Severity, Fingerprint: candidate.Fingerprint}
+}
+
+func candidateFingerprint(candidate CandidateFinding, file map[string]any) string {
+	parts := []string{
+		systemFileIdentity(file, "_forgereview_repository", "unknown"),
+		systemFileIdentity(file, "_forgereview_base_commit", "unknown"),
+		strings.TrimSpace(candidate.Path),
+		normalizedIdentityPart(candidate.Symbol),
+		normalizedIdentityPart(candidate.CheckID),
+		normalizedIdentityPart(candidate.IssueType),
+		normalizedIdentityPart(candidate.AffectedEntity),
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return fmt.Sprintf("sha256:%x", sum[:])
+}
+
+func normalizedIdentityPart(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(value), " "))
+}
+
+func systemFileIdentity(file map[string]any, key, fallback string) string {
+	value, _ := file[key].(string)
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func validateFindingRules(findings []Finding, fileValues []any, validatePaths bool) (any, string) {
 	var filesByPath map[string]map[string]any
 	if validatePaths {
 		if len(fileValues) == 0 {
-			return ValidationFailure{Errors: []string{"validate card requires fetched files when config.validate_paths is true"}}, "invalid"
+			return ValidationFailure{Code: "additional_rule", Errors: []string{"validate card requires fetched files when config.validate_paths is true"}}, "invalid"
 		}
 		files, fileErr := workflowFiles(fileValues)
 		if fileErr != nil {
-			return ValidationFailure{Errors: []string{"validate card requires fetched files when config.validate_paths is true"}}, "invalid"
+			return ValidationFailure{Code: "additional_rule", Errors: []string{"validate card requires fetched files when config.validate_paths is true"}}, "invalid"
 		}
 		filesByPath = make(map[string]map[string]any, len(files))
 		for _, file := range files {
@@ -195,9 +372,30 @@ func validateResponse(responseValues, fileValues []any, config map[string]any) (
 		}
 	}
 	if len(errors) > 0 {
-		return ValidationFailure{Errors: errors}, "invalid"
+		return ValidationFailure{Code: "additional_rule", Errors: errors}, "invalid"
 	}
 	return findings, "valid"
+}
+
+func parseJSONResponse(response string) (any, error) {
+	decoder := json.NewDecoder(strings.NewReader(response))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, fmt.Errorf("model response must be valid JSON: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("model response must contain one JSON value")
+	}
+	return value, nil
+}
+
+func findingsFromValue(value any) ([]Finding, error) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return parseFindings(string(payload))
 }
 
 var unifiedDiffHunk = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
@@ -472,8 +670,13 @@ func findingLists(values []any) ([]Finding, error) {
 func deduplicateFindings(findings []Finding) []Finding {
 	unique := make(map[string]Finding, len(findings))
 	for _, finding := range findings {
-		key := finding.Path + "\x00" + fmt.Sprint(finding.Line) + "\x00" + finding.Comment + "\x00" + finding.Severity
-		unique[key] = finding
+		key := finding.Fingerprint
+		if key == "" {
+			key = finding.Path + "\x00" + fmt.Sprint(finding.Line) + "\x00" + finding.Comment + "\x00" + finding.Severity
+		}
+		if _, exists := unique[key]; !exists {
+			unique[key] = finding
+		}
 	}
 	result := make([]Finding, 0, len(unique))
 	for _, finding := range unique {

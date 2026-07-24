@@ -95,6 +95,27 @@
     resize: vertical;
 }
 
+.inspector .schemaEditor {
+    min-height: 220px;
+    font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.contractActions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 8px 0;
+}
+
+.contractActions button {
+    @include control;
+    padding: 7px 9px;
+    color: $text-secondary;
+    cursor: pointer;
+}
+
 .inspector dl {
     display: grid;
     gap: 5px;

@@ -29,7 +29,9 @@ export function reviewPipelineState(
     definition.nodes.find((item) => item.type === type);
   const fetch = node("fetch");
   const publish = node("publish");
-  const model = node("model");
+  const modelNodes = definition.nodes.filter(
+    (item) => item.type === "model" || item.type === "candidate_validator",
+  );
   const activeConnection = (key: unknown) =>
     typeof key === "string" &&
     integrations.some(
@@ -43,14 +45,17 @@ export function reviewPipelineState(
         (edge) => edge.to_node === nodeKey && edge.to_port === port,
       ),
     );
-  const profile = profiles.find(
-    (item) =>
-      item.key === model?.config.model_profile && item.status === "active",
-  );
+  const modelsReady = modelNodes.length > 0 && modelNodes.every((model) => {
+    const profile = profiles.find(
+      (item) =>
+        item.key === model.config.model_profile && item.status === "active",
+    );
+    return Boolean(profile && activeConnection(profile.integration_key));
+  });
   const ready =
     activeConnection(fetch?.config.integration) &&
     activeConnection(publish?.config.integration) &&
-    Boolean(profile && activeConnection(profile.integration_key)) &&
+    modelsReady &&
     hasInput(fetch?.key, "event") &&
     hasInput(publish?.key, "pull_request");
   const safe =

@@ -199,6 +199,68 @@ func TestEnsureOfficialReviewWorkflowAppendOnlyUpgradesUntouchedLegacySeed(t *te
 	}
 }
 
+func TestEnsureOfficialReviewWorkflowAppendOnlyAddsCandidateValidation(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/candidate-upgrade.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	previousID, err := database.Save(context.Background(), workflow.PreviousVerifiableReviewDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Publish(context.Background(), previousID, workflow.DefaultCatalog()); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, seeded, err := database.EnsureOfficialReviewWorkflow(context.Background(), workflow.DefaultCatalog())
+	if err != nil || !seeded || upgraded.Version != 2 {
+		t.Fatalf("candidate upgrade = %#v, %t, %v", upgraded, seeded, err)
+	}
+	definition, err := database.Load(context.Background(), upgraded.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundValidator := false
+	for _, node := range definition.Nodes {
+		foundValidator = foundValidator || node.Type == "candidate_validator"
+	}
+	if !foundValidator {
+		t.Fatalf("upgraded definition has no candidate validator: %#v", definition)
+	}
+}
+
+func TestEnsureOfficialReviewWorkflowAppendOnlyAddsVersionedChecklist(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/checklist-upgrade.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	previousID, err := database.Save(context.Background(), workflow.PreviousCandidateReviewDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Publish(context.Background(), previousID, workflow.DefaultCatalog()); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, seeded, err := database.EnsureOfficialReviewWorkflow(context.Background(), workflow.DefaultCatalog())
+	if err != nil || !seeded || upgraded.Version != 2 {
+		t.Fatalf("checklist upgrade = %#v, %t, %v", upgraded, seeded, err)
+	}
+	definition, err := database.Load(context.Background(), upgraded.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured := 0
+	for _, node := range definition.Nodes {
+		if (node.Type == "model" || node.Type == "candidate_validator") && node.Config["review_checklist"] != nil {
+			configured++
+		}
+	}
+	if configured != 2 {
+		t.Fatalf("checklist snapshots = %d in %#v", configured, definition)
+	}
+}
+
 func TestSaveRejectsFixedPullRequestCoordinates(t *testing.T) {
 	database, err := Open("file:" + t.TempDir() + "/reject-fixed.db")
 	if err != nil {

@@ -7,10 +7,18 @@ import {
   type CSSProperties,
 } from "react";
 import { placeCardEditor, type PopoverPlacement } from "../../lib/popover";
+import {
+  parseResponseSchemaText,
+  responseSchemaError,
+} from "../../lib/response-contracts";
+import { checklistSnapshot } from "../../lib/review-checklists";
 import type {
   CardData,
   Integration,
   ModelProfile,
+  ResponseContract,
+  ReviewChecklist,
+  ReviewChecklistSnapshot,
   WebhookRegistration,
   WorkflowSummary,
 } from "../../lib/types";
@@ -22,6 +30,8 @@ export function CardInspector({
   selected,
   integrations,
   modelProfiles,
+  responseContracts,
+  reviewChecklists,
   workflows,
   hasErrorRoute,
   onChange,
@@ -36,6 +46,8 @@ export function CardInspector({
   selected: CardData;
   integrations: Integration[];
   modelProfiles: ModelProfile[];
+  responseContracts: ResponseContract[];
+  reviewChecklists: ReviewChecklist[];
   workflows: WorkflowSummary[];
   hasErrorRoute: boolean;
   onChange: (patch: Partial<CardData>) => void;
@@ -58,6 +70,7 @@ export function CardInspector({
   const [webhookName, setWebhookName] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
   const [webhookBusy, setWebhookBusy] = useState(false);
+  const [schemaText, setSchemaText] = useState("");
   const panelRef = useRef<HTMLElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
   const [placement, setPlacement] = useState<PopoverPlacement>();
@@ -149,37 +162,75 @@ export function CardInspector({
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [onClose]);
+  useEffect(() => {
+    const schema = selected.config.response_schema;
+    setSchemaText(
+      typeof schema === "string"
+        ? schema
+        : schema && typeof schema === "object"
+          ? JSON.stringify(schema, null, 2)
+          : "",
+    );
+  }, [selected.key, selected.config.response_schema]);
   const updateConfig = (key: string, value: unknown) =>
     !readOnly && onChange({ config: { ...selected.config, [key]: value } });
+  const replaceConfig = (
+    patch: Record<string, unknown>,
+    remove: string[] = [],
+  ) => {
+    if (readOnly) return;
+    const next = { ...selected.config, ...patch };
+    for (const key of remove) delete next[key];
+    onChange({ config: next });
+  };
+  const schemaValidation = schemaText
+    ? parseResponseSchemaText(schemaText)
+    : undefined;
+  const configuredChecklist =
+    selected.config.review_checklist &&
+    typeof selected.config.review_checklist === "object"
+      ? (selected.config.review_checklist as ReviewChecklistSnapshot)
+      : undefined;
   const gitea = integrations.filter(
     (item) => item.type === "gitea" && item.status === "active",
   );
   const models = modelProfiles.filter((item) => item.status === "active");
   const connectionFields = (
     <label>
-      {selected.type === "model" ? "Perfil de modelo" : "Integração"}
+      {selected.type === "model" || selected.type === "candidate_validator"
+        ? "Perfil de modelo"
+        : "Integração"}
       <select
         value={configText(
           selected.config[
-            selected.type === "model" ? "model_profile" : "integration"
+            selected.type === "model" || selected.type === "candidate_validator"
+              ? "model_profile"
+              : "integration"
           ],
         )}
         onChange={(event) =>
           updateConfig(
-            selected.type === "model" ? "model_profile" : "integration",
+            selected.type === "model" || selected.type === "candidate_validator"
+              ? "model_profile"
+              : "integration",
             event.target.value,
           )
         }
       >
         <option value="">
-          {selected.type === "model"
+          {selected.type === "model" || selected.type === "candidate_validator"
             ? "Selecione um perfil"
             : "Selecione uma conexão"}
         </option>
-        {(selected.type === "model" ? models : gitea).map((item) => (
+        {(selected.type === "model" || selected.type === "candidate_validator"
+          ? models
+          : gitea
+        ).map((item) => (
           <option key={item.key} value={item.key}>
             {item.name}
-            {selected.type === "model" && "model" in item
+            {(selected.type === "model" ||
+              selected.type === "candidate_validator") &&
+            "model" in item
               ? ` · ${item.model}`
               : ""}
           </option>
@@ -489,10 +540,7 @@ export function CardInspector({
                   onInput={(event) => event.currentTarget.setCustomValidity("")}
                   onBlur={(event) => {
                     if (!event.currentTarget.value.trim())
-                      return updateConfig(
-                        "published_input_fields",
-                        undefined,
-                      );
+                      return updateConfig("published_input_fields", undefined);
                     try {
                       updateConfig(
                         "published_input_fields",
@@ -506,8 +554,8 @@ export function CardInspector({
                   placeholder='[{"key":"payload","label":"Payload","contract":"any","required":true}]'
                 />
                 <small>
-                  Quando informado, substitui a lista simples e publica contratos
-                  e obrigatoriedade explícitos.
+                  Quando informado, substitui a lista simples e publica
+                  contratos e obrigatoriedade explícitos.
                 </small>
               </label>
             </>
@@ -525,9 +573,41 @@ export function CardInspector({
             </label>
           )}
           {selected.type === "fetch" && <>{connectionFields}</>}
-          {selected.type === "model" && (
+          {(selected.type === "model" ||
+            selected.type === "candidate_validator") && (
             <>
               {connectionFields}
+              <label>
+                Checklist versionada
+                <select
+                  value={configuredChecklist?.key ?? ""}
+                  onChange={(event) => {
+                    const checklist = reviewChecklists.find(
+                      (item) => item.key === event.target.value,
+                    );
+                    if (!checklist) {
+                      replaceConfig({}, ["review_checklist"]);
+                      return;
+                    }
+                    updateConfig(
+                      "review_checklist",
+                      checklistSnapshot(checklist),
+                    );
+                  }}
+                >
+                  <option value="">Sem checklist fechada</option>
+                  {reviewChecklists.map((checklist) => (
+                    <option key={checklist.key} value={checklist.key}>
+                      {checklist.name} · v{checklist.version}
+                    </option>
+                  ))}
+                </select>
+                <small>
+                  {configuredChecklist
+                    ? `${configuredChecklist.items.length} checks · ${Array.from(new Set(configuredChecklist.items.map((item) => item.category))).join(", ")}`
+                    : "Sem checklist, o reviewer mantém compatibilidade com workflows livres."}
+                </small>
+              </label>
               {numberField("max_tokens", "Máximo de tokens", 2000)}
               {optionalDecimalField(
                 "temperature",
@@ -609,22 +689,24 @@ export function CardInspector({
                 1000000,
                 0.000001,
               )}
-              {boundedNumberField(
-                "retry_limit",
-                "Tentativas de correção",
-                0,
-                3,
-              )}
-              {boundedNumberField(
-                "retry_delay_ms",
-                "Espera entre tentativas (ms)",
-                0,
-                60000,
-              )}
+              {selected.type === "model" &&
+                boundedNumberField(
+                  "retry_limit",
+                  "Tentativas de correção",
+                  0,
+                  3,
+                )}
+              {selected.type === "model" &&
+                boundedNumberField(
+                  "retry_delay_ms",
+                  "Espera entre tentativas (ms)",
+                  0,
+                  60000,
+                )}
               <small>
-                Quando a saída for ligada diretamente a Validar e falhar no
-                formato, o modelo repete o prompt com uma instrução de correção.
-                Zero desativa; no máximo 3 tentativas e 60.000 ms de espera.
+                {selected.type === "candidate_validator"
+                  ? "Cada candidato recebe uma chamada isolada. Somente CONFIRMED segue para publicação; falhas de contrato interrompem o card."
+                  : "Quando a saída for ligada diretamente a Validar e falhar no formato, o modelo repete o prompt com uma instrução de correção. Zero desativa; no máximo 3 tentativas e 60.000 ms de espera."}
               </small>
             </>
           )}
@@ -1028,12 +1110,152 @@ export function CardInspector({
             </>
           )}
           {selected.type === "validate" && (
-            <ToggleSwitch
-              checked={Boolean(selected.config.validate_paths)}
-              onChange={(checked) => updateConfig("validate_paths", checked)}
-              label="Validar caminhos do PR"
-              description="Recusa achados para arquivos ausentes nos dados buscados."
-            />
+            <>
+              <label>
+                Contrato de resposta
+                <select
+                  value={
+                    configText(selected.config.response_contract_key) ||
+                    (selected.config.response_schema === undefined
+                      ? "legacy"
+                      : "custom")
+                  }
+                  onChange={(event) => {
+                    if (event.target.value === "legacy") {
+                      setSchemaText("");
+                      replaceConfig({}, [
+                        "response_schema",
+                        "response_contract_key",
+                      ]);
+                      return;
+                    }
+                    if (event.target.value === "custom") {
+                      if (selected.config.response_schema === undefined) {
+                        const schema = responseContracts[0]?.schema ?? {
+                          type: "object",
+                        };
+                        setSchemaText(JSON.stringify(schema, null, 2));
+                        replaceConfig({ response_schema: schema }, [
+                          "response_contract_key",
+                        ]);
+                      } else {
+                        replaceConfig({}, ["response_contract_key"]);
+                      }
+                      return;
+                    }
+                    const contract = responseContracts.find(
+                      (item) => item.key === event.target.value,
+                    );
+                    if (!contract) return;
+                    setSchemaText(JSON.stringify(contract.schema, null, 2));
+                    replaceConfig({
+                      response_contract_key: contract.key,
+                      response_schema: contract.schema,
+                    });
+                  }}
+                >
+                  <option value="legacy">Legado · Finding[]</option>
+                  {responseContracts.map((contract) => (
+                    <option key={contract.key} value={contract.key}>
+                      {contract.name} · v{contract.version}
+                    </option>
+                  ))}
+                  <option value="custom">Personalizado</option>
+                </select>
+                <small>
+                  {responseContracts.find(
+                    (item) =>
+                      item.key ===
+                      configText(selected.config.response_contract_key),
+                  )?.description ??
+                    "O backend continua sendo a autoridade final do contrato."}
+                </small>
+              </label>
+              {selected.config.response_schema !== undefined && (
+                <>
+                  <label>
+                    JSON Schema
+                    <textarea
+                      className={styles.schemaEditor}
+                      spellCheck={false}
+                      value={schemaText}
+                      onChange={(event) => {
+                        const text = event.target.value;
+                        setSchemaText(text);
+                        const parsed = parseResponseSchemaText(text);
+                        replaceConfig(
+                          {
+                            response_schema:
+                              "schema" in parsed ? parsed.schema : text,
+                          },
+                          ["response_contract_key"],
+                        );
+                      }}
+                      readOnly={Boolean(selected.config.response_contract_key)}
+                    />
+                  </label>
+                  <div className={styles.contractActions}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const parsed = parseResponseSchemaText(schemaText);
+                        if ("schema" in parsed)
+                          setSchemaText(JSON.stringify(parsed.schema, null, 2));
+                      }}
+                    >
+                      Formatar
+                    </button>
+                    {Boolean(selected.config.response_contract_key) && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          replaceConfig({}, ["response_contract_key"])
+                        }
+                      >
+                        Duplicar para editar
+                      </button>
+                    )}
+                    {Boolean(selected.config.response_contract_key) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const contract = responseContracts.find(
+                            (item) =>
+                              item.key ===
+                              selected.config.response_contract_key,
+                          );
+                          if (!contract) return;
+                          setSchemaText(
+                            JSON.stringify(contract.schema, null, 2),
+                          );
+                          replaceConfig({ response_schema: contract.schema });
+                        }}
+                      >
+                        Restaurar
+                      </button>
+                    )}
+                  </div>
+                  <small
+                    className={
+                      schemaValidation && "schema" in schemaValidation
+                        ? styles.valid
+                        : styles.invalid
+                    }
+                  >
+                    {schemaValidation && "schema" in schemaValidation
+                      ? "JSON Schema válido."
+                      : (schemaValidation?.error ??
+                        responseSchemaError(selected.config.response_schema))}
+                  </small>
+                </>
+              )}
+              <ToggleSwitch
+                checked={Boolean(selected.config.validate_paths)}
+                onChange={(checked) => updateConfig("validate_paths", checked)}
+                label="Validar caminhos do PR"
+                description="Recusa achados para arquivos ausentes nos dados buscados."
+              />
+            </>
           )}
           {selected.type === "response_filter" && (
             <label>
@@ -1056,6 +1278,7 @@ export function CardInspector({
             "trigger",
             "fetch",
             "model",
+            "candidate_validator",
             "publish",
             "filter",
             "group",
@@ -1104,9 +1327,7 @@ export function CardInspector({
             </label>
             {configText(selected.config.published_output_port) && (
               <ToggleSwitch
-                checked={Boolean(
-                  selected.config.published_output_required,
-                )}
+                checked={Boolean(selected.config.published_output_required)}
                 onChange={(checked) =>
                   updateConfig("published_output_required", checked)
                 }

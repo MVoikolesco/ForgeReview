@@ -8,6 +8,8 @@ import type {
   NewIntegration,
   Discovery,
   Repository,
+  ResponseContract,
+  ReviewChecklist,
   WorkflowDefinition,
   PublishedWorkflow,
   WorkflowSummary,
@@ -129,6 +131,10 @@ const normalizeExecutionStart = (value: unknown): ExecutionStart => {
 
 export const getCards = async () =>
   (await request<CardType[]>("/api/cards")).map(normalizeCard);
+export const getResponseContracts = () =>
+  request<ResponseContract[]>("/api/response-contracts");
+export const getReviewChecklists = () =>
+  request<ReviewChecklist[]>("/api/review-checklists");
 export const getHealth = () => request<{ status: string }>("/health");
 export type CurrentUser = {
   id: number;

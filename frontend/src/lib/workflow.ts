@@ -10,6 +10,15 @@ import type {
   ExecutionReport,
   WorkflowInterfaceField,
 } from "./types";
+import {
+  candidateFindingsSchema,
+  responseSchemaError,
+} from "./response-contracts";
+import {
+  checklistSnapshot,
+  officialReviewChecklist,
+  reviewChecklistError,
+} from "./review-checklists";
 
 export const categoryAccent = (category: string) =>
   ({
@@ -507,7 +516,7 @@ export function validateStudioWorkflow(
         nodeKey: node.key,
         message: `Defina o template do card "${node.name}".`,
       });
-    if (node.type === "model") {
+    if (node.type === "model" || node.type === "candidate_validator") {
       if (
         !nonEmptyText(node.config.model_profile) &&
         !nonEmptyText(node.config.integration)
@@ -516,6 +525,16 @@ export function validateStudioWorkflow(
           nodeKey: node.key,
           message: `Selecione um perfil de modelo para "${node.name}".`,
         });
+      if (node.config.review_checklist !== undefined) {
+        const checklistError = reviewChecklistError(
+          node.config.review_checklist,
+        );
+        if (checklistError)
+          issues.push({
+            nodeKey: node.key,
+            message: `"${node.name}" possui checklist inválida: ${checklistError}`,
+          });
+      }
       for (const [key, max] of [
         ["retry_limit", 3],
         ["retry_delay_ms", 60000],
@@ -612,6 +631,17 @@ export function validateStudioWorkflow(
         issues.push({
           nodeKey: node.key,
           message: `"${node.name}" requer preços não negativos para aplicar orçamento de custo.`,
+        });
+    }
+    if (
+      node.type === "validate" &&
+      node.config.response_schema !== undefined
+    ) {
+      const schemaError = responseSchemaError(node.config.response_schema);
+      if (schemaError)
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" possui contrato inválido: ${schemaError}`,
         });
     }
     if (
@@ -1016,6 +1046,7 @@ export function reviewTemplate(
     "template",
     "model",
     "validate",
+    "candidate_validator",
     "response_filter",
     "consolidate",
     "format",
@@ -1059,18 +1090,35 @@ export function reviewTemplate(
       }),
       node("template", "template", "Prompt de review", 1480, 125, {
         template:
-          "Analise este grupo de arquivos e responda somente uma lista JSON de achados.",
+          "Analise este grupo de arquivos e proponha somente CandidateFinding sustentados por evidência concreta em linhas alteradas. Não confirme nem publique achados. Responda somente uma lista JSON de candidatos.",
       }),
       node("model", "model", "Modelo de review", 1775, 125, {
         model_profile: "",
         max_tokens: 2000,
         retry_limit: 0,
         retry_delay_ms: 0,
+        review_checklist: checklistSnapshot(officialReviewChecklist),
       }),
       node("validate", "validate", "Validar resposta", 2070, 125, {
         validate_paths: true,
+        response_contract_key: "review.candidate-findings.v1",
+        response_schema: candidateFindingsSchema,
       }),
-      node("response-filter", "response_filter", "Filtrar achados", 2365, 125, {
+      node(
+        "candidate-validator",
+        "candidate_validator",
+        "Validar candidatos",
+        2365,
+        125,
+        {
+          model_profile: "",
+          max_tokens: 300,
+          temperature: 0,
+          timeout_seconds: 120,
+          review_checklist: checklistSnapshot(officialReviewChecklist),
+        },
+      ),
+      node("response-filter", "response_filter", "Filtrar achados", 2660, 125, {
         minimum_severity: "medium",
       }),
       node("consolidate", "consolidate", "Consolidar review", 2070, 480),
@@ -1090,7 +1138,9 @@ export function reviewTemplate(
       ["template", "out-prompt", "model", "in-prompt"],
       ["model", "out-response", "validate", "in-response"],
       ["loop", "out-item", "validate", "in-files"],
-      ["validate", "out-valid", "response-filter", "in-response"],
+      ["validate", "out-valid", "candidate-validator", "in-candidates"],
+      ["loop", "out-item", "candidate-validator", "in-files"],
+      ["candidate-validator", "out-confirmed", "response-filter", "in-response"],
       ["loop", "out-results", "consolidate", "in-comments"],
       ["consolidate", "out-review", "format", "in-review"],
       ["format", "out-formatted", "publish", "in-formatted_review"],

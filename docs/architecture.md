@@ -356,6 +356,50 @@ environment configuration.
 
 ## Studio lifecycle and validation flow
 
+### Configurable response contracts
+
+The `validate` card optionally stores a Draft 2020-12 JSON Schema in
+`config.response_schema`. Studio loads immutable presets from
+`GET /api/response-contracts`, supports preset copying and custom editing, and
+blocks save, publish, and execution when local compilation fails. The backend
+remains authoritative: it limits schemas to 64 KiB/depth 32, rejects external
+references, compiles on workflow validation, and validates the parsed model
+response again at runtime. Missing `response_schema` preserves the legacy
+`Finding[]` contract. Runtime failures distinguish invalid JSON, invalid schema,
+schema mismatch, and additional review rules. See `docs/response-contracts.md`.
+
+### Candidate validation boundary
+
+The official review graph no longer routes model proposals directly into the
+publication path. Its reviewer emits `CandidateFinding[]`, `validate` enforces
+the candidate schema and observed added lines, and `candidate_validator` makes
+one isolated model call per candidate. The validator can only confirm, reject,
+or request context and cannot search for new issues. Missing observed file
+context becomes the system-owned `NOT_OBSERVABLE` state. Only confirmed
+candidates are converted to the legacy `Finding` shape consumed by
+`response_filter`; all decisions remain internal execution evidence. Untouched
+official seeds are upgraded append-only, while custom workflows and legacy
+`Finding[]` graphs remain compatible. See `docs/findings-verificaveis.md`.
+
+Candidate identity is system-owned. Fetch attaches repository and base-commit
+coordinates to observed files, and the validator hashes those coordinates with
+path, symbol, check ID, issue type, and affected entity. Generated wording,
+severity, and line number are deliberately excluded. Duplicate fingerprints are
+rejected before provider validation and deduplicated again during root
+consolidation. Legacy findings without fingerprints retain their previous
+text-based compatibility behavior.
+
+### Versioned reviewer checklists
+
+`GET /api/review-checklists` exposes immutable checklist versions. Selecting one
+copies a bounded snapshot into `config.review_checklist`; executions therefore
+do not depend on future catalog changes. Model execution appends the closed
+check set to the reviewer prompt and forbids invented check IDs. The independent
+validator uses the same snapshot as a deterministic allowlist: candidates
+outside it become `NOT_APPLICABLE` without a provider call. Missing checklist
+configuration preserves legacy free-review behavior. See
+`docs/review-checklists.md`.
+
 The Studio loads the card catalog from `GET /api/cards`, lets an administrator
 add cards and draw port connections, and saves the current canvas as a new
 workflow version. `Salvar rascunho` creates a draft. `Publicar` first creates a

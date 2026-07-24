@@ -301,6 +301,23 @@
   now aggregates finding lists into root consolidation, followed by one format
   and controlled publication run; local fake-adapter coverage verifies the
   multi-group path. See [[Architecture]] and [[Feature Map]].
+- Added configurable Draft 2020-12 response contracts to `validate`, five
+  immutable catalog presets, backend schema/resource enforcement, runtime error
+  classification, and a Studio preset/custom editor with early validation.
+  Legacy `Finding[]` workflows remain compatible. See [[Architecture]],
+  [[Decision Log]], and `docs/response-contracts.md`.
+- Added `CandidateFinding`, closed decision states, and the independently
+  configured `candidate_validator` card. The official pipeline now validates
+  one candidate per model call and only routes confirmed findings toward Gitea;
+  untouched official versions upgrade append-only. See [[Architecture]],
+  [[Decision Log]], and `docs/findings-verificaveis.md`.
+- Added system-owned semantic fingerprints and two-stage deduplication.
+  Repository/base-commit coordinates now flow from fetch into candidate
+  identity; generated prose and line numbers do not affect equality. Duplicate
+  counts are available as safe execution facts.
+- Added immutable versioned review checklists, Studio selection, prompt
+  enforcement, backend snapshot validation, and deterministic
+  `NOT_APPLICABLE` handling for candidates outside the selected checklist.
 - Replaced integration environment-secret references with AES-256-GCM encrypted
   Token/API key persistence. The backend now requires a strict
   `FORGEREVIEW_ENCRYPTION_KEY`, migrates legacy integration tables without

@@ -12,6 +12,46 @@ const (
 // model-profile records before creating an executable derivative. PR identity
 // always flows through the typed event and pull_request ports.
 func OfficialReviewDefinition() Definition {
+	definition := officialReviewDefinitionV1()
+	checklist := officialReviewChecklistSnapshot()
+	definition.Description = "Seeded verifiable pull-request review pipeline with independent candidate validation and one native Gitea review publication."
+	for index := range definition.Nodes {
+		switch definition.Nodes[index].Key {
+		case "model":
+			definition.Nodes[index].Config["review_checklist"] = checklist
+		case "template":
+			definition.Nodes[index].Config["template"] = "Analise este grupo de arquivos e proponha somente CandidateFinding sustentados por evidência concreta em linhas alteradas. Não confirme nem publique achados. Responda somente uma lista JSON de candidatos."
+		case "validate":
+			definition.Nodes[index].Config["response_contract_key"] = "review.candidate-findings.v1"
+			definition.Nodes[index].Config["response_schema"] = responseContractSchema("review.candidate-findings.v1")
+		case "response-filter":
+			definition.Nodes[index].Position.X = 2660
+		}
+	}
+	definition.Nodes = append(definition.Nodes, Node{
+		Key: "candidate-validator", Type: "candidate_validator", Name: "Validar candidatos",
+		Position: Position{X: 2365, Y: 125},
+		Config:   map[string]any{"model_profile": "", "max_tokens": 300, "temperature": 0.0, "timeout_seconds": 120, "review_checklist": checklist},
+	})
+	edges := make([]Edge, 0, len(definition.Edges)+2)
+	for _, edge := range definition.Edges {
+		if edge.Key == "validate-response-filter" {
+			continue
+		}
+		edges = append(edges, edge)
+	}
+	edges = append(edges,
+		Edge{Key: "validate-candidate-validator", FromNode: "validate", FromPort: "valid", ToNode: "candidate-validator", ToPort: "candidates"},
+		Edge{Key: "loop-candidate-validator", FromNode: "loop", FromPort: "item", ToNode: "candidate-validator", ToPort: "files"},
+		Edge{Key: "candidate-validator-response-filter", FromNode: "candidate-validator", FromPort: "confirmed", ToNode: "response-filter", ToPort: "response"},
+	)
+	definition.Edges = edges
+	return definition
+}
+
+// officialReviewDefinitionV1 is retained only to recognize and append-only
+// upgrade the untouched official seed that published model findings directly.
+func officialReviewDefinitionV1() Definition {
 	return Definition{
 		Key:         OfficialReviewWorkflowKey,
 		Name:        "Official Gitea PR Review",
@@ -51,8 +91,22 @@ func OfficialReviewDefinition() Definition {
 // PreviousOfficialReviewDefinition identifies only the untouched seed shipped
 // before typed trigger modes. It is used for an append-only startup upgrade.
 func PreviousOfficialReviewDefinition() Definition {
-	definition := OfficialReviewDefinition()
+	definition := officialReviewDefinitionV1()
 	definition.Nodes[0].Name = "Webhook / manual"
 	definition.Nodes[0].Config = nil
+	return definition
+}
+
+func PreviousVerifiableReviewDefinition() Definition {
+	return officialReviewDefinitionV1()
+}
+
+func PreviousCandidateReviewDefinition() Definition {
+	definition := OfficialReviewDefinition()
+	for index := range definition.Nodes {
+		if definition.Nodes[index].Key == "model" || definition.Nodes[index].Key == "candidate-validator" {
+			delete(definition.Nodes[index].Config, "review_checklist")
+		}
+	}
 	return definition
 }

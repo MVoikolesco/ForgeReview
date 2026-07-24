@@ -54,4 +54,13 @@ Atualizar também, durante a implementação:
 
 ## Estado atual
 
-O arquivo `docs/roadmap-v3.md` ainda não existe. A criação e edição ficam pendentes da saída do modo de planejamento para execução.
+- Fase 1 implementada: `response_schema`, catálogo oficial em
+  `GET /api/response-contracts`, validação no Studio e backend, limites de
+  segurança e compatibilidade legada.
+- Fase 2 implementada: `CandidateFinding`, estados explícitos, validação
+  independente, fingerprint semântico e deduplicação estável foram entregues.
+  Somente candidatos confirmados e únicos seguem para publicação.
+- Fase 3 iniciada: checklists fechadas e versionadas foram entregues com
+  catálogo, snapshot por workflow e enforcement de `check_id`.
+- Próximo corte recomendado: ledger de cobertura.
+- A referência operacional dos presets está em `docs/response-contracts.md`.

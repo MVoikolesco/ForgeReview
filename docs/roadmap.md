@@ -161,6 +161,8 @@ docs/      Arquitetura, auditoria e este roadmap
 
 - `GET /health`
 - `GET /api/cards`
+- `GET /api/response-contracts`
+- `GET /api/review-checklists`
 - `GET /api/integrations`
 - `POST /api/integrations`
 - `GET /api/model-profiles`
@@ -174,6 +176,20 @@ docs/      Arquitetura, auditoria e este roadmap
 - `GET /api/executions?limit=10` (resumos seguros; `limit` entre 1 e 100)
 
 ## Próximas etapas
+
+### Reviews verificáveis
+
+- **Entregue:** contratos JSON Schema configuráveis no card `validate`,
+  catálogo oficial, validação antecipada no Studio, autoridade final no backend
+  e compatibilidade com `Finding[]`.
+- **Entregue:** `CandidateFinding`, estados de decisão, validador independente
+  por candidato e pipeline oficial publicando somente `CONFIRMED`.
+- **Entregue:** fingerprint SHA-256 baseado em identidade semântica e
+  deduplicação antes da validação e durante a consolidação.
+- **Entregue:** catálogo e snapshots de checklists fechadas e versionadas,
+  aplicados ao reviewer e ao validador independente.
+- Próximo incremento: ledger de
+  cobertura, conforme `docs/roadmap-v3/linha-de-evolucao.md`.
 
 ### 1. Concluir gerenciamento visual
 

@@ -175,3 +175,21 @@
   transform operations and variable namespaces are bounded; conditions expose
   eight match branches; merge supports all/any/quorum and partial timeout; and
   `workflow` runs an immutable published version through its named interface.
+- Configurable response contracts: `validate` can embed a bounded Draft 2020-12
+  JSON Schema, while an immutable backend catalog supplies findings, generic
+  object/array, and review-summary presets. Studio can select, format, restore,
+  or duplicate a preset and blocks invalid workflow actions; the backend
+  recompiles and enforces the contract. Workflows without a schema retain the
+  legacy `Finding[]` path.
+- Verifiable findings: the official reviewer emits `CandidateFinding[]`; a
+  separately configured `candidate_validator` evaluates candidates one at a
+  time and exposes safe decision counts. Only `CONFIRMED` becomes a publishable
+  finding. Rejections, context needs, and unobservable candidates remain in
+  internal retained execution evidence.
+- Stable finding identity: fetch propagates repository/base-commit identity,
+  the system creates semantic SHA-256 fingerprints, and duplicate candidates
+  are removed before validator cost and again at root consolidation. Studio
+  execution facts expose only the duplicate count, not candidate content.
+- Versioned review checklists: an immutable backend catalog supplies closed
+  check sets, Studio copies a selected version into reviewer/validator cards,
+  and runtime rejects unlisted check IDs without another model call.

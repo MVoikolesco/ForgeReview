@@ -5,6 +5,7 @@ go 1.22
 require (
 	github.com/gin-gonic/gin v1.10.0
 	github.com/redis/go-redis/v9 v9.7.0
+	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	golang.org/x/crypto v0.23.0
 	modernc.org/sqlite v1.31.1
 )
