@@ -1145,6 +1145,11 @@ func authenticate(manager *auth.Manager, cookie sessionCookieConfig) gin.Handler
 		}
 		user, err := manager.Authenticate(c.Request.Context(), token)
 		if err != nil {
+			if !errors.Is(err, auth.ErrInvalidSession) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication is temporarily unavailable"})
+				c.Abort()
+				return
+			}
 			clearSessionCookie(c, cookie)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
 			c.Abort()

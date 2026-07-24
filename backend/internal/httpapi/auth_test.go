@@ -3,17 +3,93 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"forgereview/backend/internal/auth"
 	"forgereview/backend/internal/store"
 	"forgereview/backend/internal/workflow"
 )
+
+type unavailableSessionStore struct {
+	*store.SQLite
+}
+
+func (s unavailableSessionStore) SessionValid(context.Context, string, int64, time.Time) (bool, error) {
+	return false, errors.New("database is locked")
+}
+
+func TestTransientSessionStoreFailureDoesNotClearValidCookie(t *testing.T) {
+	db, err := store.Open("file:" + t.TempDir() + "/session-unavailable.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	healthy, err := auth.New(db, auth.Config{SigningKey: strings.Repeat("k", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = healthy.CreateUser(context.Background(), "editor@example.test", "a secure editor password", auth.RoleEditor); err != nil {
+		t.Fatal(err)
+	}
+	_, token, _, err := healthy.Login(context.Background(), "editor@example.test", "a secure editor password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unavailable, err := auth.New(unavailableSessionStore{SQLite: db}, auth.Config{SigningKey: strings.Repeat("k", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewWithAuth(workflow.DefaultCatalog(), db, unavailable)
+	request := httptest.NewRequest(http.MethodGet, "/api/cards", nil)
+	request.AddCookie(&http.Cookie{Name: auth.CookieName, Value: token})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("transient authentication failure = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == auth.CookieName && (cookie.MaxAge < 0 || cookie.Value == "") {
+			t.Fatal("transient authentication failure cleared the valid session cookie")
+		}
+	}
+	if _, err = healthy.Authenticate(context.Background(), token); err != nil {
+		t.Fatalf("valid session was revoked after transient failure: %v", err)
+	}
+}
+
+func TestInvalidSessionStillClearsCookie(t *testing.T) {
+	db, err := store.Open("file:" + t.TempDir() + "/invalid-session.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	manager, err := auth.New(db, auth.Config{SigningKey: strings.Repeat("k", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewWithAuth(workflow.DefaultCatalog(), db, manager)
+	request := httptest.NewRequest(http.MethodGet, "/api/cards", nil)
+	request.AddCookie(&http.Cookie{Name: auth.CookieName, Value: "invalid"})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid session = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+	cleared := false
+	for _, cookie := range response.Result().Cookies() {
+		cleared = cleared || cookie.Name == auth.CookieName && cookie.MaxAge < 0
+	}
+	if !cleared {
+		t.Fatal("invalid session cookie was not cleared")
+	}
+}
 
 func TestAuthenticationAndRolesProtectWrites(t *testing.T) {
 	db, err := store.Open("file:" + t.TempDir() + "/roles.db")

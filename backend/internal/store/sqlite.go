@@ -51,8 +51,19 @@ var (
 )
 
 func Open(path string) (*SQLite, error) {
-	db, err := sql.Open("sqlite", path)
+	// busy_timeout applies to every pooled connection. Without it, a short
+	// execution write can make an unrelated session read fail immediately with
+	// SQLITE_BUSY. WAL keeps status/SSE readers from blocking the worker writer.
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	db, err := sql.Open("sqlite", path+separator+"_pragma=busy_timeout(5000)")
 	if err != nil {
+		return nil, err
+	}
+	if _, err = db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		db.Close()
 		return nil, err
 	}
 	store := &SQLite{db: db}

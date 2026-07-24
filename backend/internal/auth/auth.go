@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,8 @@ import (
 )
 
 const CookieName = "forgereview_session"
+
+var ErrInvalidSession = errors.New("invalid or expired session")
 
 type Role string
 
@@ -138,13 +141,26 @@ func (m *Manager) Login(ctx context.Context, email, password string) (User, stri
 func (m *Manager) Authenticate(ctx context.Context, token string) (User, error) {
 	claims, err := m.verify(token)
 	if err != nil || claims.ExpiresAt <= m.now().Unix() {
-		return User{}, errors.New("invalid or expired session")
+		return User{}, ErrInvalidSession
 	}
 	ok, err := m.store.SessionValid(ctx, claims.Nonce, claims.UserID, m.now())
-	if err != nil || !ok {
-		return User{}, errors.New("invalid or expired session")
+	if err != nil {
+		return User{}, fmt.Errorf("validate session: %w", err)
 	}
-	return m.store.UserByID(ctx, claims.UserID)
+	if !ok {
+		return User{}, ErrInvalidSession
+	}
+	user, err := m.store.UserByID(ctx, claims.UserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrInvalidSession
+	}
+	if err != nil {
+		return User{}, fmt.Errorf("load session user: %w", err)
+	}
+	if !user.Active {
+		return User{}, ErrInvalidSession
+	}
+	return user, nil
 }
 func (m *Manager) Logout(ctx context.Context, token string) {
 	if claims, err := m.verify(token); err == nil {
