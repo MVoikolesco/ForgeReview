@@ -1,0 +1,97 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: gitea-ai-reviewer-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    image: forgereview:local
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: gitea-ai-reviewer-api
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      APP_MODE: api
+      PORT: 8080
+      REDIS_ADDR: redis:6379
+      DATABASE_DSN: /data/forgereview.db
+    command: ["/app/server"]
+    ports:
+      - "8088:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - config_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    image: forgereview:local
+    container_name: gitea-ai-reviewer-worker
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      APP_MODE: worker
+      REDIS_ADDR: redis:6379
+      REDIS_CONSUMER: worker-1
+      DATABASE_DSN: /data/forgereview.db
+    command: ["/app/server"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../prompts:/app/prompts:ro
+      - ../config:/app/config:ro
+      - config_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  web:
+    image: forgereview-web:local
+    build:
+      context: ../web-admin
+      dockerfile: Dockerfile
+      target: ${APP_ENVIRONMENT:-production}
+    container_name: gitea-ai-reviewer-web
+    restart: unless-stopped
+    environment:
+      APP_ENVIRONMENT: ${APP_ENVIRONMENT:-production}
+      API_INTERNAL_URL: http://api:8080
+      CHOKIDAR_USEPOLLING: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../web-admin:/workspace
+      - web_node_modules:/workspace/node_modules
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  redis_data:
+  config_data:
+  web_node_modules:
+  air_tmp:

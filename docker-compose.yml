@@ -1,91 +1,59 @@
 services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      FORGEREVIEW_HTTP_ADDR: :8088
+      FORGEREVIEW_DATABASE_URL: file:/data/forgereview.db
+      FORGEREVIEW_REDIS_URL: redis://redis:6379/0
+      FORGEREVIEW_ENCRYPTION_KEY: ${FORGEREVIEW_ENCRYPTION_KEY:?set FORGEREVIEW_ENCRYPTION_KEY in .env}
+      FORGEREVIEW_BOOTSTRAP_ADMIN_EMAIL: ${FORGEREVIEW_BOOTSTRAP_ADMIN_EMAIL:?set FORGEREVIEW_BOOTSTRAP_ADMIN_EMAIL in .env}
+      FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD: ${FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD:?set FORGEREVIEW_BOOTSTRAP_ADMIN_PASSWORD in .env}
+      FORGEREVIEW_SESSION_SIGNING_KEY: ${FORGEREVIEW_SESSION_SIGNING_KEY:?set FORGEREVIEW_SESSION_SIGNING_KEY in .env}
+      FORGEREVIEW_GIN_MODE: ${FORGEREVIEW_GIN_MODE:-release}
+      FORGEREVIEW_TRUSTED_PROXIES: ${FORGEREVIEW_TRUSTED_PROXIES:-}
+      FORGEREVIEW_CORS_ALLOWED_ORIGINS: ${FORGEREVIEW_CORS_ALLOWED_ORIGINS:-http://localhost:3010}
+      FORGEREVIEW_SESSION_COOKIE_SAME_SITE: ${FORGEREVIEW_SESSION_COOKIE_SAME_SITE:-lax}
+      FORGEREVIEW_SESSION_COOKIE_SECURE: ${FORGEREVIEW_SESSION_COOKIE_SECURE:-false}
+      FORGEREVIEW_LOG_DIR: ${FORGEREVIEW_LOG_DIR:-/app/logs}
+    ports:
+      - "8088:8088"
+    volumes:
+      - workflow-data:/data
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8088/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8088
+    ports:
+      - "3010:3010"
+    depends_on:
+      backend:
+        condition: service_healthy
+
   redis:
-    image: redis:7-alpine
-    container_name: gitea-ai-reviewer-redis
-    restart: unless-stopped
+    image: redis:7.4-alpine
     command: redis-server --appendonly yes
     volumes:
-      - redis_data:/data
-    ports:
-      - "6379:6379"
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 10s
       timeout: 3s
-      retries: 10
-
-  api:
-    image: forgereview:local
-    build: .
-    container_name: gitea-ai-reviewer-api
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      APP_MODE: api
-      PORT: 8080
-      REDIS_ADDR: redis:6379
-      DATABASE_DSN: /data/forgereview.db
-    ports:
-      - "8088:8080"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      redis:
-        condition: service_healthy
-    volumes:
-      - config_data:/data
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
-  worker:
-    image: forgereview:local
-    container_name: gitea-ai-reviewer-worker
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      APP_MODE: worker
-      REDIS_ADDR: redis:6379
-      REDIS_CONSUMER: worker-1
-      DATABASE_DSN: /data/forgereview.db
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - ./prompts:/app/prompts:ro
-      - ./config:/app/config:ro
-      - config_data:/data
-    depends_on:
-      redis:
-        condition: service_healthy
-      api:
-        condition: service_healthy
-
-  web:
-    image: forgereview-web:local
-    build:
-      context: ./web-admin
-      target: ${APP_ENVIRONMENT:-production}
-    container_name: gitea-ai-reviewer-web
-    restart: unless-stopped
-    environment:
-      APP_ENVIRONMENT: ${APP_ENVIRONMENT:-production}
-      API_INTERNAL_URL: http://api:8080
-      CHOKIDAR_USEPOLLING: "true"
-      NEXT_TELEMETRY_DISABLED: "1"
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./web-admin:/workspace
-      - web_node_modules:/workspace/node_modules
-    depends_on:
-      api:
-        condition: service_healthy
+      retries: 5
 
 volumes:
-  redis_data:
-  config_data:
-  web_node_modules:
+  workflow-data:
+  redis-data:

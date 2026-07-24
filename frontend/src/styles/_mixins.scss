@@ -1,0 +1,21 @@
+@use "tokens" as *;
+
+@mixin control {
+  border: 1px solid $border-control;
+  border-radius: $radius-control;
+  color: $text-primary;
+  font: inherit;
+  background: $surface-input;
+}
+
+@mixin field {
+  @include control;
+  width: 100%;
+  min-height: 35px;
+  padding: 8px 9px;
+}
+
+@mixin panel {
+  border: 1px solid $border-subtle;
+  background: $surface-panel;
+}

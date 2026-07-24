@@ -1,0 +1,62 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    image: forgereview-runtime:prod-v5
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_MODE: api
+      PORT: 8080
+      DATABASE_DSN: /data/forgereview.db
+      REDIS_ADDR: redis:6379
+      REVIEW_PROMPT_CONFIG_PATH: /app/config/review-prompts.yaml
+    command: ["/app/server"]
+    ports:
+      - "8088:8080"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: forgereview-runtime:prod-v5
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_MODE: worker
+      DATABASE_DSN: /data/forgereview.db
+      REDIS_ADDR: redis:6379
+      REDIS_CONSUMER: worker-1
+      REVIEW_PROMPT_CONFIG_PATH: /app/config/review-prompts.yaml
+    command: ["/app/server"]
+    volumes:
+      - ./data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+volumes:
+  redis_data:

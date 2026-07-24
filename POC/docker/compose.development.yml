@@ -1,0 +1,37 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: development
+    volumes:
+      - ../:/app
+      - air_tmp:/app/tmp
+      - config_data:/data
+    command: ["/go/bin/air", "-c", ".air.toml"]
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: development
+    volumes:
+      - ../:/app
+      - air_tmp:/app/tmp
+      - config_data:/data
+    command: ["/go/bin/air", "-c", ".air.toml"]
+
+  web:
+    build:
+      target: development
+    environment:
+      APP_ENVIRONMENT: development
+      WATCHPACK_POLLING: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "3010:3000"
+    volumes:
+      - web_next_cache:/workspace/.next
+
+volumes:
+  web_next_cache:

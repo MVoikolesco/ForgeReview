@@ -1,0 +1,154 @@
+@use "../../styles/tokens" as *;
+@use "../../styles/mixins" as *;
+
+.list {
+    display: grid;
+    gap: 16px;
+    margin-top: 24px;
+}
+
+.list article {
+    @include panel;
+    border-radius: $radius-panel;
+}
+
+.list article > header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 17px;
+    border-bottom: 1px solid $border-subtle;
+}
+
+.list header span {
+    color: #7894c0;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .09em;
+}
+
+.list h2 {
+    margin: 5px 0;
+    font-size: 15px;
+}
+
+.list p {
+    max-width: 650px;
+    margin: 0;
+    color: $text-muted;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.list code {
+    overflow-wrap: anywhere;
+    color: $text-muted;
+    font-size: 10px;
+}
+
+.list .delete {
+    border-color: #a84f58;
+    color: #ffd8dc;
+    background: #3b1c22;
+}
+
+.list ol {
+    display: grid;
+    gap: 1px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.list li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 95px 124px 90px 112px;
+    align-items: center;
+    gap: 12px;
+    min-height: 59px;
+    padding: 10px 17px;
+    background: #12161d;
+}
+
+.list li strong,
+.list li time {
+    display: block;
+}
+
+.list li strong {
+    font-size: 12px;
+}
+
+.list li time {
+    margin-top: 4px;
+    color: $text-muted;
+    font-size: 10px;
+}
+
+.draft,
+.published,
+.archived {
+    width: fit-content;
+    padding: 3px 6px;
+    border: 1px solid;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.draft {
+    border-color: #5d83bd;
+    color: #9cc0ff;
+    background: #142640;
+}
+
+.published {
+    border-color: #4e9f78;
+    color: #9bdbb7;
+    background: #173b2a;
+}
+
+.archived {
+    border-color: #56606d;
+    color: #9aa5b3;
+    background: #20252c;
+}
+
+.list button,
+.list a {
+    @include control;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 7px 9px;
+    border-color: #4e9f78;
+    color: #e2f6e9;
+    font-size: 11px;
+    background: #173b2a;
+    text-decoration: none;
+}
+
+.empty {
+    margin: 24px 0;
+    color: $text-muted;
+    font-size: 12px;
+}
+
+@media (max-width: $breakpoint-mobile) {
+    .list article > header {
+        align-items: start;
+        flex-direction: column;
+    }
+
+    .list li {
+        grid-template-columns: 1fr auto;
+    }
+
+    .list li button,
+    .list li a {
+        grid-column: 1 / -1;
+        width: 100%;
+    }
+}

@@ -1,0 +1,169 @@
+@use "../../styles/tokens" as *;
+@use "../../styles/mixins" as *;
+
+.inspector {
+    position: fixed;
+    z-index: 30;
+    top: var(--editor-y, 50%);
+    left: var(--editor-x, 50%);
+    width: min(380px, calc(100vw - 24px));
+    max-height: min(680px, calc(100vh - 24px));
+    overflow: auto;
+    padding: 18px;
+    border: 1px solid #445978;
+    border-radius: 12px;
+    background: $surface-panel;
+    box-shadow: 0 24px 70px #000c, 0 0 0 1px #78a9ff1c;
+}
+
+.inspector header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 5px;
+    margin-bottom: 22px;
+}
+
+.inspector header div {
+    display: grid;
+    gap: 5px;
+}
+
+.inspector header button {
+    @include control;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    color: #aeb9c8;
+    cursor: pointer;
+}
+
+.inspector header button:hover { color: #fff; background: #202630; }
+
+.inspector header button:focus-visible {
+    outline: 2px solid #70a5ff;
+    outline-offset: 2px;
+}
+
+.inspector:focus-visible,
+.inspector input:focus-visible,
+.inspector select:focus-visible,
+.inspector textarea:focus-visible,
+.inspector button:focus-visible {
+    outline: 2px solid #83aeff;
+    outline-offset: 2px;
+}
+
+.fields {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.inspector header span,
+.config>strong {
+    color: #8494a9;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .09em;
+}
+
+.inspector header b {
+    font-size: 16px;
+}
+
+.inspector>label,
+.config label {
+    display: grid;
+    gap: 6px;
+    margin: 14px 0;
+    color: $text-secondary;
+    font-size: 11px;
+}
+
+.inspector input,
+.inspector select,
+.inspector textarea {
+    @include field;
+}
+
+.inspector textarea {
+    min-height: 96px;
+    resize: vertical;
+}
+
+.inspector dl {
+    display: grid;
+    gap: 5px;
+    margin: 0;
+}
+
+.inspector dt {
+    margin-top: 10px;
+    color: #758296;
+    font-size: 10px;
+    text-transform: uppercase;
+}
+
+.inspector dd {
+    margin: 0;
+    color: #d9e1ed;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.config {
+    margin-top: 22px;
+    padding-top: 15px;
+    border-top: 1px solid #29313d;
+}
+
+.errorPolicy {
+    margin-top: 22px;
+    padding-top: 15px;
+    border-top: 1px solid #29313d;
+}
+
+.errorPolicy strong {
+    color: #8494a9;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .09em;
+}
+
+.valid,
+.invalid {
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.valid { color: #78d2a5; }
+.invalid { color: #e87b91; }
+
+.note,
+.config p {
+    margin-top: 24px;
+    color: $text-muted;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+@media (max-width: $breakpoint-tablet) {
+    .inspector {
+        top: auto;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        max-height: min(76vh, 680px);
+        border-color: #445978;
+        border-right: 0;
+        border-bottom: 0;
+        border-left: 0;
+        border-radius: 16px 16px 0 0;
+        box-shadow: 0 -18px 45px #000b;
+    }
+}

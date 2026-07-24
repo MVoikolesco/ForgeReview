@@ -1,0 +1,34 @@
+@use "../../styles/tokens" as *;
+
+.content { display: grid; gap: 20px; padding: 22px 24px; }
+.content section { display: grid; gap: 9px; }
+.content h3 { margin: 0; color: $text-primary; font-size: 13px; }
+.muted { margin: 0; color: $text-secondary; font-size: 13px; line-height: 1.5; }
+.conclusion { padding: 13px 14px; border: 1px solid #3a4b62; border-left: 4px solid #5986bd; border-radius: 8px; background: #15202e; }
+.conclusion strong { color: #e5f0ff; font-size: 14px; }
+.conclusion p { margin: 5px 0 0; color: #c0d1e7; font-size: 12px; line-height: 1.45; }
+.conclusion.completed { border-color: #39765a; border-left-color: #62bd8d; background: #132b21; }
+.conclusion.completed strong { color: #b9f0cf; }
+.conclusion.failed { border-color: #864554; border-left-color: #db7182; background: #35171d; }
+.conclusion.failed strong { color: #ffd0d8; }
+.timeline, .entries { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.timeline li { display: flex; align-items: center; gap: 9px; padding: 9px 11px; border: 1px solid #303844; border-radius: 8px; background: #141a22; }
+.timeline time, .timeline small, .entries summary small, .entries summary time { color: $text-muted; font-size: 11px; }
+.timeline small { margin-left: auto; }
+.badge { padding: 4px 8px; border: 1px solid #3a4b62; border-radius: 999px; color: #bed4f5; font-size: 11px; font-weight: 700; background: #172536; }
+.badge.completed { border-color: #39765a; color: #9ce0b9; background: #132c22; }
+.badge.failed, .badge.partial { border-color: #864554; color: #f4adba; background: #35171d; }
+.entries details { border: 1px solid #303844; border-left: 3px solid #5079aa; border-radius: 8px; background: #141a22; }
+.entries details.completed { border-left-color: #4a9c73; }
+.entries details.failed { border-left-color: #bc596a; }
+.entries summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; cursor: pointer; }
+.entries summary span { display: grid; gap: 3px; }
+.entries summary strong { color: $text-primary; font-size: 12px; }
+.entryBody { display: grid; gap: 9px; padding: 0 12px 12px; }
+.facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.facts span { padding: 4px 7px; border: 1px solid #35465d; border-radius: 999px; color: #b9cce6; font-size: 11px; background: #172536; }
+.error { margin: 0; padding: 9px; border-radius: 6px; color: #ffc2cb; font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; background: #32171d; white-space: pre-wrap; }
+.payload { border: 1px solid #35465d; border-radius: 6px; background: #10151c; }
+.payload summary { padding: 8px 9px; color: #b9cce6; font-size: 11px; cursor: pointer; }
+.payload pre { max-height: 360px; margin: 0; padding: 10px; overflow: auto; border-top: 1px solid #29313d; color: #d9e5f4; font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+.note { margin: 0; padding-top: 14px; border-top: 1px solid #29313d; color: $text-secondary; font-size: 11px; line-height: 1.5; }

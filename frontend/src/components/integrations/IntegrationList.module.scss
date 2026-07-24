@@ -1,0 +1,158 @@
+@use "../../styles/tokens" as *;
+
+.list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+}
+
+.notice {
+    grid-column: 1 / -1;
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid #315942;
+    border-radius: 6px;
+    color: #a7e4bd !important;
+    background: #12251a;
+}
+
+.list section {
+    min-width: 0;
+}
+
+.list h2 {
+    margin: 0 0 12px;
+    color: #e8eef8;
+    font-size: 13px;
+}
+
+.list p {
+    color: $text-muted;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.list article {
+    position: relative;
+    display: grid;
+    gap: 4px;
+    min-height: 68px;
+    margin-bottom: 9px;
+    padding: 10px 10px 10px 29px;
+    border: 1px solid #2e3948;
+    border-radius: 7px;
+    background: #151a22;
+}
+
+.list article>i {
+    position: absolute;
+    top: 13px;
+    left: 10px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #68b48c;
+}
+
+.list article strong {
+    font-size: 12px;
+}
+
+.list article small {
+    overflow-wrap: anywhere;
+    color: #8594a8;
+    font-size: 10px;
+}
+
+.list article em {
+    color: #81b9a0;
+    font-size: 9px;
+    font-style: normal;
+}
+
+.itemActions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 5px;
+}
+
+.itemActions button,
+.primary,
+.danger {
+    padding: 6px 8px;
+    border: 1px solid #3b4b60;
+    border-radius: 5px;
+    color: #cbd7e8;
+    font-size: 10px;
+    background: #1a222e;
+}
+
+.primary {
+    display: inline-flex;
+    gap: 5px;
+    align-items: center;
+    border-color: $brand-border;
+    color: #fff;
+    background: $brand;
+}
+
+.danger {
+    display: inline-flex;
+    gap: 5px;
+    align-items: center;
+    border-color: #8c3c4a;
+    color: #ffe0e4;
+    background: #54222d;
+}
+
+.modalBody {
+    display: grid;
+    gap: 13px;
+    padding: 22px 24px;
+}
+
+.modalBody label {
+    display: grid;
+    gap: 6px;
+    color: $text-secondary;
+    font-size: 11px;
+}
+
+.modalBody input,
+.modalBody select {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid #35445a;
+    border-radius: 5px;
+    color: #e1e9f5;
+    background: #111820;
+}
+
+.modalBody dl { display: grid; grid-template-columns: 120px 1fr; gap: 10px; margin: 0; font-size: 12px; }
+.modalBody dt { color: #8b9bb0; }
+.modalBody dd { margin: 0; overflow-wrap: anywhere; color: #e1e9f5; }
+
+.resourceList {
+    display: grid;
+    gap: 7px;
+    max-height: 300px;
+    padding: 7px;
+    overflow: auto;
+    border-radius: 10px;
+    background: #0f161f;
+}
+
+.resourceList p { padding: 0 10px; }
+.selectionCount { color: #a9c8ff; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+.error { margin: 0; color: #ff9da8 !important; }
+.loading { display: flex; gap: 7px; align-items: center; }
+.spinner { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+@media (max-width: $breakpoint-mobile) {
+    .list {
+        grid-template-columns: 1fr;
+    }
+}

@@ -1,0 +1,95 @@
+@use "../../styles/tokens" as *;
+@use "../../styles/mixins" as *;
+
+.backdrop {
+    position: fixed;
+    z-index: 30;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: #05070bbd;
+    backdrop-filter: blur(7px);
+    animation: fade-in 160ms ease-out;
+}
+
+.modal {
+    @include panel;
+    width: min(940px, 100%);
+    max-height: min(760px, 92vh);
+    overflow: auto;
+    border-color: #364151;
+    border-radius: $radius-panel;
+    box-shadow: 0 32px 90px #000b;
+    animation: modal-in 180ms ease-out;
+}
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px 24px 18px;
+    border-bottom: 1px solid #29313d;
+}
+
+.header span {
+    color: #7894c0;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .09em;
+}
+
+.header h2 {
+    margin: 5px 0;
+    font-size: 22px;
+}
+
+.header p {
+    margin: 0;
+    color: #8999ae;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.header button {
+    @include control;
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    color: #b7c4d5;
+    background: #181e27;
+}
+
+.body {
+    min-width: 0;
+}
+
+.footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 24px;
+    border-top: 1px solid #29313d;
+}
+
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+    .backdrop, .modal { animation: none; }
+}
+
+@media (max-width: $breakpoint-mobile) {
+    .backdrop {
+        padding: 12px;
+    }
+
+    .header,
+    .footer {
+        padding-right: 18px;
+        padding-left: 18px;
+    }
+}

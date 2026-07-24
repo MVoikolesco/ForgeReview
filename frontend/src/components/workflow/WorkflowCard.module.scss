@@ -1,0 +1,86 @@
+.title {
+    margin: 12px 10px;
+    color: #f4f7fb;
+    font-size: 13px;
+}
+
+.execution { height: 3px; margin: 0 10px; overflow: hidden; border-radius: 99px; background: #252d38; }
+.execution span { display: block; height: 100%; border-radius: inherit; background: #55c78a; transition: width .2s ease; }
+.summary { margin: 7px 10px 5px; color: #728095; font-size: 9px; }
+
+.actions {
+    display: flex;
+    gap: 3px;
+    margin-left: 2px;
+}
+
+.actions button {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    color: #9dabbc;
+    background: transparent;
+    cursor: pointer;
+}
+
+.actions button:hover {
+    border-color: #3b4655;
+    color: #f4f7fb;
+    background: #222832;
+}
+
+.actions button:last-child:hover {
+    border-color: #7f3d4b;
+    color: #ffb5c1;
+    background: #351a21;
+}
+
+.actions button:focus-visible {
+    outline: 2px solid #70a5ff;
+    outline-offset: 1px;
+}
+
+.port {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 27px;
+    padding: 0 10px;
+    color: #aeb9c8;
+    font-size: 11px;
+}
+
+.port small {
+    color: #697688;
+    font-size: 9px;
+}
+
+.output {
+    justify-content: flex-end;
+}
+
+.error {
+    color: #f0a0ad;
+}
+
+.error small {
+    color: #e87b91;
+}
+
+.error :global(.react-flow__handle) {
+    background: #e87b91 !important;
+}
+
+.port :global(.react-flow__handle) {
+    width: 9px;
+    height: 9px;
+    border: 2px solid #171a20;
+    background: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) { .execution span { transition: none; } }

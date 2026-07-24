@@ -1,0 +1,10 @@
+@use "tokens" as *;
+
+:root {
+  color-scheme: dark;
+  --surface-root: #{$surface-root};
+  --surface-panel: #{$surface-panel};
+  --text-primary: #{$text-primary};
+  --text-muted: #{$text-muted};
+  --focus: #83aeff;
+}

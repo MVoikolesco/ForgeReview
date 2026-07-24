@@ -1,0 +1,1118 @@
+import type { Edge, Node } from "@xyflow/react";
+import type {
+  CardData,
+  CardType,
+  Port,
+  WorkflowDefinition,
+  WorkflowMetadata,
+  WorkflowExportEnvelope,
+  WorkflowVersionStatus,
+  ExecutionReport,
+  WorkflowInterfaceField,
+} from "./types";
+
+export const categoryAccent = (category: string) =>
+  ({
+    Entradas: "#4b8cff",
+    Dados: "#efb75e",
+    Transformação: "#56d6b6",
+    Controle: "#d58af3",
+    IA: "#6d9eff",
+    Validação: "#e87b91",
+    Resultado: "#efb75e",
+    Saída: "#78d2a5",
+    Infraestrutura: "#8e9aaa",
+  })[category] || "#8e9aaa";
+
+export const isManualTrigger = (card: Pick<CardData, "type" | "config">) =>
+  card.type === "trigger" &&
+  [undefined, "", "manual"].includes(card.config.mode as string | undefined);
+
+const terminalStatusPriority = { completed: 1, partial: 2, failed: 3 } as const;
+
+export function applyExecutionReport(
+  nodes: Node<CardData>[],
+  report: ExecutionReport,
+) {
+  const runs = Array.isArray(report.runs) ? report.runs : [];
+  // A queued report legitimately has no node progress. Keep the last safe card
+  // state rather than erasing it when an older server omits the runs field.
+  if (!runs.length) return nodes;
+  const statuses = new Map<string, CardData["status"]>();
+  for (const run of runs) {
+    const current = statuses.get(run.node_key);
+    // Poll responses can overlap. A later stale running record must never
+    // replace observed terminal progress for the same card.
+    if (
+      !current ||
+      current === "running" ||
+      (run.status !== "running" &&
+        terminalStatusPriority[
+          run.status as keyof typeof terminalStatusPriority
+        ] >
+          (terminalStatusPriority[
+            current as keyof typeof terminalStatusPriority
+          ] ?? 0))
+    ) {
+      statuses.set(run.node_key, run.status);
+    }
+  }
+  return nodes.map((node) => ({
+    ...node,
+    data: { ...node.data, status: statuses.get(node.id) ?? "idle" },
+  }));
+}
+
+export const resetExecutionStatuses = (nodes: Node<CardData>[]) =>
+  nodes.map((node) => ({
+    ...node,
+    data: { ...node.data, status: "idle" as const },
+  }));
+
+export const edgeIsActivelyPropagating = (
+  edge: Edge,
+  nodes: Node<CardData>[],
+) =>
+  nodes.some(
+    (node) => node.id === edge.target && node.data.status === "running",
+  );
+
+export const localCards: CardType[] = [
+  {
+    key: "trigger",
+    name: "Trigger manual",
+    category: "Entradas",
+    description: "Inicia a verificação visual.",
+    inputs: [],
+    outputs: [
+      { key: "event", label: "Evento", contract: "event", required: false },
+    ],
+  },
+  {
+    key: "transform",
+    name: "Transformar contexto",
+    category: "Transformação",
+    description: "Propaga o contexto tipado.",
+    inputs: [
+      { key: "input", label: "Entrada", contract: "any", required: true },
+    ],
+    outputs: [
+      { key: "output", label: "Saída", contract: "any", required: false },
+    ],
+  },
+  {
+    key: "condition",
+    name: "Condição",
+    category: "Controle",
+    description: "Roteia o contexto para uma saída.",
+    inputs: [
+      { key: "input", label: "Entrada", contract: "any", required: true },
+    ],
+    outputs: [
+      { key: "true", label: "Atende", contract: "any", required: false },
+      { key: "false", label: "Alternativa", contract: "any", required: false },
+    ],
+  },
+  {
+    key: "log",
+    name: "Log de execução",
+    category: "Infraestrutura",
+    description: "Registra o resultado da rota.",
+    inputs: [
+      { key: "input", label: "Entrada", contract: "any", required: false },
+    ],
+    outputs: [
+      { key: "output", label: "Saída", contract: "any", required: false },
+    ],
+  },
+];
+
+const initialData = (
+  card: CardType,
+  key = card.key,
+  config: Record<string, unknown> = {},
+): CardData => ({
+  key,
+  type: card.key,
+  name: card.name,
+  category: card.category,
+  inputs: card.inputs,
+  outputs: card.outputs,
+  errorOutput: card.error_output,
+  config,
+  status: "idle",
+});
+
+export const starterNodes: Node<CardData>[] = [
+  {
+    id: "trigger",
+    type: "card",
+    position: { x: 70, y: 260 },
+    data: initialData(localCards[0]),
+  },
+  {
+    id: "transform",
+    type: "card",
+    position: { x: 360, y: 260 },
+    data: initialData(localCards[1]),
+  },
+  {
+    id: "condition",
+    type: "card",
+    position: { x: 665, y: 260 },
+    data: initialData(localCards[2], "condition", { equals: "never" }),
+  },
+  {
+    id: "log",
+    type: "card",
+    position: { x: 975, y: 395 },
+    data: initialData(localCards[3]),
+  },
+];
+
+export const starterEdges: Edge[] = [
+  {
+    id: "trigger-transform",
+    source: "trigger",
+    sourceHandle: "out-event",
+    target: "transform",
+    targetHandle: "in-input",
+    animated: false,
+  },
+  {
+    id: "transform-condition",
+    source: "transform",
+    sourceHandle: "out-output",
+    target: "condition",
+    targetHandle: "in-input",
+    animated: false,
+  },
+  {
+    id: "condition-log",
+    source: "condition",
+    sourceHandle: "out-false",
+    target: "log",
+    targetHandle: "in-input",
+    animated: false,
+  },
+];
+
+export function canConnect(source?: Port, target?: Port) {
+  return Boolean(
+    source &&
+    target &&
+    (source.contract === "any" ||
+      target.contract === "any" ||
+      source.contract === target.contract),
+  );
+}
+
+export const hasErrorRoute = (edges: Edge[], nodeKey: string) =>
+  edges.some(
+    (edge) => edge.source === nodeKey && edge.sourceHandle === "out-error",
+  );
+
+export const cardOutputPorts = (card: CardData) =>
+  card.config.on_error === "route" && card.errorOutput
+    ? [...card.outputs, card.errorOutput]
+    : card.outputs;
+
+export const workflowVersionStatusLabel = (status: WorkflowVersionStatus) =>
+  ({
+    draft: "Rascunho",
+    published: "Publicada",
+    archived: "Arquivada",
+  })[status];
+
+export const canPublishVersion = (status: WorkflowVersionStatus) =>
+  status === "draft";
+
+export const defaultWorkflowMetadata: WorkflowMetadata = {
+  key: "studio-check",
+  name: "Fluxo de verificação do Studio",
+  description: "Pipeline local para validar cards, portas e estados.",
+};
+
+export function hydrateDefinition(
+  definition: WorkflowDefinition,
+  cards: CardType[],
+): { nodes: Node<CardData>[]; edges: Edge[] } {
+  const cardsByKey = new Map(cards.map((card) => [card.key, card]));
+  const missing = definition.nodes.find((node) => !cardsByKey.has(node.type));
+  if (missing)
+    throw new Error(
+      `O catálogo não contém o card "${missing.type}" necessário para abrir esta versão.`,
+    );
+
+  return {
+    nodes: definition.nodes.map((node) => {
+      const card = cardsByKey.get(node.type)!;
+      return {
+        id: node.key,
+        type: "card",
+        position: node.position,
+        data: {
+          ...initialData(card, node.key, node.config || {}),
+          name: node.name,
+        },
+      };
+    }),
+    edges: definition.edges.map((edge) => ({
+      id: edge.key,
+      source: edge.from_node,
+      sourceHandle: `out-${edge.from_port}`,
+      target: edge.to_node,
+      targetHandle: `in-${edge.to_port}`,
+      animated: false,
+    })),
+  };
+}
+
+export function toDefinition(
+  nodes: Node<CardData>[],
+  edges: Edge[],
+  metadata: WorkflowMetadata = defaultWorkflowMetadata,
+): WorkflowDefinition {
+  const declaredInputs = nodes
+    .filter((node) => node.data.type === "trigger")
+    .flatMap((node) => {
+      if (Array.isArray(node.data.config.published_input_fields))
+        return node.data.config
+          .published_input_fields as WorkflowInterfaceField[];
+      return Array.isArray(node.data.config.published_inputs)
+        ? node.data.config.published_inputs
+            .filter((value): value is string => nonEmptyText(value))
+            .map((key) => ({
+              key,
+              label: key,
+              contract: "any",
+              required: true,
+            }))
+        : [];
+    });
+  const declaredOutputs = nodes.flatMap((node) => {
+    const key = configText(node.data.config.published_output_key);
+    const portKey = configText(node.data.config.published_output_port);
+    if (!key || !portKey) return [];
+    const port = node.data.outputs.find((candidate) => candidate.key === portKey);
+    return [
+      {
+        key,
+        label: key,
+        contract: port?.contract || "any",
+        required: Boolean(node.data.config.published_output_required),
+        node_key: node.id,
+        port_key: portKey,
+      },
+    ];
+  });
+  const interfaceConfigured = nodes.some(
+    (node) =>
+      Object.prototype.hasOwnProperty.call(
+        node.data.config,
+        "published_inputs",
+      ) ||
+      Object.prototype.hasOwnProperty.call(
+        node.data.config,
+        "published_input_fields",
+      ) ||
+      Object.prototype.hasOwnProperty.call(
+        node.data.config,
+        "published_output_key",
+      ) ||
+      Object.prototype.hasOwnProperty.call(
+        node.data.config,
+        "published_output_port",
+      ),
+  );
+  return {
+    ...metadata,
+    interface:
+      interfaceConfigured
+        ? {
+            trigger_node_key: nodes.find(
+              (node) => node.data.type === "trigger",
+            )?.id,
+            inputs: declaredInputs,
+            outputs: declaredOutputs,
+          }
+        : metadata.interface,
+    nodes: nodes.map(({ id, data, position }) => ({
+      key: id,
+      type: data.type,
+      name: data.name,
+      config: data.config,
+      position,
+    })),
+    edges: edges
+      .filter((edge) => edge.sourceHandle && edge.targetHandle)
+      .map((edge) => ({
+        key: edge.id,
+        from_node: edge.source,
+        from_port: edge.sourceHandle!.replace("out-", ""),
+        to_node: edge.target,
+        to_port: edge.targetHandle!.replace("in-", ""),
+      })),
+  };
+}
+
+const unsafeConfigKey = (key: string) =>
+  /(^|_)(secret|ciphertext|password|token|api_key)$/i.test(key);
+
+function hasUnsafeConfig(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasUnsafeConfig);
+  if (!value || typeof value !== "object") return false;
+  return Object.entries(value as Record<string, unknown>).some(
+    ([key, nested]) => unsafeConfigKey(key) || hasUnsafeConfig(nested),
+  );
+}
+
+export function validateWorkflowDefinition(
+  definition: WorkflowDefinition,
+  cards: CardType[],
+): string | undefined {
+  return validateStudioWorkflow(definition, cards)[0]?.message;
+}
+
+export type WorkflowValidationIssue = {
+  nodeKey?: string;
+  message: string;
+};
+
+const nonEmptyText = (value: unknown) =>
+  typeof value === "string" && value.trim().length > 0;
+const positiveInteger = (value: unknown) =>
+  typeof value === "number" && Number.isInteger(value) && value > 0;
+
+const validKeepAlive = (value: unknown) => {
+  if (value === undefined || value === "") return true;
+  if (value === "0") return true;
+  if (typeof value !== "string") return false;
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h)$/);
+  if (!match) return false;
+  const amount = Number(match[1]);
+  const unitMilliseconds: Record<string, number> = {
+    ms: 1,
+    s: 1000,
+    m: 60000,
+    h: 3600000,
+  };
+  const milliseconds =
+    amount * (unitMilliseconds[match[2]] ?? 0);
+  return amount > 0 && milliseconds <= 24 * 60 * 60 * 1000;
+};
+
+const validDataPath = (value: unknown) =>
+  typeof value === "string" &&
+  /^[A-Za-z_-][A-Za-z0-9_-]*(?:\.[A-Za-z_-][A-Za-z0-9_-]*)*$/.test(value);
+
+const validDeclarativeOperations = (value: unknown) =>
+  value === undefined ||
+  (Array.isArray(value) &&
+    value.length >= 1 &&
+    value.length <= 32 &&
+    value.every((raw) => {
+      if (!raw || typeof raw !== "object") return false;
+      const operation = raw as Record<string, unknown>;
+      if (["select", "remove"].includes(String(operation.op)))
+        return validDataPath(operation.path);
+      if (operation.op === "set")
+        return (
+          validDataPath(operation.path) &&
+          Object.prototype.hasOwnProperty.call(operation, "value")
+        );
+      if (operation.op === "rename")
+        return validDataPath(operation.path) && validDataPath(operation.to);
+      if (operation.op === "coalesce")
+        return (
+          Array.isArray(operation.paths) &&
+          operation.paths.length > 0 &&
+          operation.paths.every(validDataPath) &&
+          validDataPath(operation.to)
+        );
+      return false;
+    }));
+
+/**
+ * Mirrors graph and configuration failures that the client can know from the
+ * current catalog. The backend still validates every persisted definition.
+ */
+export function validateStudioWorkflow(
+  definition: WorkflowDefinition,
+  cards: CardType[],
+): WorkflowValidationIssue[] {
+  const issues: WorkflowValidationIssue[] = [];
+  if (!definition.key.trim() || !definition.name.trim())
+    issues.push({ message: "Informe a chave e o nome do workflow." });
+  if (definition.nodes.length === 0)
+    issues.push({ message: "Adicione ao menos um card ao workflow." });
+  const cardByType = new Map(cards.map((card) => [card.key, card]));
+  const knownContracts = new Set([
+    "any",
+    "string",
+    "number",
+    "boolean",
+    "object",
+    "list",
+    ...cards.flatMap((card) =>
+      [...card.inputs, ...card.outputs].map((port) => port.contract),
+    ),
+  ]);
+  const nodeKeys = new Set<string>();
+  for (const node of definition.nodes) {
+    const catalogCard = cardByType.get(node.type);
+    if (
+      !node.key ||
+      !node.name ||
+      !catalogCard ||
+      catalogCard.available === false
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `O card "${node.key || "sem chave"}" é inválido ou usa um tipo indisponível.`,
+      });
+    if (nodeKeys.has(node.key))
+      issues.push({
+        nodeKey: node.key,
+        message: `A chave do card "${node.key}" está duplicada.`,
+      });
+    if (hasUnsafeConfig(node.config))
+      issues.push({
+        nodeKey: node.key,
+        message: `O card "${node.key}" contém segredo, token ou ciphertext e não pode ser salvo.`,
+      });
+    nodeKeys.add(node.key);
+    const policy =
+      configText(node.config.on_error) ||
+      (node.type === "error_control" ? "continue" : "fail");
+    if (node.type === "error_control") {
+      if (!["fail", "continue", "fallback"].includes(policy))
+        issues.push({
+          nodeKey: node.key,
+          message: `O card "${node.name}" usa uma política de erro inválida.`,
+        });
+      if (policy === "fallback" && !nonEmptyText(node.config.fallback_result))
+        issues.push({
+          nodeKey: node.key,
+          message: `Defina o resultado de fallback do card "${node.name}".`,
+        });
+    } else if (!["fail", "continue", "partial", "route"].includes(policy)) {
+      issues.push({
+        nodeKey: node.key,
+        message: `O card "${node.name}" usa uma política de erro inválida.`,
+      });
+    }
+    if (node.type === "template" && !nonEmptyText(node.config.template))
+      issues.push({
+        nodeKey: node.key,
+        message: `Defina o template do card "${node.name}".`,
+      });
+    if (node.type === "model") {
+      if (
+        !nonEmptyText(node.config.model_profile) &&
+        !nonEmptyText(node.config.integration)
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `Selecione um perfil de modelo para "${node.name}".`,
+        });
+      for (const [key, max] of [
+        ["retry_limit", 3],
+        ["retry_delay_ms", 60000],
+      ] as const) {
+        const value = node.config[key];
+        if (
+          value !== undefined &&
+          (!Number.isInteger(value) ||
+            (value as number) < 0 ||
+            (value as number) > max)
+        )
+          issues.push({
+            nodeKey: node.key,
+            message: `"${node.name}" precisa de ${key} entre 0 e ${max}.`,
+          });
+      }
+      const maxTokens = node.config.max_tokens;
+      if (
+        maxTokens !== undefined &&
+        (!Number.isInteger(maxTokens) ||
+          (maxTokens as number) < 1 ||
+          (maxTokens as number) > 128000)
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" precisa de max_tokens entre 1 e 128000.`,
+        });
+      const temperature = node.config.temperature;
+      if (
+        temperature !== undefined &&
+        (typeof temperature !== "number" ||
+          !Number.isFinite(temperature) ||
+          temperature < 0 ||
+          temperature > 2)
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" precisa de temperature entre 0 e 2.`,
+        });
+      const topP = node.config.top_p;
+      if (
+        topP !== undefined &&
+        (typeof topP !== "number" ||
+          !Number.isFinite(topP) ||
+          topP <= 0 ||
+          topP > 1)
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" precisa de top_p maior que 0 e no máximo 1.`,
+        });
+      const timeout = node.config.timeout_seconds;
+      if (
+        timeout !== undefined &&
+        (!Number.isInteger(timeout) ||
+          (timeout as number) < 1 ||
+          (timeout as number) > 3600)
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" precisa de timeout_seconds entre 1 e 3600.`,
+        });
+      if (!validKeepAlive(node.config.keep_alive))
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" precisa de keep_alive igual a 0 ou uma duração de até 24h.`,
+        });
+      const fallback = configText(node.config.fallback_model_profile);
+      if (
+        fallback &&
+        fallback === configText(node.config.model_profile)
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `O fallback de "${node.name}" deve usar outro perfil.`,
+        });
+      const costs = [
+        node.config.input_cost_per_million_usd,
+        node.config.output_cost_per_million_usd,
+        node.config.max_cost_usd,
+      ];
+      if (
+        costs.some(
+          (value) =>
+            value !== undefined &&
+            (typeof value !== "number" ||
+              !Number.isFinite(value) ||
+              value < 0),
+        ) ||
+        ((node.config.max_cost_usd as number) > 0 &&
+          !((node.config.input_cost_per_million_usd as number) > 0) &&
+          !((node.config.output_cost_per_million_usd as number) > 0))
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" requer preços não negativos para aplicar orçamento de custo.`,
+        });
+    }
+    if (
+      node.type === "transform" &&
+      !validDeclarativeOperations(node.config.operations)
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `As operações declarativas de "${node.name}" são inválidas.`,
+      });
+    if (node.type === "variable" && Object.keys(node.config).length > 0) {
+      if (
+        !["set", "get"].includes(configText(node.config.action) || "set") ||
+        !["execution", "loop", "card"].includes(
+          configText(node.config.namespace) || "execution",
+        ) ||
+        !/^[A-Za-z_-][A-Za-z0-9_-]{0,63}$/.test(
+          configText(node.config.name),
+        )
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `Defina operação, namespace e nome válidos para "${node.name}".`,
+        });
+    }
+    if (node.type === "condition" && node.config.branches !== undefined) {
+      const branches = node.config.branches;
+      const branchPorts = Array.isArray(branches)
+        ? branches.map((raw) =>
+            raw && typeof raw === "object"
+              ? configText((raw as Record<string, unknown>).port)
+              : "",
+          )
+        : [];
+      if (
+        !Array.isArray(branches) ||
+        branches.length < 1 ||
+        branches.length > 8 ||
+        new Set(branchPorts).size !== branchPorts.length ||
+        branches.some((raw) => {
+          if (!raw || typeof raw !== "object") return true;
+          const branch = raw as Record<string, unknown>;
+          return (
+            !/^match_[1-8]$/.test(configText(branch.port)) ||
+            ![
+              "equals",
+              "not_equals",
+              "exists",
+              "contains",
+              "gt",
+              "gte",
+              "lt",
+              "lte",
+            ].includes(configText(branch.operator)) ||
+            (branch.path !== undefined &&
+              branch.path !== "" &&
+              !validDataPath(branch.path))
+          );
+        })
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `Os ramos declarativos de "${node.name}" são inválidos.`,
+        });
+    }
+    if (node.type === "merge") {
+      const mode = configText(node.config.mode) || "all";
+      if (
+        !["all", "any", "quorum"].includes(mode) ||
+        (mode === "quorum" && !positiveInteger(node.config.quorum)) ||
+        (node.config.timeout_ms !== undefined &&
+          (!positiveInteger(node.config.timeout_ms) ||
+            (node.config.timeout_ms as number) > 60000))
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `A política de join de "${node.name}" é inválida.`,
+        });
+    }
+    if (
+      node.type === "workflow" &&
+      !positiveInteger(node.config.workflow_version_id)
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `Selecione uma versão publicada para "${node.name}".`,
+      });
+    const publishedKey = configText(node.config.published_output_key);
+    const publishedPort = configText(node.config.published_output_port);
+    if (
+      Boolean(publishedKey) !== Boolean(publishedPort) ||
+      (publishedPort &&
+        !catalogCard?.outputs.some((port) => port.key === publishedPort))
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `Complete a saída publicada de "${node.name}".`,
+      });
+    if (
+      node.type === "fetch" &&
+      (node.config.medium_severity_event !== undefined ||
+        node.config.allow_autonomous_rejection !== undefined)
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `Mova a política de publicação de "${node.name}" para o card Publicar.`,
+      });
+    if (node.type === "publish") {
+      const mediumEvent = node.config.medium_severity_event;
+      if (
+        mediumEvent !== undefined &&
+        !["COMMENT", "REQUEST_CHANGES"].includes(configText(mediumEvent))
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `Selecione um evento válido para severidade média em "${node.name}".`,
+        });
+      if (
+        node.config.allow_autonomous_rejection !== undefined &&
+        typeof node.config.allow_autonomous_rejection !== "boolean"
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `A rejeição autônoma de "${node.name}" deve ser booleana.`,
+        });
+    }
+    if (["fetch", "publish"].includes(node.type)) {
+      if (
+        ["owner", "repo", "pull_request"].some((key) =>
+          Object.prototype.hasOwnProperty.call(node.config, key),
+        )
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `Remova as coordenadas fixas de PR de "${node.name}".`,
+        });
+      if (!nonEmptyText(node.config.integration))
+        issues.push({
+          nodeKey: node.key,
+          message: `Configure a conexão de "${node.name}".`,
+        });
+    }
+    if (
+      node.type === "trigger" &&
+      !["manual", "api", "webhook"].includes(
+        configText(node.config.mode) || "manual",
+      )
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `Selecione um modo de trigger válido em "${node.name}".`,
+      });
+    if (
+      node.type === "trigger" &&
+      node.config.published_input_fields !== undefined
+    ) {
+      const fields = node.config.published_input_fields;
+      const keys = Array.isArray(fields)
+        ? fields.map((field) =>
+            field && typeof field === "object"
+              ? configText((field as Record<string, unknown>).key)
+              : "",
+          )
+        : [];
+      if (
+        !Array.isArray(fields) ||
+        fields.length === 0 ||
+        new Set(keys).size !== keys.length ||
+        fields.some(
+          (field) =>
+            !field ||
+            typeof field !== "object" ||
+            !nonEmptyText((field as Record<string, unknown>).key) ||
+            !knownContracts.has(
+              configText((field as Record<string, unknown>).contract),
+            ),
+        )
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `A interface de entrada publicada por "${node.name}" é inválida.`,
+        });
+    }
+    if (
+      node.type === "loop" &&
+      (!positiveInteger(node.config.max_iterations) ||
+        (node.config.concurrency !== undefined &&
+          (!Number.isInteger(node.config.concurrency) ||
+            (node.config.concurrency as number) < 1 ||
+            (node.config.concurrency as number) > 4)))
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `"${node.name}" requer máximo de iterações positivo e concorrência entre 1 e 4.`,
+      });
+    if (
+      node.type === "group" &&
+      (!positiveInteger(node.config.max_files) ||
+        !positiveInteger(node.config.max_characters))
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `"${node.name}" requer limites positivos de arquivos e caracteres.`,
+      });
+    if (node.type === "cache") {
+      const mode = configText(node.config.mode);
+      if (
+        !nonEmptyText(node.config.key) ||
+        !["read", "write", "delete"].includes(mode) ||
+        (mode === "write" &&
+          (!positiveInteger(node.config.ttl_seconds) ||
+            (node.config.ttl_seconds as number) > 86400))
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" requer chave, operação válida e TTL de 1 a 86400 para gravação.`,
+        });
+    }
+  }
+  const edgeKeys = new Set<string>();
+  for (const edge of definition.edges) {
+    const source = definition.nodes.find((node) => node.key === edge.from_node);
+    const target = definition.nodes.find((node) => node.key === edge.to_node);
+    const sourceCard = source && cardByType.get(source.type);
+    const targetCard = target && cardByType.get(target.type);
+    const sourcePorts =
+      sourceCard &&
+      (sourceCard.error_output && source?.config.on_error === "route"
+        ? [...sourceCard.outputs, sourceCard.error_output]
+        : sourceCard.outputs);
+    const output = sourcePorts?.find((port) => port.key === edge.from_port);
+    const input = targetCard?.inputs.find((port) => port.key === edge.to_port);
+    if (!edge.key || !source || !target || !output || !input) {
+      issues.push({
+        message: `A conexão "${edge.key || "sem chave"}" referencia um card ou porta inválida.`,
+      });
+      continue;
+    }
+    if (edgeKeys.has(edge.key))
+      issues.push({
+        message: `A chave da conexão "${edge.key}" está duplicada.`,
+      });
+    if (
+      output.contract !== "any" &&
+      input.contract !== "any" &&
+      output.contract !== input.contract
+    )
+      issues.push({
+        message: `A conexão "${edge.key}" usa contratos incompatíveis.`,
+      });
+    edgeKeys.add(edge.key);
+  }
+  for (const node of definition.nodes) {
+    const card = cardByType.get(node.type);
+    if (!card) continue;
+    if (
+      node.type === "merge" &&
+      configText(node.config.mode) === "quorum"
+    ) {
+      const incoming = definition.edges.filter(
+        (edge) => edge.to_node === node.key && edge.to_port === "inputs",
+      ).length;
+      if ((node.config.quorum as number) > incoming)
+        issues.push({
+          nodeKey: node.key,
+          message: `O quórum de "${node.name}" excede suas ${incoming} entradas.`,
+        });
+    }
+    for (const input of card.inputs.filter((port) => port.required)) {
+      if (
+        !definition.edges.some(
+          (edge) => edge.to_node === node.key && edge.to_port === input.key,
+        )
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `Conecte a entrada obrigatória "${input.label}" do card "${node.name}".`,
+        });
+    }
+    if (
+      node.type !== "error_control" &&
+      configText(node.config.on_error) === "route" &&
+      !definition.edges.some(
+        (edge) => edge.from_node === node.key && edge.from_port === "error",
+      )
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `Conecte a rota de erro do card "${node.name}".`,
+      });
+  }
+  return issues;
+}
+
+export function removeSelectedElements(
+  nodes: Node<CardData>[],
+  edges: Edge[],
+  nodeIDs: Iterable<string>,
+  edgeIDs: Iterable<string>,
+) {
+  const selectedNodes = new Set(nodeIDs);
+  const selectedEdges = new Set(edgeIDs);
+  const remainingNodes = nodes.filter((node) => !selectedNodes.has(node.id));
+  const removedEdges = edges.filter(
+    (edge) =>
+      selectedEdges.has(edge.id) ||
+      selectedNodes.has(edge.source) ||
+      selectedNodes.has(edge.target),
+  );
+  return {
+    nodes: remainingNodes,
+    edges: edges.filter((edge) => !removedEdges.includes(edge)),
+    removedEdges: removedEdges.length,
+  };
+}
+
+/**
+ * React Flow can report the current selection after a controlled graph update.
+ * Avoid turning an identical report into another React state update.
+ */
+export const selectionHasChanged = (
+  current: readonly string[],
+  next: readonly string[],
+) =>
+  current.length !== next.length ||
+  current.some((id, index) => id !== next[index]);
+
+export function parseWorkflowExport(
+  text: string,
+  cards: CardType[],
+): { envelope?: WorkflowExportEnvelope; error?: string } {
+  try {
+    const candidate = JSON.parse(text) as WorkflowExportEnvelope;
+    if (
+      candidate?.format !== "forgereview.workflow" ||
+      candidate.version !== 1 ||
+      !candidate.definition
+    )
+      return { error: "O arquivo não usa o envelope ForgeReview Workflow v1." };
+    const error = validateWorkflowDefinition(candidate.definition, cards);
+    return error ? { error } : { envelope: candidate };
+  } catch {
+    return { error: "O arquivo selecionado não contém JSON válido." };
+  }
+}
+
+const uniqueKey = (base: string, used: Set<string>) => {
+  let candidate = base;
+  let index = 2;
+  while (used.has(candidate)) candidate = `${base}-${index++}`;
+  used.add(candidate);
+  return candidate;
+};
+
+export function cloneWorkflowDefinition(
+  definition: WorkflowDefinition,
+  workflowKeys: Iterable<string>,
+): WorkflowDefinition {
+  const keys = new Set(workflowKeys);
+  const workflowKey = uniqueKey(`${definition.key}-copy`, keys);
+  const nodeKeys = new Set<string>();
+  const nodes = definition.nodes.map((node) => ({
+    ...node,
+    key: uniqueKey(node.key, nodeKeys),
+    config: { ...node.config },
+  }));
+  const remappedNodes = new Map(
+    definition.nodes.map((node, index) => [node.key, nodes[index].key]),
+  );
+  const edgeKeys = new Set<string>();
+  return {
+    key: workflowKey,
+    name: `${definition.name} (cópia)`,
+    description: definition.description,
+    nodes,
+    edges: definition.edges.map((edge) => ({
+      ...edge,
+      key: uniqueKey(edge.key, edgeKeys),
+      from_node: remappedNodes.get(edge.from_node) ?? edge.from_node,
+      to_node: remappedNodes.get(edge.to_node) ?? edge.to_node,
+    })),
+  };
+}
+
+export const workflowExportEnvelope = (
+  definition: WorkflowDefinition,
+): WorkflowExportEnvelope => ({
+  format: "forgereview.workflow",
+  version: 1,
+  definition,
+});
+
+export function reviewTemplate(
+  cards: CardType[],
+): { nodes: Node<CardData>[]; edges: Edge[] } | undefined {
+  const types = [
+    "trigger",
+    "fetch",
+    "filter",
+    "group",
+    "loop",
+    "template",
+    "model",
+    "validate",
+    "response_filter",
+    "consolidate",
+    "format",
+    "publish",
+  ];
+  if (types.some((type) => !cards.some((card) => card.key === type)))
+    return undefined;
+  const cardFor = (type: string) => cards.find((card) => card.key === type)!;
+  const node = (
+    id: string,
+    type: string,
+    name: string,
+    x: number,
+    y: number,
+    config: Record<string, unknown> = {},
+  ): Node<CardData> => ({
+    id,
+    type: "card",
+    position: { x, y },
+    data: { ...initialData(cardFor(type), id, config), name },
+  });
+  return {
+    nodes: [
+      node("trigger", "trigger", "Webhook Gitea", 40, 280, { mode: "webhook" }),
+      node("fetch", "fetch", "Buscar dados do PR", 315, 280, {
+        integration: "",
+      }),
+      node("filter", "filter", "Filtrar arquivos", 610, 125, {
+        include_extensions: [".go", ".ts", ".tsx", ".php"],
+        ignore_generated: true,
+      }),
+      node("group", "group", "Agrupar arquivos", 900, 125, {
+        max_files: 8,
+        max_characters: 12000,
+        group_by_extension: true,
+      }),
+      node("loop", "loop", "Revisar cada grupo", 1190, 125, {
+        max_iterations: 20,
+        concurrency: 1,
+        on_error: "fail",
+      }),
+      node("template", "template", "Prompt de review", 1480, 125, {
+        template:
+          "Analise este grupo de arquivos e responda somente uma lista JSON de achados.",
+      }),
+      node("model", "model", "Modelo de review", 1775, 125, {
+        model_profile: "",
+        max_tokens: 2000,
+        retry_limit: 0,
+        retry_delay_ms: 0,
+      }),
+      node("validate", "validate", "Validar resposta", 2070, 125, {
+        validate_paths: true,
+      }),
+      node("response-filter", "response_filter", "Filtrar achados", 2365, 125, {
+        minimum_severity: "medium",
+      }),
+      node("consolidate", "consolidate", "Consolidar review", 2070, 480),
+      node("format", "format", "Formatar review", 2365, 480),
+      node("publish", "publish", "Publicar no Gitea", 2660, 480, {
+        integration: "",
+        medium_severity_event: "COMMENT",
+        allow_autonomous_rejection: false,
+      }),
+    ],
+    edges: [
+      ["trigger", "out-event", "fetch", "in-event"],
+      ["fetch", "out-files", "filter", "in-files"],
+      ["filter", "out-files", "group", "in-files"],
+      ["group", "out-groups", "loop", "in-items"],
+      ["loop", "out-item", "template", "in-context"],
+      ["template", "out-prompt", "model", "in-prompt"],
+      ["model", "out-response", "validate", "in-response"],
+      ["loop", "out-item", "validate", "in-files"],
+      ["validate", "out-valid", "response-filter", "in-response"],
+      ["loop", "out-results", "consolidate", "in-comments"],
+      ["consolidate", "out-review", "format", "in-review"],
+      ["format", "out-formatted", "publish", "in-formatted_review"],
+      ["fetch", "out-pull_request", "publish", "in-pull_request"],
+    ].map(([source, sourceHandle, target, targetHandle]) => ({
+      id: `${source}-${target}`,
+      source,
+      sourceHandle,
+      target,
+      targetHandle,
+      animated: false,
+    })),
+  };
+}
+
+export const configText = (value: unknown) =>
+  typeof value === "string" ? value : "";
+export const configNumber = (value: unknown, fallback = 0) =>
+  typeof value === "number" ? value : fallback;
+export const configList = (value: unknown) =>
+  Array.isArray(value)
+    ? value
+        .filter((item): item is string => typeof item === "string")
+        .join(", ")
+    : "";

@@ -1,0 +1,125 @@
+@use "../../styles/tokens" as *;
+@use "../../styles/mixins" as *;
+
+.page {
+    min-height: 100vh;
+    background: $surface-root;
+}
+
+.page>header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 58px;
+    padding: 0 18px;
+    border-bottom: 1px solid $border-subtle;
+    background: $surface-panel;
+}
+
+.page>header strong {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: #70a5ff;
+}
+
+.page>header small {
+    color: #707a88;
+    font-size: 10px;
+    letter-spacing: .11em;
+}
+
+.page>header nav {
+    display: flex;
+    gap: 8px;
+}
+
+.page>header a {
+    @include control;
+    padding: 8px 12px;
+    color: #dbe2ed;
+    font-size: 12px;
+    text-decoration: none;
+    background: #171a20;
+}
+
+.content {
+    width: min(100% - 32px, 1000px);
+    margin: 0 auto;
+    padding: 48px 0;
+}
+
+.intro {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 27px;
+    border-bottom: 1px solid $border-subtle;
+}
+
+.intro span {
+    color: #7894c0;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .09em;
+}
+
+.intro h1 {
+    margin: 6px 0;
+    font-size: 26px;
+}
+
+.intro p {
+    max-width: 570px;
+    margin: 0;
+    color: $text-muted;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.intro button {
+    @include control;
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 6px;
+    padding: 10px 13px;
+    border-color: $brand-border;
+    color: #fff;
+    font-size: 12px;
+    background: $brand;
+}
+
+.message {
+    margin: 24px 0;
+    color: $text-muted;
+    font-size: 12px;
+}
+
+.feedback {
+    margin: 18px 0 -8px;
+    padding: 10px 12px;
+    border: 1px solid #315942;
+    border-radius: 6px;
+    color: #a7e4bd;
+    font-size: 12px;
+    background: #12251a;
+}
+.newConnection { @include control; display:flex; align-items:center; gap:6px; padding:10px 13px; border-color:$brand-border; color:#fff; font-size:12px; background:$brand; }
+
+@media (max-width: $breakpoint-mobile) {
+    .content {
+        padding-top: 28px;
+    }
+
+    .intro {
+        align-items: start;
+        flex-direction: column;
+    }
+
+    .intro button {
+        width: 100%;
+        justify-content: center;
+    }
+}
