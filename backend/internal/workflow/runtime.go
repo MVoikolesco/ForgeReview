@@ -181,10 +181,127 @@ type Adapters struct {
 	Dispatcher    ExecutionDispatcher
 	Cache         Cache
 	Progress      ProgressObserver
+	Logs          ExecutionLogWriter
 	// Cancellation is queried at card boundaries. Publication intentionally
 	// begins atomically in the ledger and is never cancelled once begun.
 	Cancellation func(context.Context) (bool, error)
 	Telemetry    *ExecutionTelemetry
+}
+
+// ExecutionLogWriter persists safe, operator-facing lifecycle records. Entries
+// deliberately exclude token values, prompts, provider responses and secrets.
+type ExecutionLogWriter interface {
+	WriteExecutionLog(context.Context, ExecutionLogEntry) error
+}
+
+type ExecutionLogEntry struct {
+	ExecutionID int64          `json:"execution_id"`
+	VersionID   int64          `json:"version_id"`
+	NodeKey     string         `json:"node_key"`
+	NodeName    string         `json:"node_name"`
+	NodeType    string         `json:"node_type"`
+	ScopeKey    string         `json:"scope_key,omitempty"`
+	Event       string         `json:"event"`
+	Status      string         `json:"status"`
+	DurationMS  int64          `json:"duration_ms,omitempty"`
+	Facts       map[string]any `json:"facts,omitempty"`
+	Error       string         `json:"error,omitempty"`
+	Inputs      any            `json:"inputs,omitempty"`
+	Outputs     any            `json:"outputs,omitempty"`
+	OccurredAt  time.Time      `json:"occurred_at"`
+}
+
+// ExecutionLogDiagnostic keeps request/response evidence useful to an
+// operator, while removing credential-bearing fields before it leaves the
+// sensitive execution store or reaches the project log file.
+func ExecutionLogDiagnostic(value any) any {
+	if value == nil {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "[não foi possível serializar o diagnóstico]"
+	}
+	var copied any
+	if json.Unmarshal(raw, &copied) != nil {
+		return "[não foi possível ler o diagnóstico]"
+	}
+	return redactExecutionLogValue(copied)
+}
+
+func redactExecutionLogValue(value any) any {
+	switch item := value.(type) {
+	case map[string]any:
+		result := make(map[string]any, len(item))
+		for key, child := range item {
+			lower := strings.ToLower(key)
+			if strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "password") || strings.Contains(lower, "authorization") || strings.Contains(lower, "credential") || strings.Contains(lower, "cookie") || strings.Contains(lower, "api_key") || strings.Contains(lower, "apikey") {
+				result[key] = "[REDACTED]"
+				continue
+			}
+			result[key] = redactExecutionLogValue(child)
+		}
+		return result
+	case []any:
+		result := make([]any, len(item))
+		for i := range item {
+			result[i] = redactExecutionLogValue(item[i])
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+// SafeExecutionLogFacts selects the few runtime facts useful for diagnosis.
+// It is intentionally allowlisted so payloads, prompts and provider bodies
+// cannot be written to the physical log or returned by the status API.
+func SafeExecutionLogFacts(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	allowed := map[string]bool{"attempt_count": true, "retry_limit": true, "retry_delay_ms": true, "completed_iterations": true, "failed_iterations": true, "max_iterations": true, "concurrency": true, "model": true, "validation_error": true, "error_code": true, "error_policy": true, "error_action": true, "error_scope": true}
+	result := map[string]any{}
+	for key := range allowed {
+		value, ok := metadata[key]
+		if !ok {
+			continue
+		}
+		switch value.(type) {
+		case string, float64, bool, int, int64:
+			result[key] = value
+		}
+	}
+	for _, key := range []string{"validation_attempts", "provider_calls"} {
+		values, ok := metadata[key].([]any)
+		if !ok {
+			continue
+		}
+		attempts := make([]map[string]any, 0, len(values))
+		for _, raw := range values {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			attempt := map[string]any{}
+			if value, ok := item["attempt"].(float64); ok {
+				attempt["attempt"] = int(value)
+			}
+			if value, ok := item["status"].(string); ok {
+				attempt["status"] = value
+			}
+			if len(attempt) > 0 {
+				attempts = append(attempts, attempt)
+			}
+		}
+		if len(attempts) > 0 {
+			result[key] = attempts
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 // ExecutionContext identifies the durable execution currently being run.
@@ -585,7 +702,7 @@ func (r *scopedRunner) handleFailure(ctx context.Context, node Node, current nod
 	nodeRun.Metadata["error_policy"] = policy
 	nodeRun.Metadata["error_code"] = "execution_failed"
 	nodeRun.Metadata["error_scope"] = current.ScopeKey
-	nodeRun.Error = "execution failed"
+	nodeRun.Error = fmt.Sprintf("%v", ExecutionLogDiagnostic(cause.Error()))
 
 	switch policy {
 	case "continue":
@@ -694,6 +811,9 @@ func (r *scopedRunner) runValidate(ctx context.Context, node Node, current nodeS
 	validationAttempts := []any{map[string]any{"attempt": 1, "status": portKey}}
 	providerCalls := []any{}
 	metadata := map[string]any{"attempt_count": 1, "validation_attempts": validationAttempts, "provider_calls": providerCalls}
+	if detail := validationFailureDetail(value); detail != "" {
+		metadata["validation_error"] = detail
+	}
 	if portKey == "valid" {
 		return map[string]any{portKey: value}, metadata, nil
 	}
@@ -713,7 +833,7 @@ func (r *scopedRunner) runValidate(ctx context.Context, node Node, current nodeS
 			case <-timer.C:
 			}
 		}
-		response, err := modelResponse(ctx, model, repairPrompt(prompt), r.adapters)
+		response, err := modelResponse(ctx, model, repairPrompt(prompt, validationFailureDetail(value)), r.adapters)
 		call := map[string]any{"attempt": retry + 1, "status": "completed"}
 		if err != nil {
 			call["status"] = "failed"
@@ -723,6 +843,11 @@ func (r *scopedRunner) runValidate(ctx context.Context, node Node, current nodeS
 		}
 		providerCalls = append(providerCalls, call)
 		value, portKey = validateResponse([]any{response.Content}, inputs["files"], node.Config)
+		if detail := validationFailureDetail(value); detail != "" {
+			metadata["validation_error"] = detail
+		} else {
+			delete(metadata, "validation_error")
+		}
 		validationAttempts = append(validationAttempts, map[string]any{"attempt": retry + 1, "status": portKey})
 		metadata["attempt_count"] = len(validationAttempts)
 		metadata["validation_attempts"] = validationAttempts
@@ -732,6 +857,14 @@ func (r *scopedRunner) runValidate(ctx context.Context, node Node, current nodeS
 		}
 	}
 	return map[string]any{portKey: value}, metadata, nil
+}
+
+func validationFailureDetail(value any) string {
+	failure, ok := value.(ValidationFailure)
+	if !ok || len(failure.Errors) == 0 {
+		return ""
+	}
+	return strings.Join(failure.Errors, "; ")
 }
 
 func (r *scopedRunner) correctiveModel(current nodeScope, inbox map[string][]Token) (Node, string, modelSettings, bool) {
@@ -754,8 +887,15 @@ func (r *scopedRunner) correctiveModel(current nodeScope, inbox map[string][]Tok
 	return model, prompt, settings, true
 }
 
-func repairPrompt(prompt string) string {
-	return strings.TrimSpace(prompt) + "\n\nCorrection required: return only a JSON array of findings. Each finding must contain path, a positive line, comment, and severity low, medium, high, or critical. Do not include prose or markdown."
+func repairPrompt(prompt, validationError string) string {
+	message := strings.TrimSpace(prompt) + "\n\nA resposta anterior foi REJEITADA pelo validador."
+	if strings.TrimSpace(validationError) != "" {
+		message += " Motivo exato: " + validationError + "."
+	}
+	return message + "\n\nCorrija a resposta agora. Retorne SOMENTE JSON puro: sem markdown, sem bloco ```json e sem texto antes/depois.\n" +
+		"O formato obrigatório é uma lista JSON, por exemplo:\n" +
+		`[{"path":"arquivo.ext","line":12,"comment":"explique o problema encontrado","severity":"low"}]` +
+		"\nCada item precisa ter: path (arquivo existente), line (inteiro positivo), comment (texto não vazio) e severity (low, medium, high ou critical)."
 }
 
 func (r *scopedRunner) runLoop(ctx context.Context, node Node, inputs map[string][]any, nodeRun *NodeRun) (map[string]any, map[string]any, error) {
@@ -1018,7 +1158,11 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		if template == "" {
 			return nil, fmt.Errorf("template card %q requires config.template", node.Key)
 		}
-		return map[string]any{"prompt": template}, nil
+		prompt, err := renderTemplatePrompt(template, inputs["context"])
+		if err != nil {
+			return nil, fmt.Errorf("template card %q context: %w", node.Key, err)
+		}
+		return map[string]any{"prompt": prompt}, nil
 	case "condition":
 		expected, configured := node.Config["equals"]
 		if configured && fmt.Sprint(first()) == fmt.Sprint(expected) {
@@ -1109,6 +1253,42 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 	default:
 		return nil, fmt.Errorf("card type %q has no configured executor", node.Type)
 	}
+}
+
+// renderTemplatePrompt makes the typed context available to the model. Existing
+// templates that do not use a placeholder remain valid: their context is
+// appended as a JSON block. Authors may place {{context}} where it reads best.
+func renderTemplatePrompt(template string, contextValues []any) (string, error) {
+	if len(contextValues) == 0 {
+		return template, nil
+	}
+	contextValue := any(contextValues)
+	if len(contextValues) == 1 {
+		contextValue = contextValues[0]
+	}
+	payload, err := json.Marshal(contextValue)
+	if err != nil {
+		return "", fmt.Errorf("serialize input context: %w", err)
+	}
+	contextBlock := "Contexto real para a tarefa (use estes dados na resposta):\n" + string(payload)
+	if strings.Contains(template, "{{context}}") {
+		template = strings.ReplaceAll(template, "{{context}}", contextBlock)
+	} else {
+		template += "\n\n" + contextBlock
+	}
+	if containsFileGroup(contextValues) {
+		template += "\n\nContrato obrigatório para a review: responda somente JSON puro, sem markdown. Cada achado deve seguir [{\"path\":\"arquivo.ext\",\"line\":12,\"comment\":\"explicação objetiva\",\"severity\":\"low|medium|high|critical\"}]. O campo line é a linha do arquivo NOVO indicada no cabeçalho @@ ... +LINHA do diff; escolha somente uma linha visível no hunk do arquivo. Não invente linha, caminho ou achado para arquivo sem hunk."
+	}
+	return template, nil
+}
+
+func containsFileGroup(values []any) bool {
+	for _, value := range values {
+		if _, ok := value.(FileGroup); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func executeCache(ctx context.Context, node Node, inputs map[string][]any, adapters Adapters) (map[string]any, error) {

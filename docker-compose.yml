@@ -16,10 +16,12 @@ services:
       FORGEREVIEW_CORS_ALLOWED_ORIGINS: ${FORGEREVIEW_CORS_ALLOWED_ORIGINS:-http://localhost:3010}
       FORGEREVIEW_SESSION_COOKIE_SAME_SITE: ${FORGEREVIEW_SESSION_COOKIE_SAME_SITE:-lax}
       FORGEREVIEW_SESSION_COOKIE_SECURE: ${FORGEREVIEW_SESSION_COOKIE_SECURE:-false}
+      FORGEREVIEW_LOG_DIR: ${FORGEREVIEW_LOG_DIR:-/app/logs}
     ports:
       - "8088:8088"
     volumes:
       - workflow-data:/data
+      - ./logs:/app/logs
     depends_on:
       redis:
         condition: service_healthy

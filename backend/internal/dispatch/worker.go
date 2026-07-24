@@ -3,6 +3,8 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"forgereview/backend/internal/integration"
 	"forgereview/backend/internal/workflow"
@@ -50,8 +52,25 @@ func (w Worker) Process(ctx context.Context, id int64) error {
 	}
 	adapters := w.Adapters
 	adapters.Execution = workflow.ExecutionContext{ID: execution.ID, VersionID: execution.VersionID}
+	nodes := make(map[string]workflow.Node, len(definition.Nodes))
+	for _, node := range definition.Nodes {
+		nodes[node.Key] = node
+	}
 	adapters.Progress = workflow.ProgressObserverFunc(func(progressCtx context.Context, run workflow.NodeRun) error {
-		return w.Store.SaveNodeProgress(progressCtx, execution.ID, run)
+		if err := w.Store.SaveNodeProgress(progressCtx, execution.ID, run); err != nil {
+			return err
+		}
+		if adapters.Logs == nil {
+			return nil
+		}
+		node := nodes[run.NodeKey]
+		event := "finished"
+		if run.Status == "running" {
+			event = "started"
+		} else if node.Type == "log" {
+			event = "log_card"
+		}
+		return adapters.Logs.WriteExecutionLog(progressCtx, workflow.ExecutionLogEntry{ExecutionID: execution.ID, VersionID: execution.VersionID, NodeKey: run.NodeKey, NodeName: node.Name, NodeType: node.Type, ScopeKey: run.ScopeKey, Event: event, Status: run.Status, DurationMS: run.DurationMS, Facts: workflow.SafeExecutionLogFacts(run.Metadata), Error: safeExecutionLogError(run.Error), Inputs: workflow.ExecutionLogDiagnostic(run.Inputs), Outputs: workflow.ExecutionLogDiagnostic(run.Outputs), OccurredAt: time.Now().UTC()})
 	})
 	if cancellable, ok := w.Store.(interface {
 		CancellationRequested(context.Context, int64) (bool, error)
@@ -78,4 +97,11 @@ func (w Worker) Process(ctx context.Context, id int64) error {
 		return w.Queue.Enqueue(ctx, id)
 	}
 	return nil
+}
+
+func safeExecutionLogError(value string) string {
+	if value == "" {
+		return ""
+	}
+	return fmt.Sprintf("%v", workflow.ExecutionLogDiagnostic(value))
 }

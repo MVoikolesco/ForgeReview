@@ -36,6 +36,14 @@ excluded. Sensitive execution input/node details are retained separately for
 seven days. Reprocess creates a new execution; it is not a resume. Cancellation
 is available only before external publication starts.
 
+`GET /api/executions/:id/cards/:node/logs` backs Studio's per-card execution
+modal. It returns only lifecycle events. Independently, the worker appends one
+safe JSONL record per card transition to
+`FORGEREVIEW_LOG_DIR/execution-<id>.log` (default `./logs` in the project;
+mounted at `/app/logs` in Compose).
+The `log` card receives a `log_card` record. These files intentionally omit
+inputs, prompts, model responses, provider bodies, and credentials.
+
 The status endpoint always emits `runs` as an array, including queued reports
 with no node progress. Studio normalizes incomplete reports without exposing
 unsafe fields, retains the visible lifecycle status, and displays a contract

@@ -110,6 +110,26 @@ export type ExecutionEvent = {
   created_at: string;
 };
 
+export type ExecutionCardLog = {
+  id: number;
+  execution_id: number;
+  node_key: string;
+  scope_key?: string;
+  status: string;
+  started_at?: string;
+  finished_at?: string;
+  duration_ms?: number;
+  error?: string;
+  facts?: Record<string, unknown>;
+  inputs?: unknown;
+  outputs?: unknown;
+};
+
+export type CardExecutionLogResponse = {
+  events: ExecutionEvent[];
+  entries: ExecutionCardLog[];
+};
+
 export type Integration = {
   key: string;
   name: string;

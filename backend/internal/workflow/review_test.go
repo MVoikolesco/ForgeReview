@@ -104,6 +104,9 @@ func TestRunCorrectsInvalidModelResponseBeforeValidateRouting(t *testing.T) {
 	if validate.Metadata["attempt_count"] != 2 || len(validate.Metadata["provider_calls"].([]any)) != 1 {
 		t.Fatalf("retry metadata = %#v", validate.Metadata)
 	}
+	if !strings.Contains(model.prompts[1], "Motivo exato: model response must be a JSON finding list") || !strings.Contains(model.prompts[1], `"line":12`) {
+		t.Fatalf("corrective prompt does not reinforce the contract: %s", model.prompts[1])
+	}
 }
 
 func TestRunExhaustedCorrectiveRetryPreservesInvalidRoute(t *testing.T) {
@@ -234,8 +237,8 @@ func TestRunFiltersDeduplicatesConsolidatesAndFormatsFindings(t *testing.T) {
 
 func TestRunAggregatesScopedReviewFindingsAndPublishesOnceAtRoot(t *testing.T) {
 	files := []map[string]any{
-		{"filename": "a.go", "patch": "package a"},
-		{"filename": "b.go", "patch": "package b"},
+		{"filename": "a.go", "patch": "@@ -1,2 +1,2 @@\n package a\n+first"},
+		{"filename": "b.go", "patch": "@@ -1,3 +1,3 @@\n package b\n+first\n+second"},
 	}
 	definition := Definition{Key: "scoped-review", Name: "Scoped review", Nodes: []Node{
 		{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": map[string]any{"pull_request": map[string]any{"owner": "acme", "repo": "review", "number": 7}}}},
@@ -328,6 +331,23 @@ func TestRunAggregatesScopedReviewFindingsAndPublishesOnceAtRoot(t *testing.T) {
 	}
 }
 
+func TestValidateResponseRejectsLineOutsideChangedHunk(t *testing.T) {
+	files := []any{[]map[string]any{{"filename": "app/main.go", "patch": "@@ -10,2 +10,3 @@\n context\n+added\n context"}}}
+	value, port := validateResponse([]any{`[{"path":"app/main.go","line":4,"comment":"wrong line","severity":"medium"}]`}, files, map[string]any{"validate_paths": true})
+	if port != "invalid" {
+		t.Fatalf("port = %q, value = %#v", port, value)
+	}
+	failure := value.(ValidationFailure)
+	if len(failure.Errors) != 1 || !strings.Contains(failure.Errors[0], "line 4 is not present in the changed lines") {
+		t.Fatalf("failure = %#v", failure)
+	}
+
+	value, port = validateResponse([]any{`[{"path":"app/main.go","line":11,"comment":"right line","severity":"medium"}]`}, files, map[string]any{"validate_paths": true})
+	if port != "valid" {
+		t.Fatalf("valid line rejected: %#v", value)
+	}
+}
+
 func TestPublishEventUsesSafeSeverityDefaults(t *testing.T) {
 	high := FormattedReview{Summary: ReviewSummary{High: 1}}
 	medium := FormattedReview{Summary: ReviewSummary{Medium: 1}}
@@ -370,6 +390,14 @@ type responseModels map[string]string
 func (models responseModels) Chat(_ context.Context, _ integration.Integration, _ string, prompt string) (integration.ChatResult, error) {
 	response, ok := models[prompt]
 	if !ok {
+		for prefix, candidate := range models {
+			if strings.HasPrefix(prompt, prefix+"\n\nContexto real para a tarefa") {
+				response, ok = candidate, true
+				break
+			}
+		}
+	}
+	if !ok {
 		return integration.ChatResult{}, errors.New("unexpected prompt")
 	}
 	return integration.ChatResult{Content: response}, nil
@@ -378,14 +406,16 @@ func (models responseModels) Chat(_ context.Context, _ integration.Integration, 
 type sequentialModel struct {
 	responses []string
 	calls     int
+	prompts   []string
 }
 
-func (model *sequentialModel) Chat(context.Context, integration.Integration, string, string) (integration.ChatResult, error) {
+func (model *sequentialModel) Chat(_ context.Context, _ integration.Integration, _ string, prompt string) (integration.ChatResult, error) {
 	if model.calls >= len(model.responses) {
 		return integration.ChatResult{}, errors.New("unexpected model call")
 	}
 	response := model.responses[model.calls]
 	model.calls++
+	model.prompts = append(model.prompts, prompt)
 	return integration.ChatResult{Content: response}, nil
 }
 

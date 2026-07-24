@@ -120,6 +120,23 @@ type ExecutionEvent struct {
 	CreatedAt   string              `json:"created_at"`
 }
 
+// ExecutionCardLog is the operator diagnostic view for one card/scope attempt.
+// Its payloads are retained for seven days and recursively redact credentials.
+type ExecutionCardLog struct {
+	ID          int64          `json:"id"`
+	ExecutionID int64          `json:"execution_id"`
+	NodeKey     string         `json:"node_key"`
+	ScopeKey    string         `json:"scope_key,omitempty"`
+	Status      string         `json:"status"`
+	StartedAt   string         `json:"started_at,omitempty"`
+	FinishedAt  string         `json:"finished_at,omitempty"`
+	DurationMS  int64          `json:"duration_ms,omitempty"`
+	Error       string         `json:"error,omitempty"`
+	Facts       map[string]any `json:"facts,omitempty"`
+	Inputs      any            `json:"inputs,omitempty"`
+	Outputs     any            `json:"outputs,omitempty"`
+}
+
 type ExecutionWorkflow struct {
 	Key     string `json:"key"`
 	Name    string `json:"name"`

@@ -1,5 +1,7 @@
 import type {
   CardType,
+  CardExecutionLogResponse,
+  ExecutionEvent,
   ExecutionSummary,
   Integration,
   ModelProfile,
@@ -293,6 +295,10 @@ export const executePublishedWorkflow = (
   }).then(normalizeExecutionStart);
 export const getExecution = (executionID: number) =>
   request<unknown>(`/api/executions/${executionID}`).then(normalizeExecutionReport);
+export const getCardExecutionLogs = (executionID: number, nodeKey: string) =>
+  request<CardExecutionLogResponse>(
+    `/api/executions/${executionID}/cards/${encodeURIComponent(nodeKey)}/logs`,
+  );
 export const getExecutions = (limit = 10) =>
   request<ExecutionSummary[]>(`/api/executions?limit=${limit}`);
 export const getWebhookRegistrations = () =>

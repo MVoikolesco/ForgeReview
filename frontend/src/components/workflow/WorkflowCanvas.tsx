@@ -36,6 +36,7 @@ type WorkflowCanvasProps = {
   onSelectionChange: (nodes: Node<CardData>[], edges: Edge[]) => void;
   onRequestDelete: () => void;
   onEditNode: (nodeID: string) => void;
+  onViewExecution?: (nodeID: string) => void;
   onDeleteNode: (nodeID: string) => void;
   onPaneClick: () => void;
   validationIssues: WorkflowValidationIssue[];
@@ -60,6 +61,7 @@ export function WorkflowCanvas({
   onSelectionChange,
   onRequestDelete,
   onEditNode,
+  onViewExecution,
   onDeleteNode,
   onPaneClick,
   validationIssues,
@@ -132,7 +134,7 @@ export function WorkflowCanvas({
       event.preventDefault();
       event.stopPropagation();
       const width = 216;
-      const height = target.nodeID ? 190 : target.edgeID ? 126 : 90;
+      const height = target.nodeID ? 226 : target.edgeID ? 126 : 90;
       setMenu({
         ...target,
         x: Math.max(
@@ -302,6 +304,17 @@ export function WorkflowCanvas({
                 }}
               >
                 Editar card
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!onViewExecution}
+                onClick={() => {
+                  onViewExecution?.(menu.nodeID!);
+                  closeMenu();
+                }}
+              >
+                Visualizar execução
               </button>
               <button
                 type="button"

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -63,6 +64,22 @@ func TestRuntimeObservesRunningAndTerminalNodeProgress(t *testing.T) {
 		if observed[index].NodeKey != want.node || observed[index].Status != want.status || observed[index].ScopeKey != want.scope {
 			t.Fatalf("progress %d = %#v; want %#v", index, observed[index], want)
 		}
+	}
+}
+
+func TestTemplateIncludesItsIncomingContextInPrompt(t *testing.T) {
+	outputs, err := execute(context.Background(), Node{Key: "template", Type: "template", Config: map[string]any{"template": "Revise {{context}} e responda JSON."}}, map[string][]any{"context": {map[string]any{"filename": "api.go", "diff": "+ fix"}}}, nil, Adapters{}, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := outputs["prompt"].(string)
+	for _, want := range []string{"Contexto real para a tarefa", "api.go", "+ fix", "responda JSON"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "{{context}}") {
+		t.Fatalf("unexpanded context placeholder: %s", prompt)
 	}
 }
 
@@ -208,7 +225,7 @@ func TestRunLoopExecutesGroupsInDistinctScopesAndAggregatesTerminalBranches(t *t
 		t.Fatalf("loop metadata = %#v", loopRun.Metadata)
 	}
 	results := outputFor(t, report, "loop", "results").([]any)
-	if len(results) != 4 || results[0] != "review group" || results[2] != "review group" {
+	if len(results) != 4 || !strings.HasPrefix(results[0].(string), "review group\n\nContexto real para a tarefa") || !strings.HasPrefix(results[2].(string), "review group\n\nContexto real para a tarefa") {
 		t.Fatalf("loop results = %#v", results)
 	}
 	if first, ok := results[1].(FileGroup); !ok || first.Files[0]["filename"] != "a.go" {
@@ -233,7 +250,7 @@ func TestRunLoopRejectsItemsAboveConfiguredMaximum(t *testing.T) {
 	}
 }
 
-func TestRunAppliesGenericErrorPoliciesWithoutLeakingExecutionDetails(t *testing.T) {
+func TestRunRecordsDiagnosticErrorForExecutionLogs(t *testing.T) {
 	base := func(policy string) Definition {
 		return Definition{Key: policy, Name: policy, Nodes: []Node{
 			{Key: "start", Type: "trigger", Name: "Start"},
@@ -246,8 +263,8 @@ func TestRunAppliesGenericErrorPoliciesWithoutLeakingExecutionDetails(t *testing
 			t.Fatalf("fail policy = %#v, %v", report, err)
 		}
 		run := nodeRunFor(t, report, "template", "root")
-		if run.Error != "execution failed" || run.Metadata["error_code"] != "execution_failed" || run.Metadata["error_scope"] != "root" {
-			t.Fatalf("unsafe failure report = %#v", run)
+		if run.Error != `template card "template" requires config.template` || run.Metadata["error_code"] != "execution_failed" || run.Metadata["error_scope"] != "root" {
+			t.Fatalf("diagnostic failure report = %#v", run)
 		}
 	})
 	t.Run("continue", func(t *testing.T) {

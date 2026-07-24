@@ -789,6 +789,37 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		}
 		streamExecutionEvents(c, workflows, id, &sseConnections)
 	})
+	api.GET("/executions/:id/cards/:node/logs", func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil || id < 1 || strings.TrimSpace(c.Param("node")) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid execution or card id"})
+			return
+		}
+		if _, err = workflows.Execution(c.Request.Context(), id); errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "execution not found"})
+			return
+		} else if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load execution"})
+			return
+		}
+		events, err := workflows.ExecutionEvents(c.Request.Context(), 0, id, 500)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load card logs"})
+			return
+		}
+		eventsForCard := make([]workflow.ExecutionEvent, 0)
+		for _, event := range events {
+			if event.Node != nil && event.Node.NodeKey == c.Param("node") {
+				eventsForCard = append(eventsForCard, event)
+			}
+		}
+		entries, err := workflows.CardExecutionLogs(c.Request.Context(), id, c.Param("node"))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load detailed card logs"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"events": eventsForCard, "entries": entries})
+	})
 	api.GET("/metrics", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
 		metrics, err := workflows.Metrics(c.Request.Context())
 		if err != nil {
@@ -974,8 +1005,15 @@ func handleVersionExecution(c *gin.Context, workflows *store.SQLite, catalog wor
 	}
 	runAdapters := adapters
 	runAdapters.Execution = workflow.ExecutionContext{ID: executionID, VersionID: id}
+	nodes := make(map[string]workflow.Node, len(definition.Nodes))
+	for _, node := range definition.Nodes {
+		nodes[node.Key] = node
+	}
 	runAdapters.Progress = workflow.ProgressObserverFunc(func(progressCtx context.Context, run workflow.NodeRun) error {
-		return workflows.SaveNodeProgress(progressCtx, executionID, run)
+		if err := workflows.SaveNodeProgress(progressCtx, executionID, run); err != nil {
+			return err
+		}
+		return writeNodeLog(progressCtx, runAdapters.Logs, executionID, id, nodes[run.NodeKey], run)
 	})
 	runAdapters.Cancellation = func(checkCtx context.Context) (bool, error) {
 		return workflows.CancellationRequested(checkCtx, executionID)
@@ -990,6 +1028,23 @@ func handleVersionExecution(c *gin.Context, workflows *store.SQLite, catalog wor
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"execution_id": executionID, "report": report})
+}
+
+func writeNodeLog(ctx context.Context, writer workflow.ExecutionLogWriter, executionID, versionID int64, node workflow.Node, run workflow.NodeRun) error {
+	if writer == nil {
+		return nil
+	}
+	event := "finished"
+	if run.Status == "running" {
+		event = "started"
+	} else if node.Type == "log" {
+		event = "log_card"
+	}
+	errorText := ""
+	if run.Error != "" {
+		errorText = fmt.Sprintf("%v", workflow.ExecutionLogDiagnostic(run.Error))
+	}
+	return writer.WriteExecutionLog(ctx, workflow.ExecutionLogEntry{ExecutionID: executionID, VersionID: versionID, NodeKey: run.NodeKey, NodeName: node.Name, NodeType: node.Type, ScopeKey: run.ScopeKey, Event: event, Status: run.Status, DurationMS: run.DurationMS, Facts: workflow.SafeExecutionLogFacts(run.Metadata), Error: errorText, Inputs: workflow.ExecutionLogDiagnostic(run.Inputs), Outputs: workflow.ExecutionLogDiagnostic(run.Outputs), OccurredAt: time.Now().UTC()})
 }
 
 func triggerMode(definition workflow.Definition, key string) string {

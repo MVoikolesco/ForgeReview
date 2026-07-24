@@ -1316,6 +1316,109 @@ func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.ExecutionSta
 	return report, rows.Err()
 }
 
+// CardExecutionLogs provides a detailed but safe diagnostic view for one card.
+// The sensitive payload contains raw inputs/outputs, so this method selectively
+// copies only fixed operational facts from it.
+func (s *SQLite) CardExecutionLogs(ctx context.Context, executionID int64, nodeKey string) ([]workflow.ExecutionCardLog, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT r.id,r.node_key,r.scope_key,r.status,COALESCE(r.started_at,''),COALESCE(r.finished_at,''),r.metadata_json,COALESCE(s.payload_json,'{}')
+		FROM workflow_node_runs r LEFT JOIN workflow_node_run_sensitive s
+		ON s.execution_id=r.workflow_execution_id AND s.node_key=r.node_key AND s.scope_key=r.scope_key
+		WHERE r.workflow_execution_id=? AND r.node_key=? ORDER BY r.id`, executionID, nodeKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []workflow.ExecutionCardLog{}
+	for rows.Next() {
+		var item workflow.ExecutionCardLog
+		var publicJSON, sensitiveJSON string
+		if err = rows.Scan(&item.ID, &item.NodeKey, &item.ScopeKey, &item.Status, &item.StartedAt, &item.FinishedAt, &publicJSON, &sensitiveJSON); err != nil {
+			return nil, err
+		}
+		item.ExecutionID = executionID
+		var publicMetadata map[string]any
+		_ = json.Unmarshal([]byte(publicJSON), &publicMetadata)
+		item.DurationMS = executionLogInt(publicMetadata["duration_ms"])
+		var sensitive struct {
+			Error    string         `json:"error"`
+			Metadata map[string]any `json:"metadata"`
+			Inputs   any            `json:"inputs"`
+			Outputs  any            `json:"outputs"`
+		}
+		_ = json.Unmarshal([]byte(sensitiveJSON), &sensitive)
+		item.Error = fmt.Sprintf("%v", workflow.ExecutionLogDiagnostic(sensitive.Error))
+		item.Facts = safeExecutionLogFacts(sensitive.Metadata)
+		item.Inputs = workflow.ExecutionLogDiagnostic(sensitive.Inputs)
+		item.Outputs = workflow.ExecutionLogDiagnostic(sensitive.Outputs)
+		if len(item.Facts) == 0 {
+			item.Facts = nil
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func executionLogInt(value any) int64 {
+	switch item := value.(type) {
+	case float64:
+		return int64(item)
+	case int:
+		return int64(item)
+	case int64:
+		return item
+	default:
+		return 0
+	}
+}
+
+func safeExecutionLogFacts(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	allowed := map[string]bool{
+		"attempt_count": true, "retry_limit": true, "retry_delay_ms": true,
+		"completed_iterations": true, "failed_iterations": true, "max_iterations": true,
+		"concurrency": true, "model": true, "validation_error": true, "error_code": true,
+		"error_policy": true, "error_action": true, "error_scope": true,
+	}
+	result := map[string]any{}
+	for key := range allowed {
+		value, ok := metadata[key]
+		if !ok {
+			continue
+		}
+		switch value.(type) {
+		case string, float64, bool, int, int64:
+			result[key] = value
+		}
+	}
+	for _, key := range []string{"validation_attempts", "provider_calls"} {
+		if values, ok := metadata[key].([]any); ok {
+			attempts := make([]map[string]any, 0, len(values))
+			for _, raw := range values {
+				item, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				attempt := map[string]any{}
+				if value, ok := item["attempt"].(float64); ok {
+					attempt["attempt"] = int(value)
+				}
+				if value, ok := item["status"].(string); ok {
+					attempt["status"] = value
+				}
+				if len(attempt) > 0 {
+					attempts = append(attempts, attempt)
+				}
+			}
+			if len(attempts) > 0 {
+				result[key] = attempts
+			}
+		}
+	}
+	return result
+}
+
 // ExecutionSummaries returns a bounded, dashboard-safe view of recent runs.
 // It deliberately avoids returning execution input, node-run metadata, errors,
 // or integration configuration. Displayable PR coordinates are derived only

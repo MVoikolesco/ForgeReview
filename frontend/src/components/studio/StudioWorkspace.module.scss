@@ -194,6 +194,33 @@
     font-size: 12px;
 }
 
+.executionLog { padding: 22px 24px; }
+.executionLog > p { margin: 0; color: $text-secondary; font-size: 13px; }
+.executionLog ol { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.executionLog li { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid #303844; border-radius: 8px; background: #141a22; }
+.executionLog time, .executionLog small { color: $text-muted; font-size: 11px; }
+.executionLog small { margin-left: auto; }
+.logBadge { padding: 4px 8px; border: 1px solid #3a4b62; border-radius: 999px; color: #bed4f5; font-size: 11px; font-weight: 700; text-transform: capitalize; background: #172536; }
+.logBadge.completed { border-color: #39765a; color: #9ce0b9; background: #132c22; }
+.logBadge.failed, .logBadge.partial { border-color: #864554; color: #f4adba; background: #35171d; }
+.logNote { margin-top: 18px !important; padding-top: 14px; border-top: 1px solid #29313d; line-height: 1.5; }
+.logDetailSection { margin-top: 20px; }
+.logDetailSection > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+.logDetailSection h3 { margin: 0; font-size: 14px; }
+.logDetailSection > header small { color: $text-muted; font-size: 11px; }
+.logDetails { display: grid; gap: 8px; }
+.logDetails details { border: 1px solid #303844; border-left: 3px solid #5079aa; border-radius: 8px; background: #141a22; }
+.logDetails details.failed { border-left-color: #bc596a; }
+.logDetails details.completed { border-left-color: #4a9c73; }
+.logDetails summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; cursor: pointer; }
+.logDetails summary span { display: grid; gap: 3px; }
+.logDetails summary strong { font-size: 12px; }
+.logDetails summary small, .logDetails summary time { color: $text-muted; font-size: 11px; }
+.logDetails > details > div { padding: 0 12px 12px; }
+.logFacts { display: flex; flex-wrap: wrap; gap: 6px; }
+.logFacts span { padding: 4px 7px; border: 1px solid #35465d; border-radius: 999px; color: #b9cce6; font-size: 11px; background: #172536; }
+.logError { margin: 0 0 9px !important; padding: 9px; border-radius: 6px; color: #ffc2cb !important; font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace !important; background: #32171d; }
+
 @media (max-width: $breakpoint-tablet) {
     .studio,
     .studio.inspectorOpen {

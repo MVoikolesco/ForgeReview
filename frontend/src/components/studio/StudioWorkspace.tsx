@@ -27,6 +27,7 @@ import {
   apiURL,
   executePublishedWorkflow,
   executeWorkflow,
+  getCardExecutionLogs,
   getCards,
   getExecution,
   getIntegrations,
@@ -44,13 +45,15 @@ import {
   isEditableTarget,
   pushHistory,
   redoHistory,
-  undoHistory,
   studioLoadTarget,
+  undoHistory,
   type StudioHistory,
 } from "../../lib/studio";
 import type {
   CardData,
   CardType,
+  ExecutionCardLog,
+  ExecutionEvent,
   ExecutionReport,
   Integration,
   ModelProfile,
@@ -78,6 +81,7 @@ import {
 } from "../../lib/workflow";
 import { useCurrentUser } from "../auth/AuthGate";
 import { ModalShell } from "../common/ModalShell";
+import { CardExecutionLogModal } from "./CardExecutionLogModal";
 import { ConnectionWizard } from "../integrations/ConnectionWizard";
 import { AppShell } from "../shell/AppShell";
 import { CardInspector } from "../workflow/CardInspector";
@@ -85,6 +89,21 @@ import { CardLibrary } from "../workflow/CardLibrary";
 import { WorkflowCanvas } from "../workflow/WorkflowCanvas";
 import styles from "./StudioWorkspace.module.scss";
 import { WorkflowTransferModal } from "./WorkflowTransferModal";
+
+const executionStatusLabel = (status: string) => {
+  const labels: Record<string, string> = { running: "Em execução", completed: "Concluído", failed: "Falhou", partial: "Parcial", cancelled: "Cancelado" };
+  return labels[status] ?? status;
+};
+
+const executionFactLabel = (key: string, value: unknown) => {
+  const labels: Record<string, string> = { attempt_count: "Tentativas", retry_limit: "Limite", retry_delay_ms: "Intervalo", completed_iterations: "Iterações concluídas", failed_iterations: "Iterações falhas", max_iterations: "Limite de iterações", concurrency: "Concorrência", model: "Modelo", prompt_tokens: "Tokens de entrada", completion_tokens: "Tokens de saída", total_tokens: "Tokens totais", error_code: "Código", error_policy: "Política", error_action: "Ação" };
+  if (key === "validation_attempts" || key === "provider_calls") {
+    if (!Array.isArray(value)) return "";
+    return value.map((item) => typeof item === "object" && item ? `Tentativa ${String((item as Record<string, unknown>).attempt ?? "?")}: ${String((item as Record<string, unknown>).status ?? "registrada")}` : "").filter(Boolean).join(" · ");
+  }
+  if (!labels[key]) return "";
+  return `${labels[key]}: ${key === "retry_delay_ms" ? `${String(value)} ms` : String(value)}`;
+};
 
 export function StudioWorkspace() {
   const user = useCurrentUser();
@@ -123,6 +142,13 @@ export function StudioWorkspace() {
   const [manualPayload, setManualPayload] = useState("");
   const [runTarget, setRunTarget] = useState<"draft" | "published">("draft");
   const [openedVersionPublished, setOpenedVersionPublished] = useState(false);
+  const [lastExecutionID, setLastExecutionID] = useState<number>();
+  const [executionLogTarget, setExecutionLogTarget] = useState<{
+    node: CardData;
+    logs: ExecutionEvent[];
+    entries: ExecutionCardLog[];
+    loading: boolean;
+  }>();
   const [webhookRegistrations, setWebhookRegistrations] = useState<
     WebhookRegistration[]
   >([]);
@@ -189,49 +215,69 @@ export function StudioWorkspace() {
               ),
             ),
           }))
-        : Promise.all([getCards(), getPublishedWorkflow(loadTarget.workflowKey)]).then(
-            ([catalog, published]) => ({
-              catalog,
-              definition: published.definition,
-              versionID: published.version_id,
-              published: true,
-            }),
-          );
+        : Promise.all([
+            getCards(),
+            getPublishedWorkflow(loadTarget.workflowKey),
+          ]).then(([catalog, published]) => ({
+            catalog,
+            definition: published.definition,
+            versionID: published.version_id,
+            published: true,
+          }));
     void load
-      .then(({ catalog, definition, versionID: loadedVersionID, published }) => {
-        const hydrated = hydrateDefinition(definition, catalog);
-        setCards(catalog);
-        setNodes(hydrated.nodes);
-        setEdges(hydrated.edges);
-        setInspectedNodeID(undefined);
-        setMetadata({
-          key: definition.key,
-          name: definition.name,
-          description: definition.description,
-        });
-        setOpenedVersionID(loadedVersionID);
-        setOpenedVersionPublished(published);
-        setDirty(false);
-        setMessage(
-          `Versão salva ${loadedVersionID} aberta. Alterações serão salvas como um novo rascunho; a versão original permanece imutável.`,
-        );
-      })
+      .then(
+        ({ catalog, definition, versionID: loadedVersionID, published }) => {
+          const hydrated = hydrateDefinition(definition, catalog);
+          setCards(catalog);
+          setNodes(hydrated.nodes);
+          setEdges(hydrated.edges);
+          setInspectedNodeID(undefined);
+          setMetadata({
+            key: definition.key,
+            name: definition.name,
+            description: definition.description,
+          });
+          setOpenedVersionID(loadedVersionID);
+          setOpenedVersionPublished(published);
+          setDirty(false);
+          setMessage(
+            `Versão salva ${loadedVersionID} aberta. Alterações serão salvas como um novo rascunho; a versão original permanece imutável.`,
+          );
+        },
+      )
       .catch((error) => {
         setOpenedVersionID(undefined);
         setOpenedVersionPublished(false);
-        if (loadTarget.kind === "published" && "status" in (error as object) && (error as { status?: number }).status === 404) {
+        if (
+          loadTarget.kind === "published" &&
+          "status" in (error as object) &&
+          (error as { status?: number }).status === 404
+        ) {
           setNodes([]);
           setEdges([]);
           setInspectedNodeID(undefined);
           setMetadata(defaultWorkflowMetadata);
           setDirty(false);
-          setMessage("Nenhuma pipeline publicada está disponível. Crie ou abra uma pipeline para iniciar o canvas.");
+          setMessage(
+            "Nenhuma pipeline publicada está disponível. Crie ou abra uma pipeline para iniciar o canvas.",
+          );
           return;
         }
-        setMessage(error instanceof Error ? error.message : "Não foi possível abrir o workflow.");
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : "Não foi possível abrir o workflow.",
+        );
       })
       .finally(() => setBusy(false));
-  }, [loadTarget.kind, loadTarget.kind === "version" ? loadTarget.versionID : loadTarget.workflowKey, setEdges, setNodes]);
+  }, [
+    loadTarget.kind,
+    loadTarget.kind === "version"
+      ? loadTarget.versionID
+      : loadTarget.workflowKey,
+    setEdges,
+    setNodes,
+  ]);
   useEffect(() => {
     void Promise.all([getIntegrations(), getModelProfiles()])
       .then(([items, profiles]) => {
@@ -484,6 +530,7 @@ export function StudioWorkspace() {
               testPayload,
             )
           : await executeWorkflow(targetVersionID, trigger.key, testPayload);
+      if (started.execution_id) setLastExecutionID(started.execution_id);
       let report = started.report;
       let contractIssue = report?.contractIssue;
       let eventSource: EventSource | undefined;
@@ -512,8 +559,10 @@ export function StudioWorkspace() {
             /* malformed safe event is ignored; polling remains a fallback */
           }
         });
-        for (let attempt = 0; attempt < 120; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 300));
+        // Reviews can include several groups and corrective model attempts.
+        // Keep the SSE connection and the polling fallback alive for 15 minutes.
+        for (let attempt = 0; attempt < 900; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
           try {
             const pending = await getExecution(started.execution_id);
             applyReport(pending);
@@ -550,8 +599,8 @@ export function StudioWorkspace() {
         contractIssue
           ? contractIssue
           : report
-          ? `Execução ${started.execution_id} ${report.status === "completed" ? "concluída" : report.status}.`
-          : `Execução ${started.execution_id} enviada à fila.`,
+            ? `Execução ${started.execution_id} ${report.status === "completed" ? "concluída" : report.status}.`
+            : `Execução ${started.execution_id} enviada à fila.`,
       );
     } catch (error) {
       setNodes((all) =>
@@ -569,6 +618,45 @@ export function StudioWorkspace() {
   const openConnections = () => {
     setShowConnections(true);
     void loadIntegrations();
+  };
+  const openCardExecution = (nodeID: string) => {
+    if (!lastExecutionID) {
+      setMessage("Execute este workflow para disponibilizar o log dos cards.");
+      return;
+    }
+    const node = nodes.find((item) => item.id === nodeID);
+    if (!node) return;
+    setExecutionLogTarget({
+      node: node.data,
+      logs: [],
+      entries: [],
+      loading: true,
+    });
+    void getCardExecutionLogs(lastExecutionID, node.data.key)
+      .then((response) =>
+        setExecutionLogTarget((current) =>
+          current?.node.key === node.data.key
+            ? {
+                ...current,
+                logs: response.events,
+                entries: response.entries,
+                loading: false,
+              }
+            : current,
+        ),
+      )
+      .catch((error) => {
+        setExecutionLogTarget((current) =>
+          current?.node.key === node.data.key
+            ? { ...current, loading: false }
+            : current,
+        );
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : "NÃ£o foi possÃ­vel carregar o log do card.",
+        );
+      });
   };
   const openManualRun = (target: "draft" | "published") => {
     const preferred = manualTriggers.some((node) => node.id === inspectedNodeID)
@@ -887,6 +975,7 @@ export function StudioWorkspace() {
           onSelectionChange={handleSelectionChange}
           onRequestDelete={removeSelection}
           onEditNode={editNode}
+          onViewExecution={lastExecutionID ? openCardExecution : undefined}
           onDeleteNode={deleteNode}
           onPaneClick={clearCanvasEditing}
           validationIssues={validationIssues}
@@ -943,6 +1032,137 @@ export function StudioWorkspace() {
           focusNodeID={focusedNodeID}
           readOnly={!canEdit}
         />
+        {executionLogTarget && lastExecutionID && (
+          <CardExecutionLogModal
+            executionID={lastExecutionID}
+            node={executionLogTarget.node}
+            events={executionLogTarget.logs}
+            entries={executionLogTarget.entries}
+            loading={executionLogTarget.loading}
+            onClose={() => setExecutionLogTarget(undefined)}
+          />
+        )}
+        {executionLogTarget && Boolean(0) && (
+          <ModalShell
+            title={`Execução: ${executionLogTarget.node.name}`}
+            eyebrow="HISTÓRICO DO CARD"
+            description={`Execução #${lastExecutionID} · ${executionLogTarget.node.type}`}
+            onClose={() => setExecutionLogTarget(undefined)}
+          >
+            <section className={styles.executionLog} aria-live="polite">
+              {executionLogTarget.loading ? (
+                <p>Carregando eventos seguros do card…</p>
+              ) : executionLogTarget.logs.length === 0 ? (
+                <p>
+                  Nenhum evento foi registrado para este card nesta execução.
+                </p>
+              ) : (
+                <>
+                  <ol>
+                    {executionLogTarget.logs.map((entry) => (
+                      <li key={entry.id}>
+                        <time dateTime={entry.created_at}>
+                          {new Date(entry.created_at).toLocaleTimeString(
+                            "pt-BR",
+                          )}
+                        </time>
+                        <span
+                          className={`${styles.logBadge} ${styles[entry.status] ?? ""}`}
+                        >
+                          {entry.status === "running"
+                            ? "Iniciado"
+                            : entry.status}
+                        </span>
+                        {entry.node?.scope_key && (
+                          <small>escopo {entry.node.scope_key}</small>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                  <section className={styles.logDetailSection}>
+                    <header>
+                      <h3>Detalhes por tentativa</h3>
+                      <small>
+                        {executionLogTarget.entries.length} registro(s)
+                      </small>
+                    </header>
+                    <div className={styles.logDetails}>
+                      {executionLogTarget.entries.map((entry) => (
+                        <details
+                          key={entry.id}
+                          open={entry.status === "failed"}
+                          className={styles[entry.status] ?? ""}
+                        >
+                          <summary>
+                            <span>
+                              <strong>
+                                {entry.scope_key && entry.scope_key !== "root"
+                                  ? `Escopo ${entry.scope_key}`
+                                  : "Execução principal"}
+                              </strong>
+                              <small>
+                                {entry.status}{" "}
+                                {entry.duration_ms
+                                  ? `· ${(entry.duration_ms / 1000).toFixed(2)}s`
+                                  : ""}
+                              </small>
+                            </span>
+                            <time>
+                              {entry.started_at
+                                ? new Date(entry.started_at).toLocaleTimeString(
+                                    "pt-BR",
+                                  )
+                                : "--:--"}
+                            </time>
+                          </summary>
+                          <div>
+                            {entry.error && (
+                              <p className={styles.logError}>{entry.error}</p>
+                            )}
+                            {entry.facts && (
+                              <div className={styles.logFacts}>
+                                {Object.entries(entry.facts).map(
+                                  ([key, value]) => (
+                                    <span key={key}>
+                                      {key.replaceAll("_", " ")}:{" "}
+                                      {Array.isArray(value)
+                                        ? value
+                                            .map((item) =>
+                                              typeof item === "object" && item
+                                                ? Object.entries(
+                                                    item as Record<
+                                                      string,
+                                                      unknown
+                                                    >,
+                                                  )
+                                                    .map(
+                                                      ([factKey, factValue]) =>
+                                                        `${factKey} ${factValue}`,
+                                                    )
+                                                    .join(" · ")
+                                                : String(item),
+                                            )
+                                            .join(" | ")
+                                        : String(value)}
+                                    </span>
+                                  ),
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                  </section>
+                </>
+              )}
+              <p className={styles.logNote}>
+                Mostra somente eventos operacionais seguros; entradas, respostas
+                e credenciais nÃ£o sÃ£o exibidas.
+              </p>
+            </section>
+          </ModalShell>
+        )}
         {inspectedCard && (
           <CardInspector
             nodeID={inspectedNodeID!}

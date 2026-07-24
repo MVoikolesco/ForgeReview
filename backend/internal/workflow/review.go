@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -158,7 +160,7 @@ func validateResponse(responseValues, fileValues []any, config map[string]any) (
 	if err != nil {
 		return ValidationFailure{Errors: []string{err.Error()}}, "invalid"
 	}
-	var paths map[string]bool
+	var filesByPath map[string]map[string]any
 	if validatePaths {
 		if len(fileValues) == 0 {
 			return ValidationFailure{Errors: []string{"validate card requires fetched files when config.validate_paths is true"}}, "invalid"
@@ -167,9 +169,9 @@ func validateResponse(responseValues, fileValues []any, config map[string]any) (
 		if fileErr != nil {
 			return ValidationFailure{Errors: []string{"validate card requires fetched files when config.validate_paths is true"}}, "invalid"
 		}
-		paths = make(map[string]bool, len(files))
+		filesByPath = make(map[string]map[string]any, len(files))
 		for _, file := range files {
-			paths[file["filename"].(string)] = true
+			filesByPath[file["filename"].(string)] = file
 		}
 	}
 	errors := make([]string, 0)
@@ -186,14 +188,56 @@ func validateResponse(responseValues, fileValues []any, config map[string]any) (
 		if _, allowed := severityRank[finding.Severity]; !allowed {
 			errors = append(errors, fmt.Sprintf("finding %d severity %q is not allowed", index, finding.Severity))
 		}
-		if validatePaths && !paths[finding.Path] {
+		if validatePaths && filesByPath[finding.Path] == nil {
 			errors = append(errors, fmt.Sprintf("finding %d path %q is not in fetched files", index, finding.Path))
+		} else if validatePaths && !lineExistsInPatch(filesByPath[finding.Path], finding.Line) {
+			errors = append(errors, fmt.Sprintf("finding %d line %d is not present in the changed lines of %q", index, finding.Line, finding.Path))
 		}
 	}
 	if len(errors) > 0 {
 		return ValidationFailure{Errors: errors}, "invalid"
 	}
 	return findings, "valid"
+}
+
+var unifiedDiffHunk = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+
+// lineExistsInPatch verifies the source line number against the new side of a
+// unified diff. Gitea's new_position is this new-file line number, not an
+// offset in the patch; accepting merely a positive number caused comments to
+// be published on unrelated lines.
+func lineExistsInPatch(file map[string]any, target int) bool {
+	if target < 1 || file == nil {
+		return false
+	}
+	patch, _ := file["patch"].(string)
+	currentLine := 0
+	insideHunk := false
+	for _, line := range strings.Split(patch, "\n") {
+		if match := unifiedDiffHunk.FindStringSubmatch(line); len(match) == 2 {
+			currentLine, _ = strconv.Atoi(match[1])
+			insideHunk = true
+			continue
+		}
+		if !insideHunk || line == "" || strings.HasPrefix(line, "\\") {
+			continue
+		}
+		switch line[0] {
+		case '+':
+			if currentLine == target {
+				return true
+			}
+			currentLine++
+		case ' ':
+			if currentLine == target {
+				return true
+			}
+			currentLine++
+		case '-':
+			// Removed lines do not exist in the new revision.
+		}
+	}
+	return false
 }
 
 func parseFindings(response string) ([]Finding, error) {

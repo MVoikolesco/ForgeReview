@@ -8,6 +8,7 @@ import (
 
 	"forgereview/backend/internal/auth"
 	"forgereview/backend/internal/dispatch"
+	"forgereview/backend/internal/executionlog"
 	"forgereview/backend/internal/httpapi"
 	"forgereview/backend/internal/integration"
 	"forgereview/backend/internal/store"
@@ -52,6 +53,14 @@ func main() {
 	if _, _, err = workflows.EnsureOfficialReviewWorkflow(context.Background(), workflow.DefaultCatalog()); err != nil {
 		log.Fatal(err)
 	}
+	logDirectory := os.Getenv("FORGEREVIEW_LOG_DIR")
+	if logDirectory == "" {
+		logDirectory = "logs"
+	}
+	executionLogs, err := executionlog.New(logDirectory)
+	if err != nil {
+		log.Fatal(err)
+	}
 	adapters := workflow.Adapters{
 		Integrations:  workflows,
 		ModelProfiles: workflows,
@@ -61,6 +70,7 @@ func main() {
 		OpenAI:        integration.HTTPOpenAIClient{},
 		Ollama:        integration.HTTPOllamaClient{},
 		Publications:  workflows,
+		Logs:          executionLogs,
 	}
 	if redisURL := os.Getenv("FORGEREVIEW_REDIS_URL"); redisURL != "" {
 		queue, queueErr := dispatch.NewRedisQueue(redisURL)
