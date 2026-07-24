@@ -190,8 +190,8 @@ func validateResponse(responseValues, fileValues []any, config map[string]any) (
 		}
 		if validatePaths && filesByPath[finding.Path] == nil {
 			errors = append(errors, fmt.Sprintf("finding %d path %q is not in fetched files", index, finding.Path))
-		} else if validatePaths && !lineExistsInPatch(filesByPath[finding.Path], finding.Line) {
-			errors = append(errors, fmt.Sprintf("finding %d line %d is not present in the changed lines of %q", index, finding.Line, finding.Path))
+		} else if validatePaths && !lineIsAddedInPatch(filesByPath[finding.Path], finding.Line) {
+			errors = append(errors, fmt.Sprintf("finding %d line %d is not an added line in %q", index, finding.Line, finding.Path))
 		}
 	}
 	if len(errors) > 0 {
@@ -202,11 +202,10 @@ func validateResponse(responseValues, fileValues []any, config map[string]any) (
 
 var unifiedDiffHunk = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
-// lineExistsInPatch verifies the source line number against the new side of a
-// unified diff. Gitea's new_position is this new-file line number, not an
-// offset in the patch; accepting merely a positive number caused comments to
-// be published on unrelated lines.
-func lineExistsInPatch(file map[string]any, target int) bool {
+// lineIsAddedInPatch accepts only a line introduced by the pull request.
+// Context lines are valid Gitea anchors, but accepting them lets a model attach
+// an observation to a nearby comment or brace instead of the code it discusses.
+func lineIsAddedInPatch(file map[string]any, target int) bool {
 	if target < 1 || file == nil {
 		return false
 	}
@@ -229,9 +228,6 @@ func lineExistsInPatch(file map[string]any, target int) bool {
 			}
 			currentLine++
 		case ' ':
-			if currentLine == target {
-				return true
-			}
 			currentLine++
 		case '-':
 			// Removed lines do not exist in the new revision.

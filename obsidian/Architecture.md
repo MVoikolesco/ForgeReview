@@ -118,6 +118,14 @@ Automated approval remains pending. Ambiguous provider outcomes are durable
 `uncertain` attempts; admin reconciliation searches the Gitea review marker and
 permits retry only after that marker is absent.
 
+Validated inline observations must reference a `+` line introduced by the PR;
+context lines and nearby braces/comments are not publishable anchors. The model
+contract asks only for concrete, actionable behavior supported by the shown
+diff, rejects speculative/future-maintenance claims, and avoids duplicate root
+causes. Publication keeps the finding count but frames it as assistance: it
+summarizes the implementation from the PR title and states that observations
+remain subject to human reviewer confirmation.
+
 LLM provider connections store only transport configuration and encrypted
 credentials. `model_profiles` stores a reusable model name plus the key of its
 OpenAI-compatible or Ollama connection. At execution, the runner resolves both

@@ -1712,7 +1712,7 @@ func renderTemplatePrompt(template string, contextValues []any) (string, error) 
 		template += "\n\n" + contextBlock
 	}
 	if containsFileGroup(contextValues) {
-		template += "\n\nContrato obrigatório para a review: responda somente JSON puro, sem markdown. Cada achado deve seguir [{\"path\":\"arquivo.ext\",\"line\":12,\"comment\":\"explicação objetiva\",\"severity\":\"low|medium|high|critical\"}]. O campo line é a linha do arquivo NOVO indicada no cabeçalho @@ ... +LINHA do diff; escolha somente uma linha visível no hunk do arquivo. Não invente linha, caminho ou achado para arquivo sem hunk."
+		template += "\n\nContrato obrigatório para a review: responda somente JSON puro, sem markdown. Cada achado deve seguir [{\"path\":\"arquivo.ext\",\"line\":12,\"comment\":\"explicação objetiva\",\"severity\":\"low|medium|high|critical\"}]. Analise somente comportamentos concretos introduzidos pelo diff e sustentados pelo código mostrado. Antes de apontar um problema, considere as validações, fallbacks e verificações presentes no mesmo fluxo. Não reporte riscos meramente hipotéticos, manutenção futura, preferência de estilo ou falha que o próprio trecho já trata. Use um único achado por causa raiz e não repita a mesma observação em arquivos diferentes. O campo line deve ser a linha do arquivo NOVO indicada pelo cabeçalho @@ e introduzida por uma linha '+' do diff; escolha a linha adicionada que causa ou demonstra diretamente o ponto, nunca uma linha de contexto, comentário, documentação, chave ou linha apenas próxima. Não invente linha, caminho ou achado para arquivo sem hunk. Se não houver ponto concreto e acionável, responda []. Os achados auxiliam um revisor humano e não confirmam automaticamente que exista um problema."
 	}
 	return template, nil
 }
@@ -1905,6 +1905,7 @@ func publishReview(ctx context.Context, node Node, inputs map[string][]any, adap
 	if err != nil {
 		return nil, fmt.Errorf("publish card %q requires a valid pull_request input", node.Key)
 	}
+	implementation := pullRequestImplementationSummary(firstForPort(inputs, "pull_request"))
 	key := publicationKey(adapters.Execution, node.Key, scopeKey)
 	attempt, shouldPublish, err := adapters.Publications.BeginPublication(ctx, PublicationAttempt{IdempotencyKey: key, ExecutionID: adapters.Execution.ID, VersionID: adapters.Execution.VersionID, NodeKey: node.Key})
 	if err != nil {
@@ -1928,7 +1929,7 @@ func publishReview(ctx context.Context, node Node, inputs map[string][]any, adap
 		return nil, err
 	}
 	event := publishEvent(formatted, node.Config)
-	receipt, err := adapters.GiteaWriter.PublishReview(ctx, item, secret, integration.GiteaReviewRequest{Owner: request.Owner, Repo: request.Repo, Number: request.Number, Body: formattedReviewBody(formatted, event, adapters.Telemetry.Snapshot()), Event: event, Comments: giteaReviewComments(formatted.Observations), IdempotencyKey: key})
+	receipt, err := adapters.GiteaWriter.PublishReview(ctx, item, secret, integration.GiteaReviewRequest{Owner: request.Owner, Repo: request.Repo, Number: request.Number, Body: formattedReviewBody(formatted, event, adapters.Telemetry.Snapshot(), implementation), Event: event, Comments: giteaReviewComments(formatted.Observations), IdempotencyKey: key})
 	if err != nil {
 		_ = adapters.Publications.RetryPublication(ctx, key, err)
 		return nil, fmt.Errorf("publish card %q: %w", node.Key, err)
@@ -1947,7 +1948,7 @@ func publicationKey(execution ExecutionContext, nodeKey, scopeKey string) string
 	return fmt.Sprintf("forgereview:publication:%d:%d:%s:%s", execution.ID, execution.VersionID, nodeKey, scopeKey)
 }
 
-func formattedReviewBody(review FormattedReview, event string, telemetry TelemetrySnapshot) string {
+func formattedReviewBody(review FormattedReview, event string, telemetry TelemetrySnapshot, implementation string) string {
 	status := "comentado"
 	if event == "REQUEST_CHANGES" {
 		status = "alterações solicitadas"
@@ -1974,14 +1975,51 @@ func formattedReviewBody(review FormattedReview, event string, telemetry Telemet
 	lines = append(lines, "")
 	switch review.Summary.Total {
 	case 0:
-		lines = append(lines, "Nenhum problema relevante foi encontrado.")
+		lines = append(lines, "Não foram destacados achados relevantes nesta análise automatizada.")
 	case 1:
 		lines = append(lines, "Foi identificado 1 achado relevante; o comentário inline indica o ponto revisado.")
 	default:
 		lines = append(lines, fmt.Sprintf("Foram identificados %d achados relevantes; os comentários inline indicam os pontos revisados.", review.Summary.Total))
 	}
-	lines = append(lines, "", "Review automatizada concluída.")
+	if implementation == "" {
+		implementation = "alterações apresentadas no diff"
+	}
+	lines = append(lines, "", "Resumo da implementação: "+implementation+".")
+	if review.Summary.Total == 0 {
+		lines = append(lines, "Nenhum problema foi confirmado automaticamente; a decisão final permanece com o revisor.")
+	} else if review.Summary.Total == 1 {
+		lines = append(lines, "Nenhum problema foi confirmado automaticamente; o ponto destacado serve como apoio e deve ser avaliado pelo revisor.")
+	} else {
+		lines = append(lines, fmt.Sprintf("Nenhum problema foi confirmado automaticamente; os %d pontos destacados servem como apoio e devem ser avaliados pelo revisor.", review.Summary.Total))
+	}
 	return strings.Join(lines, "\n")
+}
+
+func pullRequestImplementationSummary(value any) string {
+	var metadata map[string]any
+	switch pullRequest := value.(type) {
+	case integration.PullRequest:
+		metadata = pullRequest.Metadata
+	case map[string]any:
+		if candidate, ok := pullRequest["metadata"].(map[string]any); ok {
+			metadata = candidate
+		} else {
+			metadata = pullRequest
+		}
+	}
+	title, _ := metadata["title"].(string)
+	title = strings.Join(strings.Fields(title), " ")
+	for _, prefix := range []string{"feat:", "fix:", "refactor:", "chore:", "docs:", "test:", "perf:", "build:", "ci:"} {
+		if strings.HasPrefix(strings.ToLower(title), prefix) {
+			title = strings.TrimSpace(title[len(prefix):])
+			break
+		}
+	}
+	title = strings.TrimRight(title, ".")
+	if len([]rune(title)) > 240 {
+		title = string([]rune(title)[:240]) + "…"
+	}
+	return title
 }
 
 func publishEvent(review FormattedReview, config map[string]any) string {

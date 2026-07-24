@@ -1,5 +1,11 @@
 # Change Log
 
+- 2026-07-24: Made automated review explicitly assistive. Inline validation now
+  accepts only added diff lines, the model contract rejects speculative,
+  already-handled, stylistic, duplicated, and poorly anchored observations, and
+  the Gitea body summarizes the PR while stating that findings are not confirmed
+  problems and remain for human review.
+
 - 2026-07-24: Fixed metadata-only Gitea reviews. The adapter now partitions the
   canonical PR unified diff and attaches each block to its matching file before
   filtering and grouping. HTTP and runtime fail closed when changed files have

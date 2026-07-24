@@ -260,8 +260,9 @@ they do not create comments or call an external destination.
   Every finding requires nonblank `path` and `comment`, a positive `line`, and
   severity `low`, `medium`, `high`, or `critical`. It emits the finding list on
   `valid` or a structured error list on `invalid`. With `validate_paths: true`,
-  it also requires the optional `files` input and rejects paths absent from that
-  fetched list.
+  it also requires the optional `files` input, rejects paths absent from that
+  fetched list, and accepts only new-file line numbers introduced by `+` lines.
+  Context, documentation, braces, and merely nearby anchors are rejected.
 - `response_filter` accepts validated lists, applies optional
   `minimum_severity` (default `low`), and removes exact duplicate findings.
   `consolidate` combines incoming finding lists, including the nested aggregate
@@ -283,10 +284,12 @@ they do not create comments or call an external destination.
   `medium_severity_event` is `REQUEST_CHANGES`. Both controls belong only to
   `publish`; definitions that place them on `fetch` are rejected. Approval is never automated.
   Arbitrary URLs, bodies, and credentials cannot be supplied by the workflow.
-  The review body includes a Portuguese status and finding summary, elapsed
-  execution time, resolved model identity, and token totals/breakdown when the
-  provider supplies usage. Unknown telemetry is omitted rather than inferred;
-  the durable idempotency marker remains in the footer.
+  The review body includes a Portuguese status and finding summary, a compact
+  implementation summary derived from the PR title, elapsed execution time,
+  resolved model identity, and token totals/breakdown when the provider supplies
+  usage. It explicitly presents findings as non-conclusive assistance for a
+  human reviewer. Unknown telemetry is omitted rather than inferred; the
+  durable idempotency marker remains in the footer.
 
 ## Publication idempotency
 

@@ -12,10 +12,13 @@ import (
 	"forgereview/backend/internal/integration"
 )
 
-type staticPullRequestReader struct{ files []map[string]any }
+type staticPullRequestReader struct {
+	files    []map[string]any
+	metadata map[string]any
+}
 
 func (reader staticPullRequestReader) ReadPullRequest(_ context.Context, _ integration.Integration, _ string, _ integration.PullRequestRequest) (integration.PullRequest, error) {
-	return integration.PullRequest{Files: reader.files}, nil
+	return integration.PullRequest{Files: reader.files, Metadata: reader.metadata}, nil
 }
 
 func TestRunFiltersFetchedFilesAndGroupsDeterministically(t *testing.T) {
@@ -115,6 +118,11 @@ func TestRunReviewSendsFetchedUnifiedDiffToModel(t *testing.T) {
 	for _, expected := range []string{"diff --git a/src/service.go b/src/service.go", "@@ -4,2 +4,3 @@", `+\tvalidate()`} {
 		if !strings.Contains(model.prompts[0], expected) {
 			t.Fatalf("model prompt is missing %q: %s", expected, model.prompts[0])
+		}
+	}
+	for _, expected := range []string{"introduzida por uma linha '+'", "nunca uma linha de contexto", "não repita a mesma observação", "riscos meramente hipotéticos", "auxiliam um revisor humano"} {
+		if !strings.Contains(model.prompts[0], expected) {
+			t.Fatalf("model prompt is missing review guidance %q: %s", expected, model.prompts[0])
 		}
 	}
 }
@@ -247,7 +255,7 @@ func hasOutputInScope(report RunReport, nodeKey, scopeKey, portKey string) bool 
 }
 
 func TestValidateResponseEnforcesFindingFieldsAndFetchedPaths(t *testing.T) {
-	files := []any{[]map[string]any{{"filename": "api/main.go"}}}
+	files := []any{[]map[string]any{{"filename": "api/main.go", "patch": "@@ -0,0 +1 @@\n+handle error"}}}
 	valid, port := validateResponse([]any{`[{"path":"api/main.go","line":1,"comment":"handle error","severity":"high"}]`}, files, map[string]any{"validate_paths": true})
 	if port != "valid" || len(valid.([]Finding)) != 1 {
 		t.Fatalf("valid response = %#v on %s", valid, port)
@@ -353,7 +361,7 @@ func TestRunAggregatesScopedReviewFindingsAndPublishesOnceAtRoot(t *testing.T) {
 			"gitea": encryptedIntegration(t, integration.Integration{Key: "gitea", Name: "Gitea", Type: integration.TypeGitea, Config: giteaConfig, Status: integration.StatusActive}, "gitea-secret"),
 		},
 		Secrets:      testSecrets(t),
-		Gitea:        staticPullRequestReader{files: files},
+		Gitea:        staticPullRequestReader{files: files, metadata: map[string]any{"title": "feat: revisa processamento em grupos"}},
 		OpenAI:       model,
 		GiteaWriter:  publisher,
 		Publications: ledger,
@@ -400,17 +408,31 @@ func TestRunAggregatesScopedReviewFindingsAndPublishesOnceAtRoot(t *testing.T) {
 	if request.Event != "COMMENT" || len(request.Comments) != 2 || request.Comments[0] != (integration.GiteaReviewComment{Path: "a.go", Body: "first", NewPosition: 2}) {
 		t.Fatalf("published review = %#v", request)
 	}
+	for _, expected := range []string{"Resumo da implementação: revisa processamento em grupos.", "Nenhum problema foi confirmado automaticamente; os 2 pontos destacados servem como apoio"} {
+		if !strings.Contains(request.Body, expected) {
+			t.Fatalf("published review body missing %q: %s", expected, request.Body)
+		}
+	}
 }
 
-func TestValidateResponseRejectsLineOutsideChangedHunk(t *testing.T) {
+func TestValidateResponseAcceptsOnlyAddedLines(t *testing.T) {
 	files := []any{[]map[string]any{{"filename": "app/main.go", "patch": "@@ -10,2 +10,3 @@\n context\n+added\n context"}}}
 	value, port := validateResponse([]any{`[{"path":"app/main.go","line":4,"comment":"wrong line","severity":"medium"}]`}, files, map[string]any{"validate_paths": true})
 	if port != "invalid" {
 		t.Fatalf("port = %q, value = %#v", port, value)
 	}
 	failure := value.(ValidationFailure)
-	if len(failure.Errors) != 1 || !strings.Contains(failure.Errors[0], "line 4 is not present in the changed lines") {
+	if len(failure.Errors) != 1 || !strings.Contains(failure.Errors[0], "line 4 is not an added line") {
 		t.Fatalf("failure = %#v", failure)
+	}
+
+	value, port = validateResponse([]any{`[{"path":"app/main.go","line":10,"comment":"context line","severity":"medium"}]`}, files, map[string]any{"validate_paths": true})
+	if port != "invalid" {
+		t.Fatalf("context line was accepted: %#v", value)
+	}
+	failure = value.(ValidationFailure)
+	if len(failure.Errors) != 1 || !strings.Contains(failure.Errors[0], "line 10 is not an added line") {
+		t.Fatalf("context failure = %#v", failure)
 	}
 
 	value, port = validateResponse([]any{`[{"path":"app/main.go","line":11,"comment":"right line","severity":"medium"}]`}, files, map[string]any{"validate_paths": true})
@@ -438,15 +460,30 @@ func TestPublishEventUsesSafeSeverityDefaults(t *testing.T) {
 
 func TestFormattedReviewBodyUsesSafeOptionalTelemetryInPortuguese(t *testing.T) {
 	review := FormattedReview{Summary: ReviewSummary{Total: 2, High: 1, Medium: 1}}
-	body := formattedReviewBody(review, "COMMENT", TelemetrySnapshot{ElapsedMS: 43501, Models: []string{"gpt-review"}, Prompt: 12, Completion: 8, Total: 20})
-	for _, expected := range []string{"> status: comentado", "> tempo decorrido: 43.501s", "> modelo: gpt-review", "> tokens: 20 (prompt: 12, completion: 8)", "Foram identificados 2 achados relevantes", "Review automatizada concluída."} {
+	body := formattedReviewBody(review, "COMMENT", TelemetrySnapshot{ElapsedMS: 43501, Models: []string{"gpt-review"}, Prompt: 12, Completion: 8, Total: 20}, "adiciona validação de MIME")
+	for _, expected := range []string{"> status: comentado", "> tempo decorrido: 43.501s", "> modelo: gpt-review", "> tokens: 20 (prompt: 12, completion: 8)", "Foram identificados 2 achados relevantes", "Resumo da implementação: adiciona validação de MIME.", "Nenhum problema foi confirmado automaticamente; os 2 pontos destacados servem como apoio e devem ser avaliados pelo revisor."} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("body missing %q: %s", expected, body)
 		}
 	}
-	withoutUnknowns := formattedReviewBody(FormattedReview{}, "COMMENT", TelemetrySnapshot{ElapsedMS: 1})
+	if strings.Contains(body, "Review automatizada concluída.") {
+		t.Fatalf("body still presents the automation as a conclusive review: %s", body)
+	}
+	withoutUnknowns := formattedReviewBody(FormattedReview{}, "COMMENT", TelemetrySnapshot{ElapsedMS: 1}, "")
 	if strings.Contains(withoutUnknowns, "> modelo:") || strings.Contains(withoutUnknowns, "> tokens:") {
 		t.Fatalf("unknown telemetry was invented: %s", withoutUnknowns)
+	}
+	for _, expected := range []string{"Não foram destacados achados relevantes", "Resumo da implementação: alterações apresentadas no diff.", "a decisão final permanece com o revisor."} {
+		if !strings.Contains(withoutUnknowns, expected) {
+			t.Fatalf("empty body missing %q: %s", expected, withoutUnknowns)
+		}
+	}
+}
+
+func TestPullRequestImplementationSummaryUsesSafeCompactTitle(t *testing.T) {
+	value := integration.PullRequest{Metadata: map[string]any{"title": "feat:   adiciona suporte a MIME\r\nnos currículos. "}}
+	if got := pullRequestImplementationSummary(value); got != "adiciona suporte a MIME nos currículos" {
+		t.Fatalf("summary = %q", got)
 	}
 }
 
