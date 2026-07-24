@@ -58,6 +58,12 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 	if adapters.Workflows == nil {
 		adapters.Workflows = workflows
 	}
+	if adapters.ReviewContracts == nil {
+		adapters.ReviewContracts = workflows
+	}
+	if adapters.Coverage == nil {
+		adapters.Coverage = workflows
+	}
 	router := gin.New()
 	var sseConnections atomic.Int64
 	proxies, err := trustedProxies()
@@ -245,6 +251,14 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 	})
 	api.GET("/review-checklists", func(c *gin.Context) {
 		c.JSON(http.StatusOK, workflow.ReviewChecklists())
+	})
+	api.GET("/review-contracts", func(c *gin.Context) {
+		items, err := workflows.ReviewContracts(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not list review contracts"})
+			return
+		}
+		c.JSON(http.StatusOK, items)
 	})
 	api.GET("/webhook-registrations", requireRoles(auth.RoleAdmin), func(c *gin.Context) {
 		items, err := workflows.WebhookRegistrations(c.Request.Context())
@@ -790,6 +804,26 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 		}
 		c.JSON(http.StatusOK, report)
 	})
+	api.GET("/executions/:id/coverage", func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil || id < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid execution id"})
+			return
+		}
+		if _, err = workflows.Execution(c.Request.Context(), id); errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "execution not found"})
+			return
+		} else if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load execution"})
+			return
+		}
+		coverage, err := workflows.Coverage(c.Request.Context(), id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load review coverage"})
+			return
+		}
+		c.JSON(http.StatusOK, coverage)
+	})
 	api.GET("/executions/:id/events", func(c *gin.Context) {
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil || id < 1 {
@@ -1032,11 +1066,16 @@ func handleVersionExecution(c *gin.Context, workflows *store.SQLite, catalog wor
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not persist execution"})
 		return
 	}
-	if runErr != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"execution_id": executionID, "report": report, "error": runErr.Error()})
+	persistedReport, loadErr := workflows.Execution(c.Request.Context(), executionID)
+	if loadErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not reload completed execution"})
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"execution_id": executionID, "report": report})
+	if runErr != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"execution_id": executionID, "report": persistedReport, "error": runErr.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"execution_id": executionID, "report": persistedReport})
 }
 
 func writeNodeLog(ctx context.Context, writer workflow.ExecutionLogWriter, executionID, versionID int64, node workflow.Node, run workflow.NodeRun) error {

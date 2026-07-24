@@ -117,6 +117,7 @@ type ExecutionStatus struct {
 	StartedAt  string               `json:"started_at"`
 	FinishedAt string               `json:"finished_at,omitempty"`
 	Runs       []ExecutionNodeState `json:"runs"`
+	Coverage   *CoverageSummary     `json:"coverage,omitempty"`
 }
 
 type ExecutionNodeState struct {
@@ -222,6 +223,11 @@ func Validate(definition Definition, catalog Catalog) error {
 		if node.Type == "trigger" {
 			if _, err := TriggerMode(node); err != nil {
 				return err
+			}
+		}
+		if node.Type == "template" {
+			if _, _, err := ReviewContractReference(node.Config); err != nil {
+				return fmt.Errorf("template card %q config.review_contract: %w", node.Key, err)
 			}
 		}
 		if node.Type == "model" || node.Type == "candidate_validator" {

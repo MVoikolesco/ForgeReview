@@ -183,20 +183,22 @@ type Execution struct {
 // Adapters are the explicit boundary for controlled external card execution.
 // A nil field leaves its card type unavailable.
 type Adapters struct {
-	Integrations  integration.Lookup
-	ModelProfiles integration.ModelProfileLookup
-	Secrets       integration.SecretManager
-	Gitea         integration.GiteaPullRequestReader
-	GiteaWriter   integration.GiteaReviewWriter
-	OpenAI        integration.ChatClient
-	Ollama        integration.ChatClient
-	Publications  PublicationLedger
-	Execution     ExecutionContext
-	Dispatcher    ExecutionDispatcher
-	Cache         Cache
-	Workflows     WorkflowResolver
-	Progress      ProgressObserver
-	Logs          ExecutionLogWriter
+	Integrations    integration.Lookup
+	ModelProfiles   integration.ModelProfileLookup
+	Secrets         integration.SecretManager
+	Gitea           integration.GiteaPullRequestReader
+	GiteaWriter     integration.GiteaReviewWriter
+	OpenAI          integration.ChatClient
+	Ollama          integration.ChatClient
+	Publications    PublicationLedger
+	Coverage        CoverageLedger
+	Execution       ExecutionContext
+	Dispatcher      ExecutionDispatcher
+	Cache           Cache
+	Workflows       WorkflowResolver
+	ReviewContracts ReviewContractLookup
+	Progress        ProgressObserver
+	Logs            ExecutionLogWriter
 	// Cancellation is queried at card boundaries. Publication intentionally
 	// begins atomically in the ledger and is never cancelled once begun.
 	Cancellation  func(context.Context) (bool, error)
@@ -740,7 +742,7 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 	} else if node.Type == "validate" {
 		outputs, nodeRun.Metadata, err = r.runValidate(ctx, node, current, inbox, inputs)
 	} else if node.Type == "candidate_validator" {
-		outputs, nodeRun.Metadata, err = r.runCandidateValidator(ctx, node, inputs)
+		outputs, nodeRun.Metadata, err = r.runCandidateValidator(ctx, node, current.ScopeKey, inputs)
 	} else if node.Type == "variable" {
 		outputs, err = r.runVariable(node, current, inputs)
 	} else if node.Type == "workflow" {
@@ -1249,7 +1251,11 @@ func (r *scopedRunner) runValidate(ctx context.Context, node Node, current nodeS
 			return nil, metadata, err
 		}
 		providerCalls = append(providerCalls, call)
-		value, portKey = validateResponse([]any{response.Content}, inputs["files"], node.Config)
+		retryValue := any(response.Content)
+		if original, ok := firstValue(inputs["response"]).(ReviewModelResponse); ok {
+			retryValue = ReviewModelResponse{Content: response.Content, Contract: original.Contract}
+		}
+		value, portKey = validateResponse([]any{retryValue}, inputs["files"], node.Config)
 		if detail := validationFailureDetail(value); detail != "" {
 			metadata["validation_error"] = detail
 		} else {
@@ -1274,14 +1280,24 @@ func validationFailureDetail(value any) string {
 	return strings.Join(failure.Errors, "; ")
 }
 
-func (r *scopedRunner) runCandidateValidator(ctx context.Context, node Node, inputs map[string][]any) (map[string]any, map[string]any, error) {
-	candidates, err := candidateFindings(inputs["candidates"])
+func (r *scopedRunner) runCandidateValidator(ctx context.Context, node Node, scopeKey string, inputs map[string][]any) (map[string]any, map[string]any, error) {
+	started := time.Now()
+	candidates, contract, err := candidateFindingsWithContract(inputs["candidates"])
 	if err != nil {
 		return nil, nil, err
 	}
-	allowedChecks, checklistConfigured, err := checklistCheckIDs(node.Config)
-	if err != nil {
-		return nil, nil, err
+	allowedChecks := map[string]bool{}
+	checklistConfigured := false
+	if contractConfigured(contract) {
+		checklistConfigured = true
+		for _, item := range contract.Checklist.Items {
+			allowedChecks[item.CheckID] = true
+		}
+	} else {
+		allowedChecks, checklistConfigured, err = checklistCheckIDs(node.Config)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	filesByPath := map[string]map[string]any{}
 	if len(inputs["files"]) > 0 {
@@ -1330,6 +1346,7 @@ func (r *scopedRunner) runCandidateValidator(ctx context.Context, node Node, inp
 		if callErr != nil {
 			return nil, metadata, callErr
 		}
+		candidate.ValidationAttempted = true
 		decision, decisionErr := parseCandidateDecision(response.Content)
 		if decisionErr != nil {
 			return nil, metadata, fmt.Errorf("candidate validator card %q candidate %d: %w", node.Key, index, decisionErr)
@@ -1353,6 +1370,13 @@ func (r *scopedRunner) runCandidateValidator(ctx context.Context, node Node, inp
 		case CandidateNotApplicable:
 			metadata["not_applicable_count"] = metricCount(metadata, "not_applicable_count") + 1
 		}
+	}
+	if r.adapters.Coverage != nil && r.adapters.Execution.ID > 0 && contractConfigured(contract) {
+		records := completedCoverage(r.adapters.Execution.ID, node.Key, scopeKey, contract, candidates, time.Since(started).Milliseconds())
+		if err = r.adapters.Coverage.RecordCoverage(ctx, records); err != nil {
+			return nil, metadata, fmt.Errorf("candidate validator card %q persist coverage: %w", node.Key, err)
+		}
+		metadata["coverage_checks"] = len(contract.Checklist.Items)
 	}
 	return map[string]any{"confirmed": confirmed, "decisions": candidates}, metadata, nil
 }
@@ -1387,7 +1411,11 @@ func (r *scopedRunner) correctiveModel(current nodeScope, inbox map[string][]Tok
 	if err != nil {
 		return Node{}, "", modelSettings{}, false
 	}
-	prompt, ok := firstForPort(values(r.inbox(nodeScope{NodeKey: model.Key, ScopeKey: current.ScopeKey})), "prompt").(string)
+	promptValue := firstForPort(values(r.inbox(nodeScope{NodeKey: model.Key, ScopeKey: current.ScopeKey})), "prompt")
+	prompt, ok := promptValue.(string)
+	if task, typed := promptValue.(ReviewTask); typed {
+		prompt, ok = task.Prompt, true
+	}
 	if !ok || prompt == "" {
 		return Node{}, "", modelSettings{}, false
 	}
@@ -1686,7 +1714,30 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		if err != nil {
 			return nil, fmt.Errorf("template card %q context: %w", node.Key, err)
 		}
-		return map[string]any{"prompt": prompt}, nil
+		ref, configured, err := ReviewContractReference(node.Config)
+		if err != nil {
+			return nil, fmt.Errorf("template card %q: %w", node.Key, err)
+		}
+		if !configured {
+			return map[string]any{"prompt": prompt}, nil
+		}
+		if adapters.ReviewContracts == nil {
+			return nil, fmt.Errorf("template card %q requires a review contract store", node.Key)
+		}
+		contract, err := adapters.ReviewContracts.ReviewContract(ctx, ref.Key, ref.Version)
+		if err != nil {
+			return nil, fmt.Errorf("template card %q review contract %s@%d: %w", node.Key, ref.Key, ref.Version, err)
+		}
+		prompt, err = reviewPromptWithChecklist(prompt, map[string]any{"review_checklist": contract.Checklist})
+		if err != nil {
+			return nil, fmt.Errorf("template card %q review contract: %w", node.Key, err)
+		}
+		if adapters.Coverage != nil && adapters.Execution.ID > 0 {
+			if err = adapters.Coverage.RecordCoverage(ctx, plannedCoverage(adapters.Execution.ID, node.Key, scopeKey, contract)); err != nil {
+				return nil, fmt.Errorf("template card %q persist planned coverage: %w", node.Key, err)
+			}
+		}
+		return map[string]any{"prompt": ReviewTask{Prompt: prompt, Contract: contract}}, nil
 	case "condition":
 		if _, configured := node.Config["branches"]; configured {
 			return map[string]any{conditionOutput(node, first()): first()}, nil
@@ -1779,17 +1830,28 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		}
 		return map[string]any{"pull_request": pullRequest, "files": pullRequest.Files}, nil
 	case "model":
-		prompt, ok := firstForPort(inputs, "prompt").(string)
-		if !ok || prompt == "" {
+		inputValue := firstForPort(inputs, "prompt")
+		prompt, ok := inputValue.(string)
+		var contract ReviewContractVersion
+		if task, typed := inputValue.(ReviewTask); typed {
+			prompt, contract, ok = task.Prompt, task.Contract, true
+		}
+		if !ok || strings.TrimSpace(prompt) == "" {
 			return nil, fmt.Errorf("model card %q requires a prompt input", node.Key)
 		}
-		prompt, err := reviewPromptWithChecklist(prompt, node.Config)
-		if err != nil {
-			return nil, fmt.Errorf("model card %q: %w", node.Key, err)
+		if !contractConfigured(contract) {
+			var err error
+			prompt, err = reviewPromptWithChecklist(prompt, node.Config)
+			if err != nil {
+				return nil, fmt.Errorf("model card %q: %w", node.Key, err)
+			}
 		}
 		response, err := modelResponse(ctx, node, prompt, adapters)
 		if err != nil {
 			return nil, err
+		}
+		if contractConfigured(contract) {
+			return map[string]any{"response": ReviewModelResponse{Content: response.Content, Contract: contract}}, nil
 		}
 		return map[string]any{"response": response.Content}, nil
 	default:
@@ -2035,6 +2097,15 @@ func publishReview(ctx context.Context, node Node, inputs map[string][]any, adap
 	}
 	if adapters.Publications == nil || adapters.Execution.ID < 1 || adapters.Execution.VersionID < 1 {
 		return nil, fmt.Errorf("publish card %q requires a durable execution context and publication ledger", node.Key)
+	}
+	if adapters.Coverage != nil {
+		complete, coverageErr := adapters.Coverage.CoverageComplete(ctx, adapters.Execution.ID)
+		if coverageErr != nil {
+			return nil, fmt.Errorf("publish card %q could not verify review coverage: %w", node.Key, coverageErr)
+		}
+		if !complete {
+			return nil, fmt.Errorf("publish card %q blocked because planned review coverage is incomplete", node.Key)
+		}
 	}
 	formatted, ok := firstForPort(inputs, "formatted_review").(FormattedReview)
 	if !ok {

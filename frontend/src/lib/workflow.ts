@@ -10,15 +10,8 @@ import type {
   ExecutionReport,
   WorkflowInterfaceField,
 } from "./types";
-import {
-  candidateFindingsSchema,
-  responseSchemaError,
-} from "./response-contracts";
-import {
-  checklistSnapshot,
-  officialReviewChecklist,
-  reviewChecklistError,
-} from "./review-checklists";
+import { responseSchemaError } from "./response-contracts";
+import { reviewChecklistError } from "./review-checklists";
 
 export const categoryAccent = (category: string) =>
   ({
@@ -511,11 +504,27 @@ export function validateStudioWorkflow(
         message: `O card "${node.name}" usa uma política de erro inválida.`,
       });
     }
-    if (node.type === "template" && !nonEmptyText(node.config.template))
-      issues.push({
-        nodeKey: node.key,
-        message: `Defina o template do card "${node.name}".`,
-      });
+    if (node.type === "template") {
+      if (!nonEmptyText(node.config.template))
+        issues.push({
+          nodeKey: node.key,
+          message: `Defina o template do card "${node.name}".`,
+        });
+      const hasContractKey = node.config.review_contract_key !== undefined;
+      const hasContractVersion =
+        node.config.review_contract_version !== undefined;
+      if (
+        hasContractKey !== hasContractVersion ||
+        (hasContractKey &&
+          (!nonEmptyText(node.config.review_contract_key) ||
+            !Number.isInteger(node.config.review_contract_version) ||
+            (node.config.review_contract_version as number) < 1))
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" precisa de uma chave e versão positiva do contrato.`,
+        });
+    }
     if (node.type === "model" || node.type === "candidate_validator") {
       if (
         !nonEmptyText(node.config.model_profile) &&
@@ -1091,18 +1100,17 @@ export function reviewTemplate(
       node("template", "template", "Prompt de review", 1480, 125, {
         template:
           "Analise este grupo de arquivos e proponha somente CandidateFinding sustentados por evidência concreta em linhas alteradas. Não confirme nem publique achados. Responda somente uma lista JSON de candidatos.",
+        review_contract_key: "official.pull-request",
+        review_contract_version: 1,
       }),
       node("model", "model", "Modelo de review", 1775, 125, {
         model_profile: "",
         max_tokens: 2000,
         retry_limit: 0,
         retry_delay_ms: 0,
-        review_checklist: checklistSnapshot(officialReviewChecklist),
       }),
       node("validate", "validate", "Validar resposta", 2070, 125, {
         validate_paths: true,
-        response_contract_key: "review.candidate-findings.v1",
-        response_schema: candidateFindingsSchema,
       }),
       node(
         "candidate-validator",
@@ -1115,7 +1123,6 @@ export function reviewTemplate(
           max_tokens: 300,
           temperature: 0,
           timeout_seconds: 120,
-          review_checklist: checklistSnapshot(officialReviewChecklist),
         },
       ),
       node("response-filter", "response_filter", "Filtrar achados", 2660, 125, {

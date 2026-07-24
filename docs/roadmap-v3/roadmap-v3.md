@@ -60,7 +60,11 @@ Atualizar também, durante a implementação:
 - Fase 2 implementada: `CandidateFinding`, estados explícitos, validação
   independente, fingerprint semântico e deduplicação estável foram entregues.
   Somente candidatos confirmados e únicos seguem para publicação.
-- Fase 3 iniciada: checklists fechadas e versionadas foram entregues com
-  catálogo, snapshot por workflow e enforcement de `check_id`.
-- Próximo corte recomendado: ledger de cobertura.
+- Fase 3 implementada: `ReviewContract` imutável e persistido reúne schema e
+  checklist; o `Template` seleciona a versão e o contrato acompanha a tarefa
+  tipada até a validação, sem duplicação nos cards downstream.
+- Fase 4 implementada: ledger persistente por execução, unidade e check,
+  incluindo estados, candidatos, tentativas e duração; publicação condicionada
+  à cobertura planejada.
+- Próximo corte recomendado: unidades semânticas.
 - A referência operacional dos presets está em `docs/response-contracts.md`.

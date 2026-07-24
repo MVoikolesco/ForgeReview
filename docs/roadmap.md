@@ -186,10 +186,13 @@ docs/      Arquitetura, auditoria e este roadmap
   por candidato e pipeline oficial publicando somente `CONFIRMED`.
 - **Entregue:** fingerprint SHA-256 baseado em identidade semântica e
   deduplicação antes da validação e durante a consolidação.
-- **Entregue:** catálogo e snapshots de checklists fechadas e versionadas,
-  aplicados ao reviewer e ao validador independente.
-- Próximo incremento: ledger de
-  cobertura, conforme `docs/roadmap-v3/linha-de-evolucao.md`.
+- **Entregue:** contratos de review imutáveis e persistidos, selecionados pelo
+  `Template` e propagados como tarefa tipada até o reviewer e o validador
+  independente, sem snapshots duplicados nos cards downstream.
+- **Entregue:** ledger de cobertura por execução, unidade e check, com
+  publicação bloqueada enquanto houver cobertura planejada incompleta.
+- Próximo incremento: unidades semânticas, conforme
+  `docs/roadmap-v3/linha-de-evolucao.md`.
 
 ### 1. Concluir gerenciamento visual
 

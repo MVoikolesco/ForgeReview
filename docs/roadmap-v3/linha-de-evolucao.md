@@ -4,6 +4,11 @@
 
 Os contratos configuráveis resolvem apenas a validação estrutural da resposta. Para alcançar a arquitetura proposta, ainda seriam necessárias estas capacidades, em ordem recomendada:
 
+> Estado atual: contratos de review são versões imutáveis persistidas no
+> backend. O card `Template` combina o prompt base com a versão selecionada e
+> emite uma tarefa tipada. Schema e checklist acompanham a execução até os
+> validadores, mantendo a pipeline dinâmica e os reviewers explícitos no grafo.
+
 ## 1. Unidades semânticas
 
 Substituir grupos apenas por quantidade de arquivos/caracteres por unidades com:
@@ -129,6 +134,10 @@ Persistir, por unidade e execução:
 - duração e tentativas.
 
 O review deve terminar por cobertura, não apenas quando o último nó foi executado.
+
+**Implementado:** o `Template` registra checks `PLANNED`, o validador fecha
+estados e contadores por `scope_key`, e a publicação exige que não exista
+cobertura planejada incompleta. Consulte `docs/review-coverage.md`.
 
 ## 9. Context Requests
 

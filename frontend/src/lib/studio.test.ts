@@ -53,3 +53,42 @@ test("incomplete queued and running reports retain safe status without iterable 
     assert.match(report.contractIssue || "", /progresso incompleto/);
   }
 });
+
+test("execution reports preserve safe review coverage", () => {
+  const report = normalizeExecutionReport({
+    execution_id: 17,
+    status: "completed",
+    runs: [],
+    coverage: {
+      planned: 1,
+      completed: 1,
+      incomplete: 0,
+      confirmed: 1,
+      needs_context: 0,
+      not_observable: 0,
+      items: [{
+        execution_id: 17,
+        scope_key: "loop:000001",
+        node_key: "candidate-validator",
+        contract_key: "review.security",
+        contract_version: 1,
+        check_id: "security.authorization",
+        category: "security",
+        minimum_context: "file",
+        planned: true,
+        status: "CONFIRMED",
+        candidates_generated: 1,
+        candidates_validated: 1,
+        confirmed: 1,
+        rejected: 0,
+        needs_context: 0,
+        not_observable: 0,
+        not_applicable: 0,
+        attempts: 1,
+        duration_ms: 12,
+      }],
+    },
+  });
+  assert.equal(report.coverage?.completed, 1);
+  assert.equal(report.coverage?.items[0]?.check_id, "security.authorization");
+});

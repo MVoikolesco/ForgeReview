@@ -686,12 +686,17 @@ test("review template scopes group review through loop before one root publicati
   assert.equal(modelConfig?.max_tokens, 2000);
   assert.equal(modelConfig?.retry_limit, 0);
   assert.equal(modelConfig?.retry_delay_ms, 0);
-  const checklist = modelConfig?.review_checklist as
-    | { key: string; version: number; items: unknown[] }
-    | undefined;
-  assert.equal(checklist?.key, "official.pull-request.v1");
-  assert.equal(checklist?.version, 1);
-  assert.equal(checklist?.items.length, 6);
+  assert.equal(modelConfig?.review_checklist, undefined);
+  const templateConfig = template.nodes.find(
+    (node) => node.id === "template",
+  )?.data.config;
+  assert.equal(templateConfig?.review_contract_key, "official.pull-request");
+  assert.equal(templateConfig?.review_contract_version, 1);
+  assert.equal(
+    template.nodes.find((node) => node.id === "validate")?.data.config
+      .response_schema,
+    undefined,
+  );
   assert.deepEqual(
     template.nodes.find((node) => node.id === "publish")?.data.config,
     {

@@ -391,14 +391,35 @@ text-based compatibility behavior.
 
 ### Versioned reviewer checklists
 
-`GET /api/review-checklists` exposes immutable checklist versions. Selecting one
-copies a bounded snapshot into `config.review_checklist`; executions therefore
-do not depend on future catalog changes. Model execution appends the closed
-check set to the reviewer prompt and forbids invented check IDs. The independent
-validator uses the same snapshot as a deterministic allowlist: candidates
-outside it become `NOT_APPLICABLE` without a provider call. Missing checklist
-configuration preserves legacy free-review behavior. See
-`docs/review-checklists.md`.
+The current execution boundary is a persisted, immutable `ReviewContract`
+version. `GET /api/review-contracts` returns the database catalog. A `template`
+card stores only `review_contract_key` and `review_contract_version`, combines
+that contract with its workflow-owned base prompt, and emits a typed
+`ReviewTask`. The contract then travels through `model`, `validate`, and
+`candidate_validator`; downstream cards do not duplicate schema or checklist
+configuration.
+
+At runtime the contract schema validates the model response and its checklist
+is the deterministic candidate allowlist. Candidates outside it become
+`NOT_APPLICABLE` without a provider call. Contract versions are inserted once
+and are never updated in place, so historical workflows remain reproducible.
+Plain prompts and the former card-local snapshots remain accepted only as a
+compatibility path for existing workflows. See `docs/review-checklists.md`.
+
+### Review coverage ledger
+
+Contract-backed reviews persist one coverage row per execution, loop scope,
+contract version, and check ID. `template` records the planned set before the
+model call; `candidate_validator` closes it with terminal state, candidate
+counts, provider attempts, and duration. A failure between those boundaries
+therefore leaves durable `PLANNED` rows instead of presenting an apparently
+complete review.
+
+`GET /api/executions/:id` includes the safe coverage summary and
+`GET /api/executions/:id/coverage` returns its items. Publication checks the
+ledger before opening its idempotent external side effect and is blocked while
+planned coverage remains incomplete. Legacy workflows without a review
+contract retain their former behavior. See `docs/review-coverage.md`.
 
 The Studio loads the card catalog from `GET /api/cards`, lets an administrator
 add cards and draw port connections, and saves the current canvas as a new

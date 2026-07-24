@@ -103,7 +103,161 @@ func Open(path string) (*SQLite, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = store.seedReviewContracts(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return store, nil
+}
+
+func (s *SQLite) seedReviewContracts(ctx context.Context) error {
+	for _, contract := range workflow.BuiltInReviewContracts() {
+		if err := workflow.ValidateReviewContract(contract); err != nil {
+			return fmt.Errorf("invalid built-in review contract %s@%d: %w", contract.Key, contract.Version, err)
+		}
+		schemaJSON, err := json.Marshal(contract.ResponseSchema)
+		if err != nil {
+			return err
+		}
+		checklistJSON, err := json.Marshal(contract.Checklist)
+		if err != nil {
+			return err
+		}
+		_, err = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO review_contract_versions(contract_key,version,name,description,response_schema_json,checklist_json,official) VALUES(?,?,?,?,?,?,?)`,
+			contract.Key, contract.Version, contract.Name, contract.Description, string(schemaJSON), string(checklistJSON), contract.Official)
+		if err != nil {
+			return fmt.Errorf("seed review contract %s@%d: %w", contract.Key, contract.Version, err)
+		}
+	}
+	return nil
+}
+
+func (s *SQLite) ReviewContract(ctx context.Context, key string, version int) (workflow.ReviewContractVersion, error) {
+	var item workflow.ReviewContractVersion
+	var schemaJSON, checklistJSON string
+	err := s.db.QueryRowContext(ctx, `SELECT id,contract_key,version,name,description,response_schema_json,checklist_json,official FROM review_contract_versions WHERE contract_key=? AND version=?`, key, version).
+		Scan(&item.ID, &item.Key, &item.Version, &item.Name, &item.Description, &schemaJSON, &checklistJSON, &item.Official)
+	if err != nil {
+		return workflow.ReviewContractVersion{}, err
+	}
+	if err = json.Unmarshal([]byte(schemaJSON), &item.ResponseSchema); err != nil {
+		return workflow.ReviewContractVersion{}, err
+	}
+	if err = json.Unmarshal([]byte(checklistJSON), &item.Checklist); err != nil {
+		return workflow.ReviewContractVersion{}, err
+	}
+	if err = workflow.ValidateReviewContract(item); err != nil {
+		return workflow.ReviewContractVersion{}, err
+	}
+	return item, nil
+}
+
+func (s *SQLite) ReviewContracts(ctx context.Context) ([]workflow.ReviewContractVersion, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,contract_key,version,name,description,response_schema_json,checklist_json,official FROM review_contract_versions ORDER BY name,version DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []workflow.ReviewContractVersion{}
+	for rows.Next() {
+		var item workflow.ReviewContractVersion
+		var schemaJSON, checklistJSON string
+		if err = rows.Scan(&item.ID, &item.Key, &item.Version, &item.Name, &item.Description, &schemaJSON, &checklistJSON, &item.Official); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal([]byte(schemaJSON), &item.ResponseSchema); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal([]byte(checklistJSON), &item.Checklist); err != nil {
+			return nil, err
+		}
+		if err = workflow.ValidateReviewContract(item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *SQLite) RecordCoverage(ctx context.Context, records []workflow.CoverageRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, record := range records {
+		if err = workflow.ValidateCoverageRecord(record); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO review_coverage(
+			execution_id,scope_key,node_key,contract_key,contract_version,check_id,category,minimum_context,planned,status,
+			candidates_generated,candidates_validated,confirmed,rejected,needs_context,not_observable,not_applicable,attempts,duration_ms,completed_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?='PLANNED' THEN NULL ELSE CURRENT_TIMESTAMP END)
+			ON CONFLICT(execution_id,scope_key,contract_key,contract_version,check_id) DO UPDATE SET
+			node_key=excluded.node_key,category=excluded.category,minimum_context=excluded.minimum_context,
+			planned=MAX(review_coverage.planned,excluded.planned),
+			status=CASE WHEN excluded.status='PLANNED' AND review_coverage.status<>'PLANNED' THEN review_coverage.status ELSE excluded.status END,
+			candidates_generated=CASE WHEN excluded.status='PLANNED' THEN review_coverage.candidates_generated ELSE excluded.candidates_generated END,
+			candidates_validated=CASE WHEN excluded.status='PLANNED' THEN review_coverage.candidates_validated ELSE excluded.candidates_validated END,
+			confirmed=CASE WHEN excluded.status='PLANNED' THEN review_coverage.confirmed ELSE excluded.confirmed END,
+			rejected=CASE WHEN excluded.status='PLANNED' THEN review_coverage.rejected ELSE excluded.rejected END,
+			needs_context=CASE WHEN excluded.status='PLANNED' THEN review_coverage.needs_context ELSE excluded.needs_context END,
+			not_observable=CASE WHEN excluded.status='PLANNED' THEN review_coverage.not_observable ELSE excluded.not_observable END,
+			not_applicable=CASE WHEN excluded.status='PLANNED' THEN review_coverage.not_applicable ELSE excluded.not_applicable END,
+			attempts=CASE WHEN excluded.status='PLANNED' THEN review_coverage.attempts ELSE excluded.attempts END,
+			duration_ms=CASE WHEN excluded.status='PLANNED' THEN review_coverage.duration_ms ELSE excluded.duration_ms END,
+			completed_at=CASE WHEN excluded.status='PLANNED' THEN review_coverage.completed_at ELSE CURRENT_TIMESTAMP END`,
+			record.ExecutionID, record.ScopeKey, record.NodeKey, record.ContractKey, record.ContractVersion,
+			record.CheckID, record.Category, record.MinimumContext, record.Planned, record.Status,
+			record.CandidatesGenerated, record.CandidatesValidated, record.Confirmed, record.Rejected,
+			record.NeedsContext, record.NotObservable, record.NotApplicable, record.Attempts, record.DurationMS, record.Status)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *SQLite) CoverageComplete(ctx context.Context, executionID int64) (bool, error) {
+	var incomplete int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM review_coverage WHERE execution_id=? AND planned=1 AND status='PLANNED'`, executionID).Scan(&incomplete)
+	return incomplete == 0, err
+}
+
+func (s *SQLite) Coverage(ctx context.Context, executionID int64) (workflow.CoverageSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT execution_id,scope_key,node_key,contract_key,contract_version,check_id,category,minimum_context,planned,status,
+		candidates_generated,candidates_validated,confirmed,rejected,needs_context,not_observable,not_applicable,attempts,duration_ms
+		FROM review_coverage WHERE execution_id=? ORDER BY scope_key,planned DESC,check_id`, executionID)
+	if err != nil {
+		return workflow.CoverageSummary{}, err
+	}
+	defer rows.Close()
+	summary := workflow.CoverageSummary{Items: []workflow.CoverageRecord{}}
+	for rows.Next() {
+		var item workflow.CoverageRecord
+		if err = rows.Scan(&item.ExecutionID, &item.ScopeKey, &item.NodeKey, &item.ContractKey, &item.ContractVersion,
+			&item.CheckID, &item.Category, &item.MinimumContext, &item.Planned, &item.Status,
+			&item.CandidatesGenerated, &item.CandidatesValidated, &item.Confirmed, &item.Rejected,
+			&item.NeedsContext, &item.NotObservable, &item.NotApplicable, &item.Attempts, &item.DurationMS); err != nil {
+			return workflow.CoverageSummary{}, err
+		}
+		if item.Planned {
+			summary.Planned++
+			if item.Status == workflow.CoveragePlanned {
+				summary.Incomplete++
+			} else {
+				summary.Completed++
+			}
+		}
+		summary.Confirmed += item.Confirmed
+		summary.NeedsContext += item.NeedsContext
+		summary.NotObservable += item.NotObservable
+		summary.Items = append(summary.Items, item)
+	}
+	return summary, rows.Err()
 }
 
 func (s *SQLite) Close() error { return s.db.Close() }
@@ -475,6 +629,9 @@ func (s *SQLite) Save(ctx context.Context, definition workflow.Definition) (int6
 	if err := workflow.ValidateNoFixedPullRequestConfig(definition); err != nil {
 		return 0, err
 	}
+	if err := s.validateReviewContractReferences(ctx, definition); err != nil {
+		return 0, err
+	}
 	payload, err := json.Marshal(definition)
 	if err != nil {
 		return 0, err
@@ -525,12 +682,13 @@ func (s *SQLite) EnsureOfficialReviewWorkflow(ctx context.Context, catalog workf
 		legacyJSON, _ := json.Marshal(workflow.PreviousOfficialReviewDefinition())
 		previousJSON, _ := json.Marshal(workflow.PreviousVerifiableReviewDefinition())
 		previousCandidateJSON, _ := json.Marshal(workflow.PreviousCandidateReviewDefinition())
+		previousChecklistJSON, _ := json.Marshal(workflow.PreviousChecklistReviewDefinition())
 		storedJSON := []byte(existingPayload)
 		if json.Unmarshal(storedJSON, &stored) != nil {
 			return workflow.VersionSummary{}, false, fmt.Errorf("decode existing official workflow")
 		}
 		normalized, _ := json.Marshal(stored)
-		if string(normalized) != string(legacyJSON) && string(normalized) != string(previousJSON) && string(normalized) != string(previousCandidateJSON) {
+		if string(normalized) != string(legacyJSON) && string(normalized) != string(previousJSON) && string(normalized) != string(previousCandidateJSON) && string(normalized) != string(previousChecklistJSON) {
 			if err = tx.Commit(); err != nil {
 				return workflow.VersionSummary{}, false, err
 			}
@@ -650,6 +808,9 @@ func (s *SQLite) Publish(ctx context.Context, id int64, catalog workflow.Catalog
 	if err = workflow.Validate(definition, catalog); err != nil {
 		return workflow.VersionSummary{}, fmt.Errorf("%w: %v", ErrInvalidWorkflowVersion, err)
 	}
+	if err = s.validateReviewContractReferences(ctx, definition); err != nil {
+		return workflow.VersionSummary{}, fmt.Errorf("%w: %v", ErrInvalidWorkflowVersion, err)
+	}
 	if err = validateWorkflowReferencesTx(ctx, tx, id, definition, catalog, map[int64]bool{id: true}); err != nil {
 		return workflow.VersionSummary{}, fmt.Errorf("%w: %v", ErrInvalidWorkflowVersion, err)
 	}
@@ -673,6 +834,30 @@ func (s *SQLite) Publish(ctx context.Context, id int64, catalog workflow.Catalog
 	summary.ID = id
 	summary.Status = workflow.VersionStatusPublished
 	return summary, nil
+}
+
+func (s *SQLite) validateReviewContractReferences(ctx context.Context, definition workflow.Definition) error {
+	for _, node := range definition.Nodes {
+		if node.Type != "template" {
+			continue
+		}
+		ref, configured, err := workflow.ReviewContractReference(node.Config)
+		if err != nil {
+			return fmt.Errorf("template card %q: %w", node.Key, err)
+		}
+		if !configured {
+			continue
+		}
+		var exists int
+		err = s.db.QueryRowContext(ctx, `SELECT 1 FROM review_contract_versions WHERE contract_key=? AND version=?`, ref.Key, ref.Version).Scan(&exists)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("template card %q references unknown review contract %s@%d", node.Key, ref.Key, ref.Version)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateWorkflowReferencesTx(ctx context.Context, tx *sql.Tx, rootID int64, definition workflow.Definition, catalog workflow.Catalog, stack map[int64]bool) error {
@@ -1362,7 +1547,6 @@ func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.ExecutionSta
 	if err != nil {
 		return workflow.ExecutionStatus{}, err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var run workflow.ExecutionNodeState
 		var ignored string
@@ -1371,7 +1555,20 @@ func (s *SQLite) Execution(ctx context.Context, id int64) (workflow.ExecutionSta
 		}
 		report.Runs = append(report.Runs, run)
 	}
-	return report, rows.Err()
+	if err = rows.Close(); err != nil {
+		return workflow.ExecutionStatus{}, err
+	}
+	if err = rows.Err(); err != nil {
+		return workflow.ExecutionStatus{}, err
+	}
+	coverage, err := s.Coverage(ctx, id)
+	if err != nil {
+		return workflow.ExecutionStatus{}, err
+	}
+	if len(coverage.Items) > 0 {
+		report.Coverage = &coverage
+	}
+	return report, nil
 }
 
 // CardExecutionLogs provides a detailed but safe diagnostic view for one card.
@@ -1653,6 +1850,18 @@ CREATE TABLE IF NOT EXISTS workflow_versions (
  UNIQUE(workflow_key, version)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS workflow_published_version ON workflow_versions(workflow_key) WHERE status='published';
+CREATE TABLE IF NOT EXISTS review_contract_versions (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ contract_key TEXT NOT NULL,
+ version INTEGER NOT NULL,
+ name TEXT NOT NULL,
+ description TEXT NOT NULL DEFAULT '',
+ response_schema_json TEXT NOT NULL,
+ checklist_json TEXT NOT NULL,
+ official INTEGER NOT NULL DEFAULT 0 CHECK(official IN (0,1)),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(contract_key,version)
+);
 CREATE TABLE IF NOT EXISTS integrations (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  integration_key TEXT NOT NULL UNIQUE,
@@ -1696,6 +1905,31 @@ CREATE TABLE IF NOT EXISTS workflow_execution_sensitive (
  input_json TEXT NOT NULL,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS review_coverage (
+ execution_id INTEGER NOT NULL REFERENCES workflow_executions(id) ON DELETE CASCADE,
+ scope_key TEXT NOT NULL,
+ node_key TEXT NOT NULL,
+ contract_key TEXT NOT NULL,
+ contract_version INTEGER NOT NULL,
+ check_id TEXT NOT NULL,
+ category TEXT NOT NULL DEFAULT '',
+ minimum_context TEXT NOT NULL DEFAULT '',
+ planned INTEGER NOT NULL DEFAULT 1 CHECK(planned IN (0,1)),
+ status TEXT NOT NULL CHECK(status IN ('PLANNED','COMPLETED','CONFIRMED','REJECTED','NEEDS_CONTEXT','NOT_OBSERVABLE','NOT_APPLICABLE')),
+ candidates_generated INTEGER NOT NULL DEFAULT 0,
+ candidates_validated INTEGER NOT NULL DEFAULT 0,
+ confirmed INTEGER NOT NULL DEFAULT 0,
+ rejected INTEGER NOT NULL DEFAULT 0,
+ needs_context INTEGER NOT NULL DEFAULT 0,
+ not_observable INTEGER NOT NULL DEFAULT 0,
+ not_applicable INTEGER NOT NULL DEFAULT 0,
+ attempts INTEGER NOT NULL DEFAULT 0,
+ duration_ms INTEGER NOT NULL DEFAULT 0,
+ planned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ completed_at TEXT,
+ PRIMARY KEY(execution_id,scope_key,contract_key,contract_version,check_id)
+);
+CREATE INDEX IF NOT EXISTS review_coverage_execution ON review_coverage(execution_id,status);
 CREATE TABLE IF NOT EXISTS workflow_node_runs (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  workflow_execution_id INTEGER NOT NULL REFERENCES workflow_executions(id),

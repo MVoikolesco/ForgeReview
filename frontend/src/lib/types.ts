@@ -46,6 +46,17 @@ export type ReviewChecklist = ReviewChecklistSnapshot & {
   editable: false;
 };
 
+export type ReviewContractVersion = {
+  id: number;
+  key: string;
+  version: number;
+  name: string;
+  description: string;
+  response_schema: Record<string, unknown>;
+  checklist: ReviewChecklistSnapshot;
+  official: boolean;
+};
+
 export type CardStatus =
   | "idle"
   | "running"
@@ -132,15 +143,55 @@ export type PublishedWorkflow = {
 };
 
 export type ExecutionReport = {
-	 execution_id?: number;
-	status: string;
-	runs: Array<{
-	  node_key: string;
-	  scope_key?: string;
-     status: "running" | "completed" | "failed" | "partial";
-   }>;
+  execution_id?: number;
+  status: string;
+  runs: Array<{
+    node_key: string;
+    scope_key?: string;
+    status: "running" | "completed" | "failed" | "partial";
+  }>;
+  coverage?: CoverageSummary;
   /** Present only when a compatible safe report could not be fully decoded. */
   contractIssue?: string;
+};
+
+export type CoverageRecord = {
+  execution_id: number;
+  scope_key: string;
+  node_key: string;
+  contract_key: string;
+  contract_version: number;
+  check_id: string;
+  category: string;
+  minimum_context: string;
+  planned: boolean;
+  status:
+    | "PLANNED"
+    | "COMPLETED"
+    | "CONFIRMED"
+    | "REJECTED"
+    | "NEEDS_CONTEXT"
+    | "NOT_OBSERVABLE"
+    | "NOT_APPLICABLE";
+  candidates_generated: number;
+  candidates_validated: number;
+  confirmed: number;
+  rejected: number;
+  needs_context: number;
+  not_observable: number;
+  not_applicable: number;
+  attempts: number;
+  duration_ms: number;
+};
+
+export type CoverageSummary = {
+  planned: number;
+  completed: number;
+  incomplete: number;
+  confirmed: number;
+  needs_context: number;
+  not_observable: number;
+  items: CoverageRecord[];
 };
 
 export type ExecutionEvent = {

@@ -56,6 +56,16 @@ func (w Worker) Process(ctx context.Context, id int64) error {
 			adapters.Workflows = resolver
 		}
 	}
+	if adapters.ReviewContracts == nil {
+		if contracts, ok := w.Store.(workflow.ReviewContractLookup); ok {
+			adapters.ReviewContracts = contracts
+		}
+	}
+	if adapters.Coverage == nil {
+		if coverage, ok := w.Store.(workflow.CoverageLedger); ok {
+			adapters.Coverage = coverage
+		}
+	}
 	adapters.Execution = workflow.ExecutionContext{ID: execution.ID, VersionID: execution.VersionID}
 	nodes := make(map[string]workflow.Node, len(definition.Nodes))
 	for _, node := range definition.Nodes {

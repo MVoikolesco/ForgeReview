@@ -31,7 +31,7 @@ func TestCandidateOutsideChecklistBecomesNotApplicableWithoutModelCall(t *testin
 	runner := &scopedRunner{adapters: Adapters{OpenAI: model}}
 	node := Node{Key: "validator", Type: "candidate_validator", Config: map[string]any{"review_checklist": officialReviewChecklistSnapshot()}}
 	candidate := candidateFixture("custom.unlisted", "app.go", 2)
-	outputs, metadata, err := runner.runCandidateValidator(context.Background(), node, map[string][]any{
+	outputs, metadata, err := runner.runCandidateValidator(context.Background(), node, rootScope, map[string][]any{
 		"candidates": []any{[]CandidateFinding{candidate}},
 		"files":      []any{FileGroup{Files: []map[string]any{{"filename": "app.go", "patch": "@@ -1 +1,2 @@\n package app\n+unsafe()"}}}},
 	})

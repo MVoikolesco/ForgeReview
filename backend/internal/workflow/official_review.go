@@ -13,17 +13,13 @@ const (
 // always flows through the typed event and pull_request ports.
 func OfficialReviewDefinition() Definition {
 	definition := officialReviewDefinitionV1()
-	checklist := officialReviewChecklistSnapshot()
-	definition.Description = "Seeded verifiable pull-request review pipeline with independent candidate validation and one native Gitea review publication."
+	definition.Description = "Seeded dynamic pull-request review pipeline whose Template selects an immutable backend contract."
 	for index := range definition.Nodes {
 		switch definition.Nodes[index].Key {
-		case "model":
-			definition.Nodes[index].Config["review_checklist"] = checklist
 		case "template":
 			definition.Nodes[index].Config["template"] = "Analise este grupo de arquivos e proponha somente CandidateFinding sustentados por evidência concreta em linhas alteradas. Não confirme nem publique achados. Responda somente uma lista JSON de candidatos."
-		case "validate":
-			definition.Nodes[index].Config["response_contract_key"] = "review.candidate-findings.v1"
-			definition.Nodes[index].Config["response_schema"] = responseContractSchema("review.candidate-findings.v1")
+			definition.Nodes[index].Config["review_contract_key"] = OfficialPullRequestContractKey
+			definition.Nodes[index].Config["review_contract_version"] = 1
 		case "response-filter":
 			definition.Nodes[index].Position.X = 2660
 		}
@@ -31,7 +27,7 @@ func OfficialReviewDefinition() Definition {
 	definition.Nodes = append(definition.Nodes, Node{
 		Key: "candidate-validator", Type: "candidate_validator", Name: "Validar candidatos",
 		Position: Position{X: 2365, Y: 125},
-		Config:   map[string]any{"model_profile": "", "max_tokens": 300, "temperature": 0.0, "timeout_seconds": 120, "review_checklist": checklist},
+		Config:   map[string]any{"model_profile": "", "max_tokens": 300, "temperature": 0.0, "timeout_seconds": 120},
 	})
 	edges := make([]Edge, 0, len(definition.Edges)+2)
 	for _, edge := range definition.Edges {
@@ -102,11 +98,32 @@ func PreviousVerifiableReviewDefinition() Definition {
 }
 
 func PreviousCandidateReviewDefinition() Definition {
-	definition := OfficialReviewDefinition()
+	definition := PreviousChecklistReviewDefinition()
 	for index := range definition.Nodes {
 		if definition.Nodes[index].Key == "model" || definition.Nodes[index].Key == "candidate-validator" {
 			delete(definition.Nodes[index].Config, "review_checklist")
 		}
 	}
+	return definition
+}
+
+// PreviousChecklistReviewDefinition recognizes the last seed where schema and
+// checklist snapshots were duplicated across downstream cards.
+func PreviousChecklistReviewDefinition() Definition {
+	definition := OfficialReviewDefinition()
+	checklist := officialReviewChecklistSnapshot()
+	for index := range definition.Nodes {
+		switch definition.Nodes[index].Key {
+		case "template":
+			delete(definition.Nodes[index].Config, "review_contract_key")
+			delete(definition.Nodes[index].Config, "review_contract_version")
+		case "model", "candidate-validator":
+			definition.Nodes[index].Config["review_checklist"] = checklist
+		case "validate":
+			definition.Nodes[index].Config["response_contract_key"] = "review.candidate-findings.v1"
+			definition.Nodes[index].Config["response_schema"] = responseContractSchema("review.candidate-findings.v1")
+		}
+	}
+	definition.Description = "Seeded verifiable pull-request review pipeline with independent candidate validation and one native Gitea review publication."
 	return definition
 }

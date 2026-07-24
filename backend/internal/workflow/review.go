@@ -36,23 +36,24 @@ const (
 // CandidateFinding is an internal proposal. It is never publishable until an
 // independent validator marks it CONFIRMED and converts it to Finding.
 type CandidateFinding struct {
-	CheckID         string   `json:"check_id"`
-	Claim           string   `json:"claim"`
-	Scenario        string   `json:"scenario"`
-	Impact          string   `json:"impact"`
-	Evidence        []string `json:"evidence"`
-	Confidence      float64  `json:"confidence"`
-	RequiredContext []string `json:"required_context"`
-	Symbol          string   `json:"symbol"`
-	IssueType       string   `json:"issue_type"`
-	AffectedEntity  string   `json:"affected_entity"`
-	Path            string   `json:"path"`
-	Line            int      `json:"line"`
-	Comment         string   `json:"comment"`
-	Severity        string   `json:"severity"`
-	Status          string   `json:"status"`
-	DecisionReason  string   `json:"decision_reason,omitempty"`
-	Fingerprint     string   `json:"fingerprint,omitempty"`
+	CheckID             string   `json:"check_id"`
+	Claim               string   `json:"claim"`
+	Scenario            string   `json:"scenario"`
+	Impact              string   `json:"impact"`
+	Evidence            []string `json:"evidence"`
+	Confidence          float64  `json:"confidence"`
+	RequiredContext     []string `json:"required_context"`
+	Symbol              string   `json:"symbol"`
+	IssueType           string   `json:"issue_type"`
+	AffectedEntity      string   `json:"affected_entity"`
+	Path                string   `json:"path"`
+	Line                int      `json:"line"`
+	Comment             string   `json:"comment"`
+	Severity            string   `json:"severity"`
+	Status              string   `json:"status"`
+	DecisionReason      string   `json:"decision_reason,omitempty"`
+	Fingerprint         string   `json:"fingerprint,omitempty"`
+	ValidationAttempted bool     `json:"validation_attempted,omitempty"`
 }
 
 type CandidateValidationDecision struct {
@@ -187,11 +188,19 @@ func groupFiles(values []any, config map[string]any) ([]FileGroup, error) {
 }
 
 func validateResponse(responseValues, fileValues []any, config map[string]any) (any, string) {
-	response, ok := firstValue(responseValues).(string)
+	responseValue := firstValue(responseValues)
+	response, ok := responseValue.(string)
+	var contract ReviewContractVersion
+	if typed, typedOK := responseValue.(ReviewModelResponse); typedOK {
+		response, contract, ok = typed.Content, typed.Contract, true
+	}
 	if !ok {
 		return ValidationFailure{Code: "invalid_json", Errors: []string{"model response must be JSON text"}}, "invalid"
 	}
 	schemaValue, hasSchema := responseSchemaFromConfig(config)
+	if contractConfigured(contract) {
+		schemaValue, hasSchema = contract.ResponseSchema, true
+	}
 	if hasSchema {
 		parsed, err := parseJSONResponse(response)
 		if err != nil {
@@ -209,6 +218,9 @@ func validateResponse(responseValues, fileValues []any, config map[string]any) (
 			return ValidationFailure{Code: "additional_rule", Errors: []string{configErr.Error()}}, "invalid"
 		}
 		if !validatePaths {
+			if contractConfigured(contract) {
+				return ValidatedReviewResponse{Value: parsed, Contract: contract}, "valid"
+			}
 			return parsed, "valid"
 		}
 		findings, findingErr := findingsFromValue(parsed)
@@ -218,6 +230,9 @@ func validateResponse(responseValues, fileValues []any, config map[string]any) (
 		validated, port := validateFindingRules(findings, fileValues, true)
 		if port == "invalid" {
 			return validated, port
+		}
+		if contractConfigured(contract) {
+			return ValidatedReviewResponse{Value: parsed, Contract: contract}, "valid"
 		}
 		return parsed, "valid"
 	}
@@ -233,9 +248,25 @@ func validateResponse(responseValues, fileValues []any, config map[string]any) (
 }
 
 func candidateFindings(values []any) ([]CandidateFinding, error) {
+	candidates, _, err := candidateFindingsWithContract(values)
+	return candidates, err
+}
+
+func candidateFindingsWithContract(values []any) ([]CandidateFinding, ReviewContractVersion, error) {
 	var candidates []CandidateFinding
+	var contract ReviewContractVersion
 	for _, value := range values {
 		switch typed := value.(type) {
+		case ValidatedReviewResponse:
+			if contractConfigured(contract) && (contract.Key != typed.Contract.Key || contract.Version != typed.Contract.Version) {
+				return nil, ReviewContractVersion{}, fmt.Errorf("candidate validator received mixed review contract versions")
+			}
+			contract = typed.Contract
+			decoded, _, err := candidateFindingsWithContract([]any{typed.Value})
+			if err != nil {
+				return nil, ReviewContractVersion{}, err
+			}
+			candidates = append(candidates, decoded...)
 		case []CandidateFinding:
 			candidates = append(candidates, typed...)
 		case CandidateFinding:
@@ -243,11 +274,11 @@ func candidateFindings(values []any) ([]CandidateFinding, error) {
 		default:
 			payload, err := json.Marshal(value)
 			if err != nil {
-				return nil, fmt.Errorf("candidate validator requires CandidateFinding[]")
+				return nil, ReviewContractVersion{}, fmt.Errorf("candidate validator requires CandidateFinding[]")
 			}
 			var decoded []CandidateFinding
 			if err = json.Unmarshal(payload, &decoded); err != nil || decoded == nil {
-				return nil, fmt.Errorf("candidate validator requires CandidateFinding[]")
+				return nil, ReviewContractVersion{}, fmt.Errorf("candidate validator requires CandidateFinding[]")
 			}
 			candidates = append(candidates, decoded...)
 		}
@@ -258,7 +289,7 @@ func candidateFindings(values []any) ([]CandidateFinding, error) {
 			candidate.Status = CandidatePending
 		}
 		if candidate.Status != CandidatePending {
-			return nil, fmt.Errorf("candidate %d must enter validation with status PENDING", index)
+			return nil, ReviewContractVersion{}, fmt.Errorf("candidate %d must enter validation with status PENDING", index)
 		}
 		if strings.TrimSpace(candidate.CheckID) == "" ||
 			strings.TrimSpace(candidate.Claim) == "" ||
@@ -272,18 +303,18 @@ func candidateFindings(values []any) ([]CandidateFinding, error) {
 			strings.TrimSpace(candidate.Comment) == "" ||
 			len(candidate.Evidence) == 0 ||
 			candidate.Confidence < 0 || candidate.Confidence > 1 {
-			return nil, fmt.Errorf("candidate %d does not satisfy the CandidateFinding contract", index)
+			return nil, ReviewContractVersion{}, fmt.Errorf("candidate %d does not satisfy the CandidateFinding contract", index)
 		}
 		if _, allowed := severityRank[candidate.Severity]; !allowed {
-			return nil, fmt.Errorf("candidate %d severity %q is not allowed", index, candidate.Severity)
+			return nil, ReviewContractVersion{}, fmt.Errorf("candidate %d severity %q is not allowed", index, candidate.Severity)
 		}
 		for _, evidence := range candidate.Evidence {
 			if strings.TrimSpace(evidence) == "" {
-				return nil, fmt.Errorf("candidate %d contains empty evidence", index)
+				return nil, ReviewContractVersion{}, fmt.Errorf("candidate %d contains empty evidence", index)
 			}
 		}
 	}
-	return candidates, nil
+	return candidates, contract, nil
 }
 
 func parseCandidateDecision(response string) (CandidateValidationDecision, error) {

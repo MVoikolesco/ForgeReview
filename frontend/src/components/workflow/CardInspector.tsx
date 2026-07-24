@@ -11,14 +11,12 @@ import {
   parseResponseSchemaText,
   responseSchemaError,
 } from "../../lib/response-contracts";
-import { checklistSnapshot } from "../../lib/review-checklists";
 import type {
   CardData,
   Integration,
   ModelProfile,
   ResponseContract,
-  ReviewChecklist,
-  ReviewChecklistSnapshot,
+  ReviewContractVersion,
   WebhookRegistration,
   WorkflowSummary,
 } from "../../lib/types";
@@ -31,7 +29,7 @@ export function CardInspector({
   integrations,
   modelProfiles,
   responseContracts,
-  reviewChecklists,
+  reviewContracts,
   workflows,
   hasErrorRoute,
   onChange,
@@ -47,7 +45,7 @@ export function CardInspector({
   integrations: Integration[];
   modelProfiles: ModelProfile[];
   responseContracts: ResponseContract[];
-  reviewChecklists: ReviewChecklist[];
+  reviewContracts: ReviewContractVersion[];
   workflows: WorkflowSummary[];
   hasErrorRoute: boolean;
   onChange: (patch: Partial<CardData>) => void;
@@ -186,11 +184,11 @@ export function CardInspector({
   const schemaValidation = schemaText
     ? parseResponseSchemaText(schemaText)
     : undefined;
-  const configuredChecklist =
-    selected.config.review_checklist &&
-    typeof selected.config.review_checklist === "object"
-      ? (selected.config.review_checklist as ReviewChecklistSnapshot)
-      : undefined;
+  const configuredReviewContract = reviewContracts.find(
+    (item) =>
+      item.key === selected.config.review_contract_key &&
+      item.version === selected.config.review_contract_version,
+  );
   const gitea = integrations.filter(
     (item) => item.type === "gitea" && item.status === "active",
   );
@@ -561,53 +559,66 @@ export function CardInspector({
             </>
           )}
           {selected.type === "template" && (
-            <label>
-              Template
-              <textarea
-                value={configText(selected.config.template)}
-                onChange={(event) =>
-                  updateConfig("template", event.target.value)
-                }
-                placeholder="Descreva a revisão e use variáveis declaradas."
-              />
-            </label>
+            <>
+              <label>
+                Contrato da tarefa
+                <select
+                  value={
+                    configuredReviewContract
+                      ? `${configuredReviewContract.key}@${configuredReviewContract.version}`
+                      : ""
+                  }
+                  onChange={(event) => {
+                    const contract = reviewContracts.find(
+                      (item) =>
+                        `${item.key}@${item.version}` === event.target.value,
+                    );
+                    if (!contract) {
+                      replaceConfig({}, [
+                        "review_contract_key",
+                        "review_contract_version",
+                      ]);
+                      return;
+                    }
+                    replaceConfig({
+                      review_contract_key: contract.key,
+                      review_contract_version: contract.version,
+                    });
+                  }}
+                >
+                  <option value="">Prompt livre (legado)</option>
+                  {reviewContracts.map((contract) => (
+                    <option
+                      key={`${contract.key}@${contract.version}`}
+                      value={`${contract.key}@${contract.version}`}
+                    >
+                      {contract.name} · v{contract.version}
+                    </option>
+                  ))}
+                </select>
+                <small>
+                  {configuredReviewContract
+                    ? `${configuredReviewContract.checklist.items.length} checks; o schema e a checklist acompanharão a tarefa.`
+                    : "Selecione um contrato persistido para uma tarefa de review tipada."}
+                </small>
+              </label>
+              <label>
+                Prompt base
+                <textarea
+                  value={configText(selected.config.template)}
+                  onChange={(event) =>
+                    updateConfig("template", event.target.value)
+                  }
+                  placeholder="Descreva a revisão e use variáveis declaradas."
+                />
+              </label>
+            </>
           )}
           {selected.type === "fetch" && <>{connectionFields}</>}
           {(selected.type === "model" ||
             selected.type === "candidate_validator") && (
             <>
               {connectionFields}
-              <label>
-                Checklist versionada
-                <select
-                  value={configuredChecklist?.key ?? ""}
-                  onChange={(event) => {
-                    const checklist = reviewChecklists.find(
-                      (item) => item.key === event.target.value,
-                    );
-                    if (!checklist) {
-                      replaceConfig({}, ["review_checklist"]);
-                      return;
-                    }
-                    updateConfig(
-                      "review_checklist",
-                      checklistSnapshot(checklist),
-                    );
-                  }}
-                >
-                  <option value="">Sem checklist fechada</option>
-                  {reviewChecklists.map((checklist) => (
-                    <option key={checklist.key} value={checklist.key}>
-                      {checklist.name} · v{checklist.version}
-                    </option>
-                  ))}
-                </select>
-                <small>
-                  {configuredChecklist
-                    ? `${configuredChecklist.items.length} checks · ${Array.from(new Set(configuredChecklist.items.map((item) => item.category))).join(", ")}`
-                    : "Sem checklist, o reviewer mantém compatibilidade com workflows livres."}
-                </small>
-              </label>
               {numberField("max_tokens", "Máximo de tokens", 2000)}
               {optionalDecimalField(
                 "temperature",

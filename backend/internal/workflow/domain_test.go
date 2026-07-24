@@ -140,8 +140,11 @@ func TestOfficialReviewDefinitionIsAValidFullGraphWithSafePublicationDefaults(t 
 	if configs["model"]["model_profile"] != "" || configs["model"]["retry_limit"] != 0 || configs["model"]["retry_delay_ms"] != 0 {
 		t.Fatalf("model defaults = %#v", configs["model"])
 	}
-	if configs["candidate-validator"]["model_profile"] != "" || configs["validate"]["response_contract_key"] != "review.candidate-findings.v1" {
-		t.Fatalf("candidate validation defaults = %#v / %#v", configs["candidate-validator"], configs["validate"])
+	if configs["candidate-validator"]["model_profile"] != "" || configs["template"]["review_contract_key"] != OfficialPullRequestContractKey || configs["template"]["review_contract_version"] != 1 {
+		t.Fatalf("candidate validation defaults = %#v / %#v", configs["candidate-validator"], configs["template"])
+	}
+	if configs["model"]["review_checklist"] != nil || configs["candidate-validator"]["review_checklist"] != nil || configs["validate"]["response_schema"] != nil {
+		t.Fatalf("contract must not be duplicated downstream: %#v", configs)
 	}
 	if configs["publish"]["allow_autonomous_rejection"] != false || configs["publish"]["medium_severity_event"] != "COMMENT" {
 		t.Fatalf("publish defaults = %#v", configs["publish"])

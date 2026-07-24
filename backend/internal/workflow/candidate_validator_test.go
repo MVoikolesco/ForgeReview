@@ -23,7 +23,7 @@ func TestCandidateValidatorPublishesOnlyConfirmedCandidates(t *testing.T) {
 		candidateFixture("security.auth", "app.go", 2),
 	}
 	candidates[3].Comment = "same issue with different wording"
-	outputs, metadata, err := runner.runCandidateValidator(context.Background(), node, map[string][]any{
+	outputs, metadata, err := runner.runCandidateValidator(context.Background(), node, rootScope, map[string][]any{
 		"candidates": []any{candidates},
 		"files":      []any{FileGroup{Files: []map[string]any{{"filename": "app.go", "patch": "@@ -1 +1,2 @@\n package app\n+unsafe()"}}}},
 	})

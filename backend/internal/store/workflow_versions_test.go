@@ -229,13 +229,13 @@ func TestEnsureOfficialReviewWorkflowAppendOnlyAddsCandidateValidation(t *testin
 	}
 }
 
-func TestEnsureOfficialReviewWorkflowAppendOnlyAddsVersionedChecklist(t *testing.T) {
+func TestEnsureOfficialReviewWorkflowAppendOnlyMovesContractToTemplate(t *testing.T) {
 	database, err := Open("file:" + t.TempDir() + "/checklist-upgrade.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	previousID, err := database.Save(context.Background(), workflow.PreviousCandidateReviewDefinition())
+	previousID, err := database.Save(context.Background(), workflow.PreviousChecklistReviewDefinition())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,20 +244,26 @@ func TestEnsureOfficialReviewWorkflowAppendOnlyAddsVersionedChecklist(t *testing
 	}
 	upgraded, seeded, err := database.EnsureOfficialReviewWorkflow(context.Background(), workflow.DefaultCatalog())
 	if err != nil || !seeded || upgraded.Version != 2 {
-		t.Fatalf("checklist upgrade = %#v, %t, %v", upgraded, seeded, err)
+		t.Fatalf("review contract upgrade = %#v, %t, %v", upgraded, seeded, err)
 	}
 	definition, err := database.Load(context.Background(), upgraded.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	configured := 0
+	var templateConfig map[string]any
 	for _, node := range definition.Nodes {
+		if node.Type == "template" {
+			templateConfig = node.Config
+		}
 		if (node.Type == "model" || node.Type == "candidate_validator") && node.Config["review_checklist"] != nil {
-			configured++
+			t.Fatalf("downstream checklist duplicate remains in %#v", node)
+		}
+		if node.Type == "validate" && node.Config["response_schema"] != nil {
+			t.Fatalf("validate schema duplicate remains in %#v", node)
 		}
 	}
-	if configured != 2 {
-		t.Fatalf("checklist snapshots = %d in %#v", configured, definition)
+	if templateConfig["review_contract_key"] != workflow.OfficialPullRequestContractKey || templateConfig["review_contract_version"] != float64(1) {
+		t.Fatalf("template contract reference = %#v", templateConfig)
 	}
 }
 

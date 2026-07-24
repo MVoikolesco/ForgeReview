@@ -34,7 +34,7 @@ import {
   getModelProfiles,
   getPublishedWorkflow,
   getResponseContracts,
-  getReviewChecklists,
+  getReviewContracts,
   getWebhookRegistrations,
   getWorkflows,
   getWorkflowVersion,
@@ -60,7 +60,7 @@ import type {
   Integration,
   ModelProfile,
   ResponseContract,
-  ReviewChecklist,
+  ReviewContractVersion,
   WebhookRegistration,
   WorkflowMetadata,
   WorkflowSummary,
@@ -164,9 +164,9 @@ export function StudioWorkspace() {
   const [responseContracts, setResponseContracts] = useState<
     ResponseContract[]
   >([]);
-  const [reviewChecklists, setReviewChecklists] = useState<ReviewChecklist[]>(
-    [],
-  );
+  const [reviewContracts, setReviewContracts] = useState<
+    ReviewContractVersion[]
+  >([]);
   const [showConnections, setShowConnections] = useState(false);
   const [metadata, setMetadata] = useState<WorkflowMetadata>(
     defaultWorkflowMetadata,
@@ -240,13 +240,13 @@ export function StudioWorkspace() {
     }
   };
   useEffect(() => {
-    void Promise.all([getResponseContracts(), getReviewChecklists()])
-      .then(([contracts, checklists]) => {
+    void Promise.all([getResponseContracts(), getReviewContracts()])
+      .then(([contracts, taskContracts]) => {
         setResponseContracts(contracts);
-        setReviewChecklists(checklists);
+        setReviewContracts(taskContracts);
       })
       .catch(() =>
-        setMessage("Não foi possível carregar os contratos e checklists."),
+        setMessage("Não foi possível carregar os contratos de revisão."),
       );
   }, []);
   useEffect(() => {
@@ -665,7 +665,7 @@ export function StudioWorkspace() {
         contractIssue
           ? contractIssue
           : report
-            ? `Execução ${started.execution_id} ${report.status === "completed" ? "concluída" : report.status}.`
+            ? `Execução ${started.execution_id} ${report.status === "completed" ? "concluída" : report.status}.${report.coverage ? ` Cobertura: ${report.coverage.completed}/${report.coverage.planned} checks${report.coverage.incomplete > 0 ? `; ${report.coverage.incomplete} pendentes` : ""}.` : ""}`
             : `Execução ${started.execution_id} enviada à fila.`,
       );
     } catch (error) {
@@ -1237,7 +1237,7 @@ export function StudioWorkspace() {
             integrations={integrations}
             modelProfiles={modelProfiles}
             responseContracts={responseContracts}
-            reviewChecklists={reviewChecklists}
+            reviewContracts={reviewContracts}
             workflows={workflowSummaries}
             hasErrorRoute={hasErrorRoute(edges, inspectedCard.key)}
             onChange={(patch) => canEdit && patchInspected(patch)}

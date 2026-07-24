@@ -1,29 +1,24 @@
 # Checklists versionadas
 
-Reviewers podem receber uma checklist fechada em `config.review_checklist`.
-A configuração é um snapshot persistido dentro da versão do workflow:
+Checklists fechadas agora fazem parte de uma versão imutável de
+`ReviewContract`, persistida no backend. O workflow guarda somente a referência
+no card `template`:
 
 ```json
 {
-  "key": "official.pull-request.v1",
-  "name": "Review de pull request",
-  "version": 1,
-  "items": [
-    {
-      "check_id": "security.authorization",
-      "description": "Verificar bypass de autenticação ou autorização.",
-      "category": "security",
-      "minimum_context": "file"
-    }
-  ]
+  "review_contract_key": "official.pull-request",
+  "review_contract_version": 1
 }
 ```
 
-O catálogo somente leitura está disponível em:
+O catálogo persistido de contratos está disponível em:
 
 ```text
-GET /api/review-checklists
+GET /api/review-contracts
 ```
+
+`GET /api/review-checklists` continua disponível como catálogo de
+compatibilidade.
 
 ## Contrato
 
@@ -53,25 +48,26 @@ Contextos aceitos:
 - `contracts`;
 - `repository`.
 
-Uma checklist contém entre 1 e 64 checks. O backend valida novamente cada
-snapshot antes de salvar ou publicar o workflow.
+Uma checklist contém entre 1 e 64 checks. Cada versão de contrato reúne o JSON
+Schema da resposta e o snapshot dessa checklist.
 
 ## Execução
 
-No card `model`, o runtime acrescenta a checklist ao prompt e exige que cada
-candidato utilize exatamente um `check_id` listado. O modelo não pode criar
-checks adicionais.
+O card `template` resolve a versão no banco, acrescenta a checklist ao prompt
+base e produz um `ReviewTask` tipado. O card `model` apenas executa a tarefa e
+preserva o contrato na resposta.
 
-O `candidate_validator` recebe o mesmo snapshot. Candidatos com `check_id` fora
-da versão configurada recebem `NOT_APPLICABLE` deterministicamente e não geram
-chamada ao modelo validador.
+O `validate` usa o schema carregado pelo `Template`. O `candidate_validator`
+recebe o mesmo contrato propagado pela execução; candidatos com `check_id` fora
+da versão recebem `NOT_APPLICABLE` deterministicamente e não geram chamada ao
+modelo validador.
 
-Sem `review_checklist`, o comportamento livre anterior permanece disponível
-para compatibilidade.
+`config.review_checklist` e `config.response_schema` locais continuam aceitos
+somente para compatibilidade com workflows anteriores.
 
 ## Catálogo inicial
 
-`official.pull-request.v1` contém seis checks:
+`official.pull-request@1` contém seis checks:
 
 - autorização e isolamento;
 - corretude comportamental;
@@ -80,6 +76,11 @@ para compatibilidade.
 - fronteiras arquiteturais;
 - observabilidade de falhas.
 
-Novas versões devem usar outra chave ou número de versão. Versões já embutidas
-em workflows nunca são alteradas retroativamente.
+O catálogo também oferece contratos especializados `review.security@1`,
+`review.correctness@1`, `review.contracts@1`, `review.performance@1`,
+`review.architecture@1` e `review.observability@1`. Assim, a pipeline pode usar
+várias instâncias explícitas do card genérico `Template`, sem criar tipos de
+card fixos como “Security”.
 
+Novas versões usam o mesmo identificador com outro número ou uma nova chave.
+Uma versão existente nunca é alterada retroativamente.
