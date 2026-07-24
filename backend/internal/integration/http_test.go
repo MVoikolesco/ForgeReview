@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -81,9 +82,12 @@ func TestHTTPGiteaClientReadPullRequestContract(t *testing.T) {
 			_, _ = writer.Write([]byte(`{"number":7,"title":"Improve review"}`))
 		case "/api/v1/repos/acme/review/pulls/7/files":
 			writer.Header().Set("Content-Type", "application/json")
-			_, _ = writer.Write([]byte(`[{"filename":"main.go","status":"modified"}]`))
+			_, _ = writer.Write([]byte(`[
+				{"filename":"main.go","status":"modified"},
+				{"filename":"old.go","status":"deleted"}
+			]`))
 		case "/api/v1/repos/acme/review/pulls/7.diff":
-			_, _ = writer.Write([]byte("diff --git a/main.go b/main.go"))
+			_, _ = writer.Write([]byte("diff --git a/main.go b/main.go\n--- a/main.go\n+++ b/main.go\n@@ -1 +1,2 @@\n package main\n+func added() {}\ndiff --git a/old.go b/old.go\n--- a/old.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-package old"))
 		default:
 			http.NotFound(writer, request)
 		}
@@ -96,6 +100,33 @@ func TestHTTPGiteaClientReadPullRequestContract(t *testing.T) {
 	}
 	if result.Metadata["title"] != "Improve review" || result.Diff == "" || result.Files[0]["filename"] != "main.go" {
 		t.Fatalf("unexpected pull request: %#v", result)
+	}
+	if patch, _ := result.Files[0]["patch"].(string); !strings.Contains(patch, "@@ -1 +1,2 @@") || !strings.Contains(patch, "+func added() {}") {
+		t.Fatalf("main.go patch was not attached: %#v", result.Files[0])
+	}
+	if patch, _ := result.Files[1]["patch"].(string); !strings.Contains(patch, "+++ /dev/null") || !strings.Contains(patch, "-package old") {
+		t.Fatalf("deleted file patch was not attached: %#v", result.Files[1])
+	}
+}
+
+func TestHTTPGiteaClientRejectsFilesWithoutReviewableDiff(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/repos/acme/review/pulls/7":
+			_, _ = writer.Write([]byte(`{"number":7}`))
+		case "/api/v1/repos/acme/review/pulls/7/files":
+			_, _ = writer.Write([]byte(`[{"filename":"main.go","status":"modified"}]`))
+		case "/api/v1/repos/acme/review/pulls/7.diff":
+			_, _ = writer.Write([]byte(""))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	_, err := (HTTPGiteaClient{Client: server.Client()}).ReadPullRequest(context.Background(), testIntegration(t, TypeGitea, server.URL), "gitea-secret", PullRequestRequest{Owner: "acme", Repo: "review", Number: 7})
+	if err == nil || !strings.Contains(err.Error(), "1 changed file(s) have no reviewable patch content") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -165,8 +196,20 @@ func TestHTTPChatClientRequestContracts(t *testing.T) {
 				if test.kind == TypeOpenAI && body["max_tokens"] != float64(4096) {
 					t.Fatalf("max_tokens = %#v", body["max_tokens"])
 				}
-				if test.kind == TypeOllama && body["options"].(map[string]any)["num_predict"] != float64(4096) {
-					t.Fatalf("options = %#v", body["options"])
+				if body["temperature"] != nil && test.kind == TypeOllama {
+					t.Fatalf("temperature must be inside Ollama options: %#v", body)
+				}
+				if test.kind == TypeOpenAI && (body["temperature"] != 0.3 || body["top_p"] != 0.8) {
+					t.Fatalf("sampling parameters = %#v", body)
+				}
+				if test.kind == TypeOllama {
+					options := body["options"].(map[string]any)
+					if options["num_predict"] != float64(4096) || options["temperature"] != 0.3 || options["top_p"] != 0.8 {
+						t.Fatalf("options = %#v", options)
+					}
+					if body["keep_alive"] != "10m" {
+						t.Fatalf("keep_alive = %#v", body["keep_alive"])
+					}
 				}
 				writer.Header().Set("Content-Type", "application/json")
 				_, _ = writer.Write([]byte(test.response))
@@ -185,6 +228,9 @@ func TestHTTPChatClientRequestContracts(t *testing.T) {
 			item := testIntegration(t, test.kind, server.URL)
 			config, _ := item.ConfigValues()
 			config["max_tokens"] = "4096"
+			config["temperature"] = "0.3"
+			config["top_p"] = "0.8"
+			config["keep_alive"] = "10m"
 			item.Config, _ = json.Marshal(config)
 			response, err := client.Chat(context.Background(), item, "chat-secret", "review this")
 			if err != nil {

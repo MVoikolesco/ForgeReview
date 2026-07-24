@@ -7,3 +7,5 @@ frontend/tsconfig.tsbuildinfo
 POC
 node_modules
 .env
+tmp
+.opencode

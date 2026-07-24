@@ -648,6 +648,9 @@ func (s *SQLite) Publish(ctx context.Context, id int64, catalog workflow.Catalog
 	if err = workflow.Validate(definition, catalog); err != nil {
 		return workflow.VersionSummary{}, fmt.Errorf("%w: %v", ErrInvalidWorkflowVersion, err)
 	}
+	if err = validateWorkflowReferencesTx(ctx, tx, id, definition, catalog, map[int64]bool{id: true}); err != nil {
+		return workflow.VersionSummary{}, fmt.Errorf("%w: %v", ErrInvalidWorkflowVersion, err)
+	}
 	if _, err = tx.ExecContext(ctx, `UPDATE workflow_versions SET status=? WHERE workflow_key=? AND status=?`, workflow.VersionStatusArchived, workflowKey, workflow.VersionStatusPublished); err != nil {
 		return workflow.VersionSummary{}, err
 	}
@@ -668,6 +671,59 @@ func (s *SQLite) Publish(ctx context.Context, id int64, catalog workflow.Catalog
 	summary.ID = id
 	summary.Status = workflow.VersionStatusPublished
 	return summary, nil
+}
+
+func validateWorkflowReferencesTx(ctx context.Context, tx *sql.Tx, rootID int64, definition workflow.Definition, catalog workflow.Catalog, stack map[int64]bool) error {
+	for _, node := range definition.Nodes {
+		if node.Type != "workflow" {
+			continue
+		}
+		raw := node.Config["workflow_version_id"]
+		versionID := int64(0)
+		switch value := raw.(type) {
+		case float64:
+			versionID = int64(value)
+		case int:
+			versionID = int64(value)
+		case int64:
+			versionID = value
+		}
+		if versionID < 1 {
+			return fmt.Errorf("workflow card %q has invalid version", node.Key)
+		}
+		if stack[versionID] {
+			return fmt.Errorf("workflow card %q creates a subpipeline cycle", node.Key)
+		}
+		var status, payload string
+		if err := tx.QueryRowContext(ctx, `SELECT status,definition_json FROM workflow_versions WHERE id=?`, versionID).Scan(&status, &payload); err != nil {
+			return fmt.Errorf("workflow card %q references missing version %d", node.Key, versionID)
+		}
+		if status != workflow.VersionStatusPublished && status != workflow.VersionStatusArchived {
+			return fmt.Errorf("workflow card %q references a version that was never published", node.Key)
+		}
+		var child workflow.Definition
+		if err := json.Unmarshal([]byte(payload), &child); err != nil {
+			return err
+		}
+		if child.Interface == nil || len(child.Interface.Outputs) == 0 {
+			return fmt.Errorf("workflow card %q target has no published interface", node.Key)
+		}
+		if expected, _ := node.Config["workflow_key"].(string); expected != "" && expected != child.Key {
+			return fmt.Errorf("workflow card %q expected workflow %q but version belongs to %q", node.Key, expected, child.Key)
+		}
+		if err := workflow.Validate(child, catalog); err != nil {
+			return err
+		}
+		next := make(map[int64]bool, len(stack)+1)
+		for key, value := range stack {
+			next[key] = value
+		}
+		next[versionID] = true
+		if err := validateWorkflowReferencesTx(ctx, tx, rootID, child, catalog, next); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CreateExecution persists an execution before it can be dispatched. Input is

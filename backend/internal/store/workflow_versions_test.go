@@ -89,6 +89,48 @@ func TestPublishRejectsInvalidDraftWithoutArchivingPublishedVersion(t *testing.T
 	}
 }
 
+func TestPublishValidatesPinnedSubpipelineInterface(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/subpipeline.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	child := workflow.Definition{Key: "child", Name: "Child", Interface: &workflow.WorkflowInterface{
+		Inputs:  []workflow.InterfaceField{{Key: "payload", Contract: "any"}},
+		Outputs: []workflow.InterfaceField{{Key: "result", Contract: "event", Required: true, NodeKey: "start", PortKey: "event"}},
+	}, Nodes: []workflow.Node{{Key: "start", Type: "trigger", Name: "Start"}}}
+	childID, err := database.Save(context.Background(), child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Publish(context.Background(), childID, workflow.DefaultCatalog()); err != nil {
+		t.Fatal(err)
+	}
+	// Publishing a replacement archives the referenced immutable version; it
+	// remains a valid pin for a parent pipeline.
+	replacementID, _ := database.Save(context.Background(), child)
+	if _, err = database.Publish(context.Background(), replacementID, workflow.DefaultCatalog()); err != nil {
+		t.Fatal(err)
+	}
+	parent := workflow.Definition{Key: "parent", Name: "Parent", Nodes: []workflow.Node{{
+		Key: "child", Type: "workflow", Name: "Child", Config: map[string]any{"workflow_key": "child", "workflow_version_id": childID},
+	}}}
+	parentID, err := database.Save(context.Background(), parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Publish(context.Background(), parentID, workflow.DefaultCatalog()); err != nil {
+		t.Fatalf("publish parent with archived pin: %v", err)
+	}
+	missing := parent
+	missing.Key = "missing-parent"
+	missing.Nodes[0].Config = map[string]any{"workflow_version_id": 999999}
+	missingID, _ := database.Save(context.Background(), missing)
+	if _, err = database.Publish(context.Background(), missingID, workflow.DefaultCatalog()); !errors.Is(err, ErrInvalidWorkflowVersion) {
+		t.Fatalf("missing subpipeline error = %v", err)
+	}
+}
+
 func TestEnsureOfficialReviewWorkflowSeedsOnceWithoutChangingUserWorkflows(t *testing.T) {
 	path := "file:" + t.TempDir() + "/official-review.db"
 	database, err := Open(path)

@@ -226,9 +226,11 @@ type ChatClient interface {
 // safe billing telemetry. Prompts, credentials, and raw provider payloads are
 // deliberately excluded.
 type ChatResult struct {
-	Content string
-	Model   string
-	Usage   TokenUsage
+	Content      string
+	Model        string
+	Usage        TokenUsage
+	CostUSD      float64
+	FallbackUsed bool
 }
 
 type TokenUsage struct {

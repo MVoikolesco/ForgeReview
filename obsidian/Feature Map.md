@@ -170,8 +170,8 @@
   checkbox presentation across Inspector booleans and repository/model
   multi-selection. Resource rows show provider identity, selection count,
   hover/selected state, focus, disabled behavior, and reduced-motion support.
-- Truthful card contracts: publication event/autonomous-rejection settings live
-  only on `publish`; model `max_tokens` is bounded and reaches both provider
-  adapters; `merge` waits for all active incoming edges through `collect_all`;
-  and unsupported `workflow`/subpipeline is visible but unavailable and cannot
-  be saved; its library control shows an explicit unavailable status and reason.
+- Complete card contracts: publication settings remain on `publish`; model
+  sampling, timeout, fallback, and cost reservation reach controlled adapters;
+  transform operations and variable namespaces are bounded; conditions expose
+  eight match branches; merge supports all/any/quorum and partial timeout; and
+  `workflow` runs an immutable published version through its named interface.

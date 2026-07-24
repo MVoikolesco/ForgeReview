@@ -145,6 +145,23 @@ metadata records only attempt numbers and statuses, never repair prompts,
 responses, or credentials. Exhaustion emits the normal `validate.invalid`
 token. See [[Decision Log]] and [[Feature Map]].
 
+Model inference configuration is provider-neutral where possible:
+`temperature` is bounded from 0 to 2, `top_p` above 0 through 1, and
+`timeout_seconds` from 1 through 3600 with a 120-second default. The runtime
+enforces the deadline through context. Ollama additionally receives
+`keep_alive` as `0` or one duration up to 24 hours; OpenAI-compatible adapters
+ignore it. One different active profile can serve as provider fallback.
+Per-card input/output prices reserve worst-case cost before the call and
+reconcile actual token usage into safe telemetry.
+
+The completed catalog expansion adds a bounded declarative transform language,
+execution/loop/card variable namespaces, eight named conditional branches,
+merge all/any/quorum with partial timeout, and published subpipelines pinned to
+immutable versions. Subpipeline interfaces map named inputs and concrete child
+output ports; publication and runtime reject missing contracts, unpublished
+references, cycles, and depth above eight. See [[Decision Log]], [[Feature Map]],
+and `docs/card-catalog-stage-5.md`.
+
 Execution input remains in SQLite. When configured, Redis transports execution
 IDs to a worker which atomically claims queued executions; status APIs continue
 to read SQLite. Workers also recover persisted queued executions that missed a
@@ -248,11 +265,11 @@ Below the tablet breakpoint it is a focused bottom sheet. Manual trigger JSON is
 entered only in the separate focused run modal, not stored in card data or
 displayed in the global header. See [[Feature Map]] and [[Decision Log]].
 
-Catalog cards now declare availability. `workflow`/subpipeline remains visible
-but unavailable in Studio and backend validation rejects it until a runtime
-contract exists. `merge.inputs` is a `collect_all` port and emits the ordered
-list only after every active incoming edge has delivered. Frontend `Port` typing
-exposes `collect_all`. See [[Feature Map]] and [[Decision Log]].
+Catalog cards declare availability and typed ports. `workflow`/subpipeline is
+available when its immutable version and interface are configured.
+`merge.inputs` retains `collect_all` for legacy all mode while runtime readiness
+implements any, quorum, and timeout policies. Frontend `Port` typing exposes
+`collect_all`. See [[Feature Map]] and [[Decision Log]].
 
 Model `max_tokens` defaults to 2,000 and is bounded from 1 through 128,000. The
 runner adds it only to the in-memory provider configuration; OpenAI-compatible

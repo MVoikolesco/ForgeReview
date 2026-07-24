@@ -12,6 +12,7 @@ import type {
   Integration,
   ModelProfile,
   WebhookRegistration,
+  WorkflowSummary,
 } from "../../lib/types";
 import { configList, configNumber, configText } from "../../lib/workflow";
 import { ToggleSwitch } from "../common/ToggleSwitch";
@@ -21,6 +22,7 @@ export function CardInspector({
   selected,
   integrations,
   modelProfiles,
+  workflows,
   hasErrorRoute,
   onChange,
   readOnly = false,
@@ -34,6 +36,7 @@ export function CardInspector({
   selected: CardData;
   integrations: Integration[];
   modelProfiles: ModelProfile[];
+  workflows: WorkflowSummary[];
   hasErrorRoute: boolean;
   onChange: (patch: Partial<CardData>) => void;
   readOnly?: boolean;
@@ -211,6 +214,63 @@ export function CardInspector({
         max={max}
         value={configNumber(selected.config[key], fallback)}
         onChange={(event) => updateConfig(key, event.target.valueAsNumber || 0)}
+      />
+    </label>
+  );
+  const decimalField = (
+    key: string,
+    label: string,
+    fallback: number,
+    min: number,
+    max: number,
+    step: number,
+  ) => (
+    <label>
+      {label}
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={configNumber(selected.config[key], fallback)}
+        onChange={(event) =>
+          updateConfig(
+            key,
+            Number.isNaN(event.target.valueAsNumber)
+              ? fallback
+              : event.target.valueAsNumber,
+          )
+        }
+      />
+    </label>
+  );
+  const optionalDecimalField = (
+    key: string,
+    label: string,
+    min: number,
+    max: number,
+    step: number,
+    placeholder: string,
+  ) => (
+    <label>
+      {label}
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={
+          typeof selected.config[key] === "number"
+            ? (selected.config[key] as number)
+            : ""
+        }
+        placeholder={placeholder}
+        onChange={(event) =>
+          updateConfig(
+            key,
+            event.target.value === "" ? undefined : event.target.valueAsNumber,
+          )
+        }
       />
     </label>
   );
@@ -393,6 +453,63 @@ export function CardInspector({
                   )}
                 </section>
               )}
+              <label>
+                Entradas públicas
+                <input
+                  value={configList(selected.config.published_inputs)}
+                  onChange={(event) =>
+                    updateConfig(
+                      "published_inputs",
+                      event.target.value
+                        .split(",")
+                        .map((item) => item.trim())
+                        .filter(Boolean),
+                    )
+                  }
+                  placeholder="pull_request, policy"
+                />
+                <small>
+                  Campos separados por vírgula publicados na interface desta
+                  pipeline.
+                </small>
+              </label>
+              <label>
+                Contratos avançados de entrada (JSON)
+                <textarea
+                  key={`${nodeID}-published-input-fields`}
+                  defaultValue={
+                    Array.isArray(selected.config.published_input_fields)
+                      ? JSON.stringify(
+                          selected.config.published_input_fields,
+                          null,
+                          2,
+                        )
+                      : ""
+                  }
+                  onInput={(event) => event.currentTarget.setCustomValidity("")}
+                  onBlur={(event) => {
+                    if (!event.currentTarget.value.trim())
+                      return updateConfig(
+                        "published_input_fields",
+                        undefined,
+                      );
+                    try {
+                      updateConfig(
+                        "published_input_fields",
+                        JSON.parse(event.currentTarget.value),
+                      );
+                    } catch {
+                      event.currentTarget.setCustomValidity("JSON inválido");
+                      event.currentTarget.reportValidity();
+                    }
+                  }}
+                  placeholder='[{"key":"payload","label":"Payload","contract":"any","required":true}]'
+                />
+                <small>
+                  Quando informado, substitui a lista simples e publica contratos
+                  e obrigatoriedade explícitos.
+                </small>
+              </label>
             </>
           )}
           {selected.type === "template" && (
@@ -412,6 +529,86 @@ export function CardInspector({
             <>
               {connectionFields}
               {numberField("max_tokens", "Máximo de tokens", 2000)}
+              {optionalDecimalField(
+                "temperature",
+                "Temperatura",
+                0,
+                2,
+                0.1,
+                "Padrão do provider",
+              )}
+              {optionalDecimalField(
+                "top_p",
+                "Top-p",
+                0.01,
+                1,
+                0.01,
+                "Padrão do provider",
+              )}
+              {numberField(
+                "timeout_seconds",
+                "Timeout da chamada (segundos)",
+                120,
+              )}
+              <label>
+                Keep-alive do Ollama
+                <input
+                  value={configText(selected.config.keep_alive)}
+                  onChange={(event) =>
+                    updateConfig("keep_alive", event.target.value)
+                  }
+                  placeholder="5m"
+                />
+                <small>
+                  Use 0 para descarregar imediatamente ou uma duração de até
+                  24h. O parâmetro é ignorado por providers OpenAI-compatible.
+                </small>
+              </label>
+              <label>
+                Perfil de fallback
+                <select
+                  value={configText(selected.config.fallback_model_profile)}
+                  onChange={(event) =>
+                    updateConfig("fallback_model_profile", event.target.value)
+                  }
+                >
+                  <option value="">Sem fallback</option>
+                  {models
+                    .filter(
+                      (item) =>
+                        item.key !== configText(selected.config.model_profile),
+                    )
+                    .map((item) => (
+                      <option key={item.key} value={item.key}>
+                        {item.name} · {item.model}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              {decimalField(
+                "input_cost_per_million_usd",
+                "Custo de entrada / 1M tokens (USD)",
+                0,
+                0,
+                1000000,
+                0.000001,
+              )}
+              {decimalField(
+                "output_cost_per_million_usd",
+                "Custo de saída / 1M tokens (USD)",
+                0,
+                0,
+                1000000,
+                0.000001,
+              )}
+              {decimalField(
+                "max_cost_usd",
+                "Orçamento máximo por chamada (USD)",
+                0,
+                0,
+                1000000,
+                0.000001,
+              )}
               {boundedNumberField(
                 "retry_limit",
                 "Tentativas de correção",
@@ -636,14 +833,199 @@ export function CardInspector({
             </>
           )}
           {selected.type === "condition" && (
+            <>
+              <label>
+                Ramos declarativos (JSON)
+                <textarea
+                  key={`${nodeID}-branches`}
+                  defaultValue={
+                    Array.isArray(selected.config.branches)
+                      ? JSON.stringify(selected.config.branches, null, 2)
+                      : ""
+                  }
+                  onInput={(event) => event.currentTarget.setCustomValidity("")}
+                  onBlur={(event) => {
+                    if (!event.currentTarget.value.trim())
+                      return updateConfig("branches", undefined);
+                    try {
+                      updateConfig(
+                        "branches",
+                        JSON.parse(event.currentTarget.value),
+                      );
+                    } catch {
+                      event.currentTarget.setCustomValidity("JSON inválido");
+                      event.currentTarget.reportValidity();
+                    }
+                  }}
+                  placeholder='[{"port":"match_1","path":"language","operator":"equals","value":"go"}]'
+                />
+              </label>
+              {!Array.isArray(selected.config.branches) && (
+                <label>
+                  Valor esperado (modo legado)
+                  <input
+                    value={configText(selected.config.equals)}
+                    onChange={(event) =>
+                      updateConfig("equals", event.target.value)
+                    }
+                    placeholder="php"
+                  />
+                </label>
+              )}
+            </>
+          )}
+          {selected.type === "transform" && (
             <label>
-              Valor esperado
-              <input
-                value={configText(selected.config.equals)}
-                onChange={(event) => updateConfig("equals", event.target.value)}
-                placeholder="php"
+              Operações declarativas (JSON)
+              <textarea
+                key={`${nodeID}-operations`}
+                defaultValue={
+                  Array.isArray(selected.config.operations)
+                    ? JSON.stringify(selected.config.operations, null, 2)
+                    : ""
+                }
+                onInput={(event) => event.currentTarget.setCustomValidity("")}
+                onBlur={(event) => {
+                  if (!event.currentTarget.value.trim())
+                    return updateConfig("operations", undefined);
+                  try {
+                    updateConfig(
+                      "operations",
+                      JSON.parse(event.currentTarget.value),
+                    );
+                  } catch {
+                    event.currentTarget.setCustomValidity("JSON inválido");
+                    event.currentTarget.reportValidity();
+                  }
+                }}
+                placeholder='[{"op":"select","path":"pull_request"}]'
               />
+              <small>Operações: select, set, remove, rename e coalesce.</small>
             </label>
+          )}
+          {selected.type === "variable" && (
+            <>
+              <label>
+                Operação
+                <select
+                  value={configText(selected.config.action) || "set"}
+                  onChange={(event) =>
+                    updateConfig("action", event.target.value)
+                  }
+                >
+                  <option value="set">Definir</option>
+                  <option value="get">Ler</option>
+                </select>
+              </label>
+              <label>
+                Namespace
+                <select
+                  value={configText(selected.config.namespace) || "execution"}
+                  onChange={(event) =>
+                    updateConfig("namespace", event.target.value)
+                  }
+                >
+                  <option value="execution">Execução</option>
+                  <option value="loop">Loop</option>
+                  <option value="card">Card</option>
+                </select>
+              </label>
+              <label>
+                Nome da variável
+                <input
+                  value={configText(selected.config.name)}
+                  onChange={(event) => updateConfig("name", event.target.value)}
+                  placeholder="review_policy"
+                />
+              </label>
+              {(configText(selected.config.action) || "set") === "set" && (
+                <label>
+                  Valor padrão
+                  <input
+                    value={configText(selected.config.value)}
+                    onChange={(event) =>
+                      updateConfig("value", event.target.value)
+                    }
+                    placeholder="Usado quando não há entrada"
+                  />
+                </label>
+              )}
+            </>
+          )}
+          {selected.type === "merge" && (
+            <>
+              <label>
+                Política de join
+                <select
+                  value={configText(selected.config.mode) || "all"}
+                  onChange={(event) => updateConfig("mode", event.target.value)}
+                >
+                  <option value="all">Todas as entradas</option>
+                  <option value="any">Primeira entrada</option>
+                  <option value="quorum">Quórum</option>
+                </select>
+              </label>
+              {configText(selected.config.mode) === "quorum" &&
+                numberField("quorum", "Quantidade para quórum", 2)}
+              {optionalDecimalField(
+                "timeout_ms",
+                "Timeout para resultado parcial (ms)",
+                1,
+                60000,
+                1,
+                "Sem timeout",
+              )}
+            </>
+          )}
+          {selected.type === "workflow" && (
+            <>
+              <label>
+                Versão publicada da subpipeline
+                <select
+                  value={String(
+                    configNumber(selected.config.workflow_version_id, 0),
+                  )}
+                  onChange={(event) => {
+                    const versionID = Number(event.target.value);
+                    const owner = workflows.find((workflow) =>
+                      workflow.versions.some(
+                        (version) => version.version_id === versionID,
+                      ),
+                    );
+                    onChange({
+                      config: {
+                        ...selected.config,
+                        workflow_key: owner?.key || "",
+                        workflow_version_id: versionID,
+                      },
+                    });
+                  }}
+                >
+                  <option value="0">Selecione uma versão</option>
+                  {workflows
+                    .filter((workflow) => workflow.key !== workflowKey)
+                    .flatMap((workflow) =>
+                      workflow.versions
+                        .filter((version) => version.status !== "draft")
+                        .map((version) => (
+                          <option
+                            key={version.version_id}
+                            value={version.version_id}
+                          >
+                            {workflow.name} · v{version.version} ·{" "}
+                            {version.status === "published"
+                              ? "publicada"
+                              : "arquivada"}
+                          </option>
+                        )),
+                    )}
+                </select>
+                <small>
+                  A versão fica fixada e continua imutável mesmo após ser
+                  arquivada.
+                </small>
+              </label>
+            </>
           )}
           {selected.type === "validate" && (
             <ToggleSwitch
@@ -680,6 +1062,10 @@ export function CardInspector({
             "loop",
             "cache",
             "condition",
+            "transform",
+            "variable",
+            "merge",
+            "workflow",
             "validate",
             "response_filter",
             "error_control",
@@ -687,6 +1073,49 @@ export function CardInspector({
             <p>Este card não possui parâmetros obrigatórios nesta fase.</p>
           )}
         </section>
+        {selected.outputs.length > 0 && (
+          <section className={styles.config}>
+            <strong>Interface publicada</strong>
+            <label>
+              Nome público da saída
+              <input
+                value={configText(selected.config.published_output_key)}
+                onChange={(event) =>
+                  updateConfig("published_output_key", event.target.value)
+                }
+                placeholder="result"
+              />
+            </label>
+            <label>
+              Porta publicada
+              <select
+                value={configText(selected.config.published_output_port)}
+                onChange={(event) =>
+                  updateConfig("published_output_port", event.target.value)
+                }
+              >
+                <option value="">Não publicar</option>
+                {selected.outputs.map((port) => (
+                  <option key={port.key} value={port.key}>
+                    {port.label} · {port.contract}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {configText(selected.config.published_output_port) && (
+              <ToggleSwitch
+                checked={Boolean(
+                  selected.config.published_output_required,
+                )}
+                onChange={(checked) =>
+                  updateConfig("published_output_required", checked)
+                }
+                label="Saída obrigatória"
+                description="A chamada da subpipeline falha se esta saída não for produzida."
+              />
+            )}
+          </section>
+        )}
         {selected.type !== "error_control" && selected.errorOutput && (
           <section className={styles.errorPolicy}>
             <strong>Política de erro</strong>

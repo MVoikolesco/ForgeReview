@@ -55,11 +55,27 @@ type Edge struct {
 }
 
 type Definition struct {
-	Key         string `json:"key"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Nodes       []Node `json:"nodes"`
-	Edges       []Edge `json:"edges"`
+	Key         string             `json:"key"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Interface   *WorkflowInterface `json:"interface,omitempty"`
+	Nodes       []Node             `json:"nodes"`
+	Edges       []Edge             `json:"edges"`
+}
+
+type WorkflowInterface struct {
+	TriggerNodeKey string           `json:"trigger_node_key,omitempty"`
+	Inputs         []InterfaceField `json:"inputs"`
+	Outputs        []InterfaceField `json:"outputs"`
+}
+
+type InterfaceField struct {
+	Key      string `json:"key"`
+	Label    string `json:"label"`
+	Contract string `json:"contract"`
+	Required bool   `json:"required,omitempty"`
+	NodeKey  string `json:"node_key,omitempty"`
+	PortKey  string `json:"port_key,omitempty"`
 }
 
 // VersionSummary is the safe metadata returned for a stored workflow version.
@@ -165,6 +181,9 @@ func Validate(definition Definition, catalog Catalog) error {
 	if definition.Key == "" || definition.Name == "" {
 		return fmt.Errorf("workflow key and name are required")
 	}
+	if err := validateWorkflowInterface(definition, catalog); err != nil {
+		return err
+	}
 	nodes := map[string]Node{}
 	for _, node := range definition.Nodes {
 		if node.Key == "" || node.Name == "" {
@@ -213,6 +232,32 @@ func Validate(definition Definition, catalog Catalog) error {
 				if _, legacy := node.Config["integration"].(string); !legacy {
 					return fmt.Errorf("model card %q requires config.model_profile", node.Key)
 				}
+			}
+		}
+		if node.Type == "transform" {
+			if err := validateTransformConfig(node); err != nil {
+				return err
+			}
+		}
+		if node.Type == "variable" {
+			if err := validateVariableConfig(node); err != nil {
+				return err
+			}
+		}
+		if node.Type == "condition" {
+			if err := validateConditionConfig(node, cardType); err != nil {
+				return err
+			}
+		}
+		if node.Type == "merge" {
+			if _, err := mergeSettingsFor(node); err != nil {
+				return err
+			}
+		}
+		if node.Type == "workflow" {
+			versionID, ok := integer(node.Config["workflow_version_id"])
+			if !ok || versionID < 1 {
+				return fmt.Errorf("workflow card %q requires positive config.workflow_version_id", node.Key)
 			}
 		}
 		if node.Type == "fetch" {
@@ -273,6 +318,69 @@ func Validate(definition Definition, catalog Catalog) error {
 			if !hasRoute {
 				return fmt.Errorf("node %q config.on_error \"route\" requires an explicit error edge", node.Key)
 			}
+		}
+		if node.Type == "merge" {
+			settings, _ := mergeSettingsFor(node)
+			incoming := 0
+			for _, edge := range definition.Edges {
+				if edge.ToNode == node.Key && edge.ToPort == "inputs" {
+					incoming++
+				}
+			}
+			if settings.Mode == "quorum" && settings.Quorum > incoming {
+				return fmt.Errorf("merge card %q config.quorum exceeds its %d incoming edges", node.Key, incoming)
+			}
+		}
+	}
+	return nil
+}
+
+func validateWorkflowInterface(definition Definition, catalog Catalog) error {
+	if definition.Interface == nil {
+		return nil
+	}
+	contracts := map[string]bool{"any": true, "string": true, "number": true, "boolean": true, "object": true, "list": true}
+	for _, card := range catalog.All() {
+		for _, item := range append(append([]Port{}, card.Inputs...), card.Outputs...) {
+			contracts[item.Contract] = true
+		}
+	}
+	if definition.Interface.TriggerNodeKey != "" {
+		trigger, ok := nodeFor(definition.Nodes, definition.Interface.TriggerNodeKey)
+		if !ok || trigger.Type != "trigger" {
+			return fmt.Errorf("workflow interface trigger_node_key must reference a trigger card")
+		}
+	}
+	for _, fields := range [][]InterfaceField{definition.Interface.Inputs, definition.Interface.Outputs} {
+		seen := map[string]bool{}
+		for _, field := range fields {
+			if strings.TrimSpace(field.Key) == "" || strings.TrimSpace(field.Contract) == "" {
+				return fmt.Errorf("workflow interface fields require key and contract")
+			}
+			if !contracts[field.Contract] {
+				return fmt.Errorf("workflow interface field %q uses unknown contract %q", field.Key, field.Contract)
+			}
+			if seen[field.Key] {
+				return fmt.Errorf("duplicate workflow interface field %q", field.Key)
+			}
+			seen[field.Key] = true
+		}
+	}
+	for _, field := range definition.Interface.Outputs {
+		node, ok := nodeFor(definition.Nodes, field.NodeKey)
+		if !ok {
+			return fmt.Errorf("workflow interface output %q references unknown node", field.Key)
+		}
+		card, ok := catalog.Get(node.Type)
+		if !ok {
+			return fmt.Errorf("workflow interface output %q references unknown card", field.Key)
+		}
+		output, ok := port(card.Outputs, field.PortKey)
+		if !ok {
+			return fmt.Errorf("workflow interface output %q references unknown port", field.Key)
+		}
+		if output.Contract != "any" && field.Contract != "any" && output.Contract != field.Contract {
+			return fmt.Errorf("workflow interface output %q has incompatible contract", field.Key)
 		}
 	}
 	return nil

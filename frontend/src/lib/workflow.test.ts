@@ -25,6 +25,7 @@ import {
   workflowVersionStatusLabel,
 } from "./workflow";
 import { publishedOfficialVersion, reviewPipelineState } from "./dashboard";
+import type { CardType, WorkflowDefinition } from "./types";
 
 test("execution reports update card state and animate only edges entering running cards", () => {
   const nodes = applyExecutionReport(starterNodes, {
@@ -222,7 +223,14 @@ test("catalog availability and bounded model/publish configuration are validated
         key: "model",
         type: "model",
         name: "Model",
-        config: { model_profile: "reviewer", max_tokens: 128001 },
+        config: {
+          model_profile: "reviewer",
+          max_tokens: 128001,
+          temperature: 2.1,
+          top_p: 0,
+          timeout_seconds: 3601,
+          keep_alive: "25h",
+        },
         position: { x: 0, y: 0 },
       },
       {
@@ -258,6 +266,10 @@ test("catalog availability and bounded model/publish configuration are validated
   );
   assert.ok(messages.some((message) => message.includes("tipo indisponível")));
   assert.ok(messages.some((message) => message.includes("max_tokens")));
+  assert.ok(messages.some((message) => message.includes("temperature")));
+  assert.ok(messages.some((message) => message.includes("top_p")));
+  assert.ok(messages.some((message) => message.includes("timeout_seconds")));
+  assert.ok(messages.some((message) => message.includes("keep_alive")));
   assert.ok(messages.some((message) => message.includes("Mova a política")));
   assert.ok(messages.some((message) => message.includes("evento válido")));
   assert.ok(messages.some((message) => message.includes("coordenadas fixas")));
@@ -275,6 +287,87 @@ test("workflow export envelope validates safe graphs and rejects credential fiel
     validateWorkflowDefinition(definition, localCards) || "",
     /segredo/,
   );
+});
+
+test("stage 5 contracts serialize published interfaces and validate advanced cards", () => {
+  const nodes = structuredClone(starterNodes);
+  nodes[0].data.config.published_inputs = ["payload"];
+  nodes[1].data.config = {
+    operations: [{ op: "select", path: "payload" }],
+    published_output_key: "result",
+    published_output_port: "output",
+    published_output_required: true,
+  };
+  const definition = toDefinition(nodes, starterEdges);
+  assert.deepEqual(definition.interface?.inputs, [
+    {
+      key: "payload",
+      label: "payload",
+      contract: "any",
+      required: true,
+    },
+  ]);
+  assert.equal(definition.interface?.outputs[0].node_key, "transform");
+  assert.equal(definition.interface?.outputs[0].port_key, "output");
+
+  const cards: CardType[] = [
+    ...localCards,
+    {
+      key: "merge",
+      name: "Merge",
+      category: "Controle",
+      description: "",
+      inputs: [
+        {
+          key: "inputs",
+          label: "Entradas",
+          contract: "any",
+          required: true,
+          collect_all: true,
+        },
+      ],
+      outputs: [
+        { key: "output", label: "Saída", contract: "any", required: false },
+      ],
+    },
+    {
+      key: "workflow",
+      name: "Workflow",
+      category: "Controle",
+      description: "",
+      inputs: [],
+      outputs: [
+        { key: "output", label: "Saída", contract: "any", required: false },
+      ],
+    },
+  ];
+  const invalid: WorkflowDefinition = {
+    key: "advanced",
+    name: "Advanced",
+    description: "",
+    nodes: [
+      {
+        key: "merge",
+        type: "merge",
+        name: "Merge",
+        config: { mode: "quorum", quorum: 2, timeout_ms: 60001 },
+        position: { x: 0, y: 0 },
+      },
+      {
+        key: "child",
+        type: "workflow",
+        name: "Child",
+        config: { workflow_version_id: 0 },
+        position: { x: 0, y: 0 },
+      },
+    ],
+    edges: [],
+  };
+  const messages = validateStudioWorkflow(invalid, cards)
+    .map((issue) => issue.message)
+    .join("\n");
+  assert.match(messages, /join/);
+  assert.match(messages, /versão publicada/);
 });
 
 test("cloning creates a new workflow identity and only disambiguates duplicate graph keys", () => {

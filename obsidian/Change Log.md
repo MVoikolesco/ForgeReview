@@ -1,5 +1,18 @@
 # Change Log
 
+- 2026-07-24: Fixed metadata-only Gitea reviews. The adapter now partitions the
+  canonical PR unified diff and attaches each block to its matching file before
+  filtering and grouping. HTTP and runtime fail closed when changed files have
+  no reviewable content; regression coverage asserts real hunks reach the model
+  prompt.
+
+- 2026-07-24: Completed card-catalog stage 5. Added bounded declarative
+  transforms, namespaced variables, eight conditional match branches,
+  all/any/quorum merges with partial timeout, immutable published subpipelines,
+  model fallback, and pre-call cost reservation/reconciliation. Studio exposes
+  every contract and derives published workflow interfaces from card controls.
+  See [[Architecture]] and `docs/card-catalog-stage-5.md`.
+
 ## 2026-07-23: Safe version deletion and published Studio default
 
 - Replaced whole-pipeline deletion with admin-only, atomic deletion of one draft

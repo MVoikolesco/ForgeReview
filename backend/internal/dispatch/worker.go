@@ -51,6 +51,11 @@ func (w Worker) Process(ctx context.Context, id int64) error {
 		return w.Store.CompleteExecution(ctx, id, workflow.RunReport{Status: "failed"})
 	}
 	adapters := w.Adapters
+	if adapters.Workflows == nil {
+		if resolver, ok := w.Store.(workflow.WorkflowResolver); ok {
+			adapters.Workflows = resolver
+		}
+	}
 	adapters.Execution = workflow.ExecutionContext{ID: execution.ID, VersionID: execution.VersionID}
 	nodes := make(map[string]workflow.Node, len(definition.Nodes))
 	for _, node := range definition.Nodes {

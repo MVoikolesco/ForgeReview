@@ -70,6 +70,7 @@ func main() {
 		OpenAI:        integration.HTTPOpenAIClient{},
 		Ollama:        integration.HTTPOllamaClient{},
 		Publications:  workflows,
+		Workflows:     workflows,
 		Logs:          executionLogs,
 	}
 	if redisURL := os.Getenv("FORGEREVIEW_REDIS_URL"); redisURL != "" {

@@ -1,9 +1,9 @@
-5. Completar o catálogo de cards
+5. Completar o catálogo de cards — concluído
 
-- Subpipelines reais com interface de entrada/saída publicada.
-- Join any, ramos condicionais múltiplos e timeout/quorum quando necessário.
-- Transformações declarativas e variáveis com namespace.
-- Parâmetros restantes de modelo: temperatura, top-p, timeout, keep-alive, fallback e custo.
+- Subpipelines fixadas em versões publicadas, com interface de entrada/saída.
+- Join all/any/quorum, timeout parcial e até oito ramos condicionais.
+- Transformações declarativas e variáveis com namespace controlado.
+- Temperatura, top-p, timeout, keep-alive, fallback por perfil e orçamento.
 
 6. Integrações e governança
 

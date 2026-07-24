@@ -55,6 +55,9 @@ func newServer(catalog workflow.Catalog, workflows *store.SQLite, manager *auth.
 	if len(adapterSets) > 0 {
 		adapters = adapterSets[0]
 	}
+	if adapters.Workflows == nil {
+		adapters.Workflows = workflows
+	}
 	router := gin.New()
 	var sseConnections atomic.Int64
 	proxies, err := trustedProxies()

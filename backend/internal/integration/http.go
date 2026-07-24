@@ -243,6 +243,9 @@ func (c HTTPGiteaClient) ReadPullRequest(ctx context.Context, integration Integr
 	if err != nil {
 		return PullRequest{}, fmt.Errorf("read Gitea pull request diff: %w", err)
 	}
+	if len(files) > 0 && attachUnifiedDiffPatches(files, diff) == 0 {
+		return PullRequest{}, fmt.Errorf("read Gitea pull request diff: %d changed file(s) have no reviewable patch content", len(files))
+	}
 	return PullRequest{Metadata: metadata, Files: files, Diff: diff}, nil
 }
 
@@ -386,6 +389,12 @@ func (c HTTPOpenAIClient) Chat(ctx context.Context, integration Integration, sec
 	if maxTokens, parseErr := strconv.Atoi(config["max_tokens"]); parseErr == nil && maxTokens > 0 {
 		payload["max_tokens"] = maxTokens
 	}
+	if temperature, parseErr := strconv.ParseFloat(config["temperature"], 64); parseErr == nil {
+		payload["temperature"] = temperature
+	}
+	if topP, parseErr := strconv.ParseFloat(config["top_p"], 64); parseErr == nil {
+		payload["top_p"] = topP
+	}
 	var response struct {
 		Model   string `json:"model"`
 		Choices []struct {
@@ -417,8 +426,21 @@ func (c HTTPOllamaClient) Chat(ctx context.Context, integration Integration, sec
 		return ChatResult{}, err
 	}
 	payload := map[string]any{"model": config["model"], "messages": []map[string]string{{"role": "user", "content": prompt}}, "stream": false}
+	options := map[string]any{}
 	if maxTokens, parseErr := strconv.Atoi(config["max_tokens"]); parseErr == nil && maxTokens > 0 {
-		payload["options"] = map[string]any{"num_predict": maxTokens}
+		options["num_predict"] = maxTokens
+	}
+	if temperature, parseErr := strconv.ParseFloat(config["temperature"], 64); parseErr == nil {
+		options["temperature"] = temperature
+	}
+	if topP, parseErr := strconv.ParseFloat(config["top_p"], 64); parseErr == nil {
+		options["top_p"] = topP
+	}
+	if len(options) > 0 {
+		payload["options"] = options
+	}
+	if keepAlive := strings.TrimSpace(config["keep_alive"]); keepAlive != "" {
+		payload["keep_alive"] = keepAlive
 	}
 	var response struct {
 		Model   string `json:"model"`

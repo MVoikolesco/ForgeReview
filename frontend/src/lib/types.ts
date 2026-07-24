@@ -41,6 +41,11 @@ export type WorkflowDefinition = {
   key: string;
   name: string;
   description: string;
+  interface?: {
+    trigger_node_key?: string;
+    inputs: WorkflowInterfaceField[];
+    outputs: WorkflowInterfaceField[];
+  };
   nodes: Array<{
     key: string;
     type: string;
@@ -57,9 +62,18 @@ export type WorkflowDefinition = {
   }>;
 };
 
+export type WorkflowInterfaceField = {
+  key: string;
+  label: string;
+  contract: string;
+  required?: boolean;
+  node_key?: string;
+  port_key?: string;
+};
+
 export type WorkflowMetadata = Pick<
   WorkflowDefinition,
-  "key" | "name" | "description"
+  "key" | "name" | "description" | "interface"
 >;
 
 export type WorkflowExportEnvelope = {

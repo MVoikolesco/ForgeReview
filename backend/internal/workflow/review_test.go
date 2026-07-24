@@ -65,6 +65,77 @@ func TestRunFiltersFetchedFilesAndGroupsDeterministically(t *testing.T) {
 	}
 }
 
+func TestRunReviewSendsFetchedUnifiedDiffToModel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/repos/acme/api/pulls/12":
+			_, _ = writer.Write([]byte(`{"number":12}`))
+		case "/api/v1/repos/acme/api/pulls/12/files":
+			_, _ = writer.Write([]byte(`[{"filename":"src/service.go","status":"modified"}]`))
+		case "/api/v1/repos/acme/api/pulls/12.diff":
+			_, _ = writer.Write([]byte("diff --git a/src/service.go b/src/service.go\n--- a/src/service.go\n+++ b/src/service.go\n@@ -4,2 +4,3 @@\n func run() {\n+\tvalidate()\n }"))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	config, _ := json.Marshal(map[string]string{"base_url": server.URL})
+	definition := Definition{Key: "diff-prompt", Name: "Diff prompt", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start"},
+		{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea"}},
+		{Key: "group", Type: "group", Name: "Group", Config: map[string]any{"max_files": 8, "max_characters": 12000}},
+		{Key: "loop", Type: "loop", Name: "Loop", Config: map[string]any{"max_iterations": 2, "concurrency": 1}},
+		{Key: "template", Type: "template", Name: "Template", Config: map[string]any{"template": "review"}},
+		{Key: "model", Type: "model", Name: "Model", Config: map[string]any{"integration": "model"}},
+	}, Edges: []Edge{
+		{Key: "event", FromNode: "start", FromPort: "event", ToNode: "fetch", ToPort: "event"},
+		{Key: "files", FromNode: "fetch", FromPort: "files", ToNode: "group", ToPort: "files"},
+		{Key: "groups", FromNode: "group", FromPort: "groups", ToNode: "loop", ToPort: "items"},
+		{Key: "context", FromNode: "loop", FromPort: "item", ToNode: "template", ToPort: "context"},
+		{Key: "prompt", FromNode: "template", FromPort: "prompt", ToNode: "model", ToPort: "prompt"},
+	}}
+	model := &sequentialModel{responses: []string{"[]"}}
+	adapters := Adapters{
+		Integrations: memoryIntegrations{
+			"gitea": encryptedIntegration(t, integration.Integration{Key: "gitea", Name: "Gitea", Type: integration.TypeGitea, Config: config, Status: integration.StatusActive}, "gitea-secret"),
+			"model": modelIntegration(t, "model-secret"),
+		},
+		Secrets: testSecrets(t),
+		Gitea:   integration.HTTPGiteaClient{Client: server.Client()},
+		OpenAI:  model,
+	}
+	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), map[string]any{"pull_request": map[string]any{"owner": "acme", "repo": "api", "number": 12}}, adapters)
+	if err != nil || report.Status != "completed" {
+		t.Fatalf("run = %#v, %v", report, err)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("model calls = %d, prompts = %#v", model.calls, model.prompts)
+	}
+	for _, expected := range []string{"diff --git a/src/service.go b/src/service.go", "@@ -4,2 +4,3 @@", `+\tvalidate()`} {
+		if !strings.Contains(model.prompts[0], expected) {
+			t.Fatalf("model prompt is missing %q: %s", expected, model.prompts[0])
+		}
+	}
+}
+
+func TestRunFetchRejectsFilesWithoutReviewableContent(t *testing.T) {
+	definition := Definition{Key: "missing-diff", Name: "Missing diff", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start"},
+		{Key: "fetch", Type: "fetch", Name: "Fetch", Config: map[string]any{"integration": "gitea"}},
+	}, Edges: []Edge{{Key: "event", FromNode: "start", FromPort: "event", ToNode: "fetch", ToPort: "event"}}}
+	config, _ := json.Marshal(map[string]string{"base_url": "https://gitea.example"})
+	adapters := Adapters{
+		Integrations: memoryIntegrations{"gitea": encryptedIntegration(t, integration.Integration{Key: "gitea", Name: "Gitea", Type: integration.TypeGitea, Config: config, Status: integration.StatusActive}, "secret")},
+		Secrets:      testSecrets(t),
+		Gitea:        staticPullRequestReader{files: []map[string]any{{"filename": "main.go"}}},
+	}
+	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), map[string]any{"pull_request": map[string]any{"owner": "acme", "repo": "api", "number": 12}}, adapters)
+	if err == nil || !strings.Contains(err.Error(), "without reviewable patch content") || report.Status != "failed" {
+		t.Fatalf("run = %#v, %v", report, err)
+	}
+}
+
 func TestRunRoutesInvalidModelResponseToValidateInvalid(t *testing.T) {
 	definition := Definition{Key: "invalid", Name: "Invalid", Nodes: []Node{
 		{Key: "start", Type: "trigger", Name: "Start"},

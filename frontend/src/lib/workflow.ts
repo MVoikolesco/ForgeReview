@@ -8,6 +8,7 @@ import type {
   WorkflowExportEnvelope,
   WorkflowVersionStatus,
   ExecutionReport,
+  WorkflowInterfaceField,
 } from "./types";
 
 export const categoryAccent = (category: string) =>
@@ -272,8 +273,70 @@ export function toDefinition(
   edges: Edge[],
   metadata: WorkflowMetadata = defaultWorkflowMetadata,
 ): WorkflowDefinition {
+  const declaredInputs = nodes
+    .filter((node) => node.data.type === "trigger")
+    .flatMap((node) => {
+      if (Array.isArray(node.data.config.published_input_fields))
+        return node.data.config
+          .published_input_fields as WorkflowInterfaceField[];
+      return Array.isArray(node.data.config.published_inputs)
+        ? node.data.config.published_inputs
+            .filter((value): value is string => nonEmptyText(value))
+            .map((key) => ({
+              key,
+              label: key,
+              contract: "any",
+              required: true,
+            }))
+        : [];
+    });
+  const declaredOutputs = nodes.flatMap((node) => {
+    const key = configText(node.data.config.published_output_key);
+    const portKey = configText(node.data.config.published_output_port);
+    if (!key || !portKey) return [];
+    const port = node.data.outputs.find((candidate) => candidate.key === portKey);
+    return [
+      {
+        key,
+        label: key,
+        contract: port?.contract || "any",
+        required: Boolean(node.data.config.published_output_required),
+        node_key: node.id,
+        port_key: portKey,
+      },
+    ];
+  });
+  const interfaceConfigured = nodes.some(
+    (node) =>
+      Object.prototype.hasOwnProperty.call(
+        node.data.config,
+        "published_inputs",
+      ) ||
+      Object.prototype.hasOwnProperty.call(
+        node.data.config,
+        "published_input_fields",
+      ) ||
+      Object.prototype.hasOwnProperty.call(
+        node.data.config,
+        "published_output_key",
+      ) ||
+      Object.prototype.hasOwnProperty.call(
+        node.data.config,
+        "published_output_port",
+      ),
+  );
   return {
     ...metadata,
+    interface:
+      interfaceConfigured
+        ? {
+            trigger_node_key: nodes.find(
+              (node) => node.data.type === "trigger",
+            )?.id,
+            inputs: declaredInputs,
+            outputs: declaredOutputs,
+          }
+        : metadata.interface,
     nodes: nodes.map(({ id, data, position }) => ({
       key: id,
       type: data.type,
@@ -321,6 +384,55 @@ const nonEmptyText = (value: unknown) =>
 const positiveInteger = (value: unknown) =>
   typeof value === "number" && Number.isInteger(value) && value > 0;
 
+const validKeepAlive = (value: unknown) => {
+  if (value === undefined || value === "") return true;
+  if (value === "0") return true;
+  if (typeof value !== "string") return false;
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h)$/);
+  if (!match) return false;
+  const amount = Number(match[1]);
+  const unitMilliseconds: Record<string, number> = {
+    ms: 1,
+    s: 1000,
+    m: 60000,
+    h: 3600000,
+  };
+  const milliseconds =
+    amount * (unitMilliseconds[match[2]] ?? 0);
+  return amount > 0 && milliseconds <= 24 * 60 * 60 * 1000;
+};
+
+const validDataPath = (value: unknown) =>
+  typeof value === "string" &&
+  /^[A-Za-z_-][A-Za-z0-9_-]*(?:\.[A-Za-z_-][A-Za-z0-9_-]*)*$/.test(value);
+
+const validDeclarativeOperations = (value: unknown) =>
+  value === undefined ||
+  (Array.isArray(value) &&
+    value.length >= 1 &&
+    value.length <= 32 &&
+    value.every((raw) => {
+      if (!raw || typeof raw !== "object") return false;
+      const operation = raw as Record<string, unknown>;
+      if (["select", "remove"].includes(String(operation.op)))
+        return validDataPath(operation.path);
+      if (operation.op === "set")
+        return (
+          validDataPath(operation.path) &&
+          Object.prototype.hasOwnProperty.call(operation, "value")
+        );
+      if (operation.op === "rename")
+        return validDataPath(operation.path) && validDataPath(operation.to);
+      if (operation.op === "coalesce")
+        return (
+          Array.isArray(operation.paths) &&
+          operation.paths.length > 0 &&
+          operation.paths.every(validDataPath) &&
+          validDataPath(operation.to)
+        );
+      return false;
+    }));
+
 /**
  * Mirrors graph and configuration failures that the client can know from the
  * current catalog. The backend still validates every persisted definition.
@@ -335,6 +447,17 @@ export function validateStudioWorkflow(
   if (definition.nodes.length === 0)
     issues.push({ message: "Adicione ao menos um card ao workflow." });
   const cardByType = new Map(cards.map((card) => [card.key, card]));
+  const knownContracts = new Set([
+    "any",
+    "string",
+    "number",
+    "boolean",
+    "object",
+    "list",
+    ...cards.flatMap((card) =>
+      [...card.inputs, ...card.outputs].map((port) => port.contract),
+    ),
+  ]);
   const nodeKeys = new Set<string>();
   for (const node of definition.nodes) {
     const catalogCard = cardByType.get(node.type);
@@ -420,7 +543,173 @@ export function validateStudioWorkflow(
           nodeKey: node.key,
           message: `"${node.name}" precisa de max_tokens entre 1 e 128000.`,
         });
+      const temperature = node.config.temperature;
+      if (
+        temperature !== undefined &&
+        (typeof temperature !== "number" ||
+          !Number.isFinite(temperature) ||
+          temperature < 0 ||
+          temperature > 2)
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" precisa de temperature entre 0 e 2.`,
+        });
+      const topP = node.config.top_p;
+      if (
+        topP !== undefined &&
+        (typeof topP !== "number" ||
+          !Number.isFinite(topP) ||
+          topP <= 0 ||
+          topP > 1)
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" precisa de top_p maior que 0 e no máximo 1.`,
+        });
+      const timeout = node.config.timeout_seconds;
+      if (
+        timeout !== undefined &&
+        (!Number.isInteger(timeout) ||
+          (timeout as number) < 1 ||
+          (timeout as number) > 3600)
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" precisa de timeout_seconds entre 1 e 3600.`,
+        });
+      if (!validKeepAlive(node.config.keep_alive))
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" precisa de keep_alive igual a 0 ou uma duração de até 24h.`,
+        });
+      const fallback = configText(node.config.fallback_model_profile);
+      if (
+        fallback &&
+        fallback === configText(node.config.model_profile)
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `O fallback de "${node.name}" deve usar outro perfil.`,
+        });
+      const costs = [
+        node.config.input_cost_per_million_usd,
+        node.config.output_cost_per_million_usd,
+        node.config.max_cost_usd,
+      ];
+      if (
+        costs.some(
+          (value) =>
+            value !== undefined &&
+            (typeof value !== "number" ||
+              !Number.isFinite(value) ||
+              value < 0),
+        ) ||
+        ((node.config.max_cost_usd as number) > 0 &&
+          !((node.config.input_cost_per_million_usd as number) > 0) &&
+          !((node.config.output_cost_per_million_usd as number) > 0))
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" requer preços não negativos para aplicar orçamento de custo.`,
+        });
     }
+    if (
+      node.type === "transform" &&
+      !validDeclarativeOperations(node.config.operations)
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `As operações declarativas de "${node.name}" são inválidas.`,
+      });
+    if (node.type === "variable" && Object.keys(node.config).length > 0) {
+      if (
+        !["set", "get"].includes(configText(node.config.action) || "set") ||
+        !["execution", "loop", "card"].includes(
+          configText(node.config.namespace) || "execution",
+        ) ||
+        !/^[A-Za-z_-][A-Za-z0-9_-]{0,63}$/.test(
+          configText(node.config.name),
+        )
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `Defina operação, namespace e nome válidos para "${node.name}".`,
+        });
+    }
+    if (node.type === "condition" && node.config.branches !== undefined) {
+      const branches = node.config.branches;
+      const branchPorts = Array.isArray(branches)
+        ? branches.map((raw) =>
+            raw && typeof raw === "object"
+              ? configText((raw as Record<string, unknown>).port)
+              : "",
+          )
+        : [];
+      if (
+        !Array.isArray(branches) ||
+        branches.length < 1 ||
+        branches.length > 8 ||
+        new Set(branchPorts).size !== branchPorts.length ||
+        branches.some((raw) => {
+          if (!raw || typeof raw !== "object") return true;
+          const branch = raw as Record<string, unknown>;
+          return (
+            !/^match_[1-8]$/.test(configText(branch.port)) ||
+            ![
+              "equals",
+              "not_equals",
+              "exists",
+              "contains",
+              "gt",
+              "gte",
+              "lt",
+              "lte",
+            ].includes(configText(branch.operator)) ||
+            (branch.path !== undefined &&
+              branch.path !== "" &&
+              !validDataPath(branch.path))
+          );
+        })
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `Os ramos declarativos de "${node.name}" são inválidos.`,
+        });
+    }
+    if (node.type === "merge") {
+      const mode = configText(node.config.mode) || "all";
+      if (
+        !["all", "any", "quorum"].includes(mode) ||
+        (mode === "quorum" && !positiveInteger(node.config.quorum)) ||
+        (node.config.timeout_ms !== undefined &&
+          (!positiveInteger(node.config.timeout_ms) ||
+            (node.config.timeout_ms as number) > 60000))
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `A política de join de "${node.name}" é inválida.`,
+        });
+    }
+    if (
+      node.type === "workflow" &&
+      !positiveInteger(node.config.workflow_version_id)
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `Selecione uma versão publicada para "${node.name}".`,
+      });
+    const publishedKey = configText(node.config.published_output_key);
+    const publishedPort = configText(node.config.published_output_port);
+    if (
+      Boolean(publishedKey) !== Boolean(publishedPort) ||
+      (publishedPort &&
+        !catalogCard?.outputs.some((port) => port.key === publishedPort))
+    )
+      issues.push({
+        nodeKey: node.key,
+        message: `Complete a saída publicada de "${node.name}".`,
+      });
     if (
       node.type === "fetch" &&
       (node.config.medium_severity_event !== undefined ||
@@ -475,6 +764,37 @@ export function validateStudioWorkflow(
         nodeKey: node.key,
         message: `Selecione um modo de trigger válido em "${node.name}".`,
       });
+    if (
+      node.type === "trigger" &&
+      node.config.published_input_fields !== undefined
+    ) {
+      const fields = node.config.published_input_fields;
+      const keys = Array.isArray(fields)
+        ? fields.map((field) =>
+            field && typeof field === "object"
+              ? configText((field as Record<string, unknown>).key)
+              : "",
+          )
+        : [];
+      if (
+        !Array.isArray(fields) ||
+        fields.length === 0 ||
+        new Set(keys).size !== keys.length ||
+        fields.some(
+          (field) =>
+            !field ||
+            typeof field !== "object" ||
+            !nonEmptyText((field as Record<string, unknown>).key) ||
+            !knownContracts.has(
+              configText((field as Record<string, unknown>).contract),
+            ),
+        )
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `A interface de entrada publicada por "${node.name}" é inválida.`,
+        });
+    }
     if (
       node.type === "loop" &&
       (!positiveInteger(node.config.max_iterations) ||
@@ -547,6 +867,19 @@ export function validateStudioWorkflow(
   for (const node of definition.nodes) {
     const card = cardByType.get(node.type);
     if (!card) continue;
+    if (
+      node.type === "merge" &&
+      configText(node.config.mode) === "quorum"
+    ) {
+      const incoming = definition.edges.filter(
+        (edge) => edge.to_node === node.key && edge.to_port === "inputs",
+      ).length;
+      if ((node.config.quorum as number) > incoming)
+        issues.push({
+          nodeKey: node.key,
+          message: `O quórum de "${node.name}" excede suas ${incoming} entradas.`,
+        });
+    }
     for (const input of card.inputs.filter((port) => port.required)) {
       if (
         !definition.edges.some(

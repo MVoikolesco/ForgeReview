@@ -427,6 +427,19 @@ func fileCharacters(file map[string]any) int {
 	return utf8.RuneCountInString(file["filename"].(string))
 }
 
+func reviewableFileCount(files []map[string]any) int {
+	count := 0
+	for _, file := range files {
+		for _, key := range []string{"patch", "content", "diff"} {
+			if value, ok := file[key].(string); ok && strings.TrimSpace(value) != "" {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}
+
 func sortFiles(files []map[string]any) {
 	sort.SliceStable(files, func(i, j int) bool {
 		return files[i]["filename"].(string) < files[j]["filename"].(string)

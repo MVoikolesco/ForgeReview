@@ -160,23 +160,35 @@ execution uses `root`. Each completed or failed card is persisted in the
 execution report. Node progress is also persisted as `running` and updated to
 its terminal state, allowing the polling status API to expose safe live progress
 without returning prompts, provider bodies, or secrets. The safe local executors
-currently cover trigger, transform,
-variable, log, cache, filter, group, loop, template, condition, merge, validate,
-response_filter, consolidate and format. A collecting input port waits for all
-of its declared incoming edges; `merge.inputs` and `consolidate.comments` use
-this behavior. Merge emits the ordered list of all branch values instead of
-running after the first branch. The catalog exposes `workflow`/subpipeline as
-    unavailable, with a reason, and validation prevents it from being saved until
-    an execution contract exists. A `fetch` card requires only
+currently cover trigger, declarative transform, namespaced variable, log,
+cache, filter, group, loop, template, multi-branch condition, merge, published
+subpipeline, validate, response_filter, consolidate and format. Merge supports
+all, first-arrival any, bounded quorum, and partial timeout policies.
+Subpipelines pin an immutable published version, map its declared interface,
+enforce required outputs, and reject cycles or nesting deeper than eight. A
+`fetch` card requires only
 `config.integration`; its required typed event input supplies owner, repository,
 and pull-request number. It uses the injected Gitea adapter to read PR metadata,
 file changes and diff. A `model`
 card requires `config.integration` and uses the injected OpenAI-compatible or
-   Ollama chat adapter. Its optional `max_tokens` is validated from 1 through
-   128,000 (default 2,000) and reaches OpenAI-compatible `max_tokens` or Ollama
-   `options.num_predict`. Both require an active stored integration and decrypt
-   its configured credential only immediately before the controlled provider
-   request.
+Ollama chat adapter. `max_tokens` is validated from 1 through 128,000 (default
+2,000), `temperature` from 0 through 2, `top_p` above 0 through 1, and
+`timeout_seconds` from 1 through 3,600 (default 120). Sampling parameters reach
+both provider payloads; the token limit maps to OpenAI-compatible `max_tokens`
+or Ollama `options.num_predict`. Ollama also accepts `keep_alive` as `0` or one
+duration up to 24 hours. The timeout is enforced by the runtime context rather
+than trusted to the provider client. Both adapters require an active stored
+integration and decrypt its configured credential only immediately before the
+controlled provider request.
+Model cards can select one different fallback profile. Optional input/output
+prices per million tokens plus `max_cost_usd` reserve worst-case spend before
+the call and reconcile actual provider usage into safe telemetry.
+
+Transform cards execute only the bounded `select`, `set`, `remove`, `rename`,
+and `coalesce` operation set over JSON-compatible values. Variable cards use
+execution, loop, or card namespaces backed by concurrency-safe runtime state.
+Conditions expose eight named match ports and a default port while retaining
+legacy true/false compatibility. See `docs/card-catalog-stage-5.md`.
 
 ### Integration secret storage
 
@@ -233,6 +245,12 @@ they do not create comments or call an external destination.
   known generated paths or artifacts (`vendor`, `node_modules`, `dist`, `build`,
   `coverage`, minified, protobuf, generated and lock files). Results are ordered
   by filename.
+- The Gitea adapter reads the canonical pull-request `.diff`, splits it by file,
+  and attaches each block as `files[].patch` because the `/files` endpoint can
+  return metadata without changed text. Both the adapter and workflow runtime
+  reject a non-empty changed-file list when none of its entries has
+  `patch`, `content`, or `diff`; a metadata-only model review cannot be
+  published as “no findings”.
 - `group` requires positive `max_files` and `max_characters`; it creates stable
   filename-ordered groups. A file's `patch`, then `content`, then `diff` string
   determines its character count, falling back to its filename when Gitea did

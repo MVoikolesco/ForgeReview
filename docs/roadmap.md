@@ -87,10 +87,9 @@ docs/      Arquitetura, auditoria e este roadmap
   rota `validate.invalid` permanece após esgotamento. Metadados de node runs
   registram contagens e estados de chamadas/validações, sem inserir prompts,
   respostas ou segredos nesses metadados.
-- `merge` é um join real: sua entrada `collect_all` aguarda todas as arestas
-  declaradas e emite a lista ordenada dos valores recebidos.
-- `workflow`/subpipeline aparece no catálogo como indisponível e não pode ser
-  salvo até existir um contrato de execução backend.
+- `merge` é um join real com políticas `all`, `any`, `quorum` e timeout parcial.
+- `workflow`/subpipeline fixa uma versão publicada imutável, valida sua
+  interface e executa com proteção contra ciclos e profundidade excessiva.
 
 ### Integrações e segurança
 
@@ -190,8 +189,9 @@ docs/      Arquitetura, auditoria e este roadmap
 - Teste de conexão para Gitea, Ollama e OpenRouter.
 - Atualização, desativação e remoção segura de integrações.
 - Catálogo de modelos por provider e seleção em vez de entrada textual livre.
-- Parâmetros por card de modelo: temperatura, top-p, timeout,
-  keep-alive, fallback e limites de custo.
+- Parâmetros por card de modelo implementados: temperatura, top-p, timeout,
+  keep-alive, fallback por perfil, preços por milhão de tokens e reserva
+  prévia de orçamento.
 
 ### 3. Execução durável e observabilidade
 
@@ -213,12 +213,11 @@ docs/      Arquitetura, auditoria e este roadmap
 - Assinatura/verificação de webhooks Gitea e idempotência de eventos de entrada.
 - Auditoria de alterações de pipeline, integração e publicação.
 
-### 5. Expansão de cards
+### 5. Expansão de cards — entregue
 
 - Transformações declarativas e variáveis com namespaces controlados.
-- Implementar subpipelines (`workflow`) com interfaces de entrada/saída publicadas;
-  até lá o card permanece explicitamente indisponível.
-- Joins `any` e ramos condicionais múltiplos (`merge` já cobre join `all`).
+- Subpipelines (`workflow`) com interfaces publicadas e versão imutável fixada.
+- Joins `all`, `any`, `quorum`, timeout parcial e ramos condicionais múltiplos.
 - Novos adaptadores: GitHub, GitLab, Gemini, Groq e outros providers
   OpenAI-compatible, sempre registrados no backend.
 

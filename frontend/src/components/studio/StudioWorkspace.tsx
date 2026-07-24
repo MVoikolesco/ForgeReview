@@ -59,6 +59,7 @@ import type {
   ModelProfile,
   WebhookRegistration,
   WorkflowMetadata,
+  WorkflowSummary,
 } from "../../lib/types";
 import {
   applyExecutionReport,
@@ -129,6 +130,9 @@ export function StudioWorkspace() {
   const [dirty, setDirty] = useState(false);
   const [transfer, setTransfer] = useState<"clone" | "import" | "export">();
   const [workflowKeys, setWorkflowKeys] = useState<string[]>([]);
+  const [workflowSummaries, setWorkflowSummaries] = useState<WorkflowSummary[]>(
+    [],
+  );
   const [selectedNodeIDs, setSelectedNodeIDs] = useState<string[]>([]);
   const [selectedEdgeIDs, setSelectedEdgeIDs] = useState<string[]>([]);
   const [history, setHistory] = useState<StudioHistory>({
@@ -236,6 +240,7 @@ export function StudioWorkspace() {
             key: definition.key,
             name: definition.name,
             description: definition.description,
+            interface: definition.interface,
           });
           setOpenedVersionID(loadedVersionID);
           setOpenedVersionPublished(published);
@@ -286,6 +291,9 @@ export function StudioWorkspace() {
       })
       .catch(() => undefined);
   }, []);
+  useEffect(() => {
+    void getWorkflows().then(setWorkflowSummaries).catch(() => undefined);
+  }, [openedVersionID, dirty]);
   useEffect(() => {
     if (user?.role === "admin")
       void getWebhookRegistrations()
@@ -407,6 +415,7 @@ export function StudioWorkspace() {
         key: next.key,
         name: next.name,
         description: next.description,
+        interface: next.interface,
       });
       setDirty(true);
     },
@@ -691,6 +700,7 @@ export function StudioWorkspace() {
       key: definition.key,
       name: definition.name,
       description: definition.description,
+      interface: definition.interface,
     });
     setOpenedVersionID(undefined);
     setDirty(true);
@@ -1169,6 +1179,7 @@ export function StudioWorkspace() {
             selected={inspectedCard}
             integrations={integrations}
             modelProfiles={modelProfiles}
+            workflows={workflowSummaries}
             hasErrorRoute={hasErrorRoute(edges, inspectedCard.key)}
             onChange={(patch) => canEdit && patchInspected(patch)}
             onClose={closeInspector}

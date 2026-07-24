@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -71,14 +72,17 @@ func (observe ProgressObserverFunc) ObserveNode(ctx context.Context, run NodeRun
 // ExecutionTelemetry accumulates only safe provider accounting fields. It must
 // never contain prompts, responses, provider payloads, or credentials.
 type ExecutionTelemetry struct {
-	mu         sync.Mutex
-	startedAt  time.Time
-	models     []string
-	prompt     int
-	completion int
-	total      int
-	lastModel  string
-	lastUsage  integration.TokenUsage
+	mu           sync.Mutex
+	startedAt    time.Time
+	models       []string
+	prompt       int
+	completion   int
+	total        int
+	costUSD      float64
+	lastModel    string
+	lastUsage    integration.TokenUsage
+	lastCostUSD  float64
+	lastFallback bool
 }
 
 type TelemetrySnapshot struct {
@@ -87,6 +91,7 @@ type TelemetrySnapshot struct {
 	Prompt     int
 	Completion int
 	Total      int
+	CostUSD    float64
 }
 
 func NewExecutionTelemetry(startedAt time.Time) *ExecutionTelemetry {
@@ -113,6 +118,9 @@ func (telemetry *ExecutionTelemetry) Record(result integration.ChatResult) {
 	telemetry.total += positiveInt(result.Usage.Total)
 	telemetry.lastModel = strings.TrimSpace(result.Model)
 	telemetry.lastUsage = result.Usage
+	telemetry.costUSD += result.CostUSD
+	telemetry.lastCostUSD = result.CostUSD
+	telemetry.lastFallback = result.FallbackUsed
 }
 
 func (telemetry *ExecutionTelemetry) LastCallMetadata() map[string]any {
@@ -134,6 +142,12 @@ func (telemetry *ExecutionTelemetry) LastCallMetadata() map[string]any {
 	if telemetry.lastUsage.Total > 0 {
 		metadata["total_tokens"] = telemetry.lastUsage.Total
 	}
+	if telemetry.lastCostUSD > 0 {
+		metadata["cost_usd"] = telemetry.lastCostUSD
+	}
+	if telemetry.lastFallback {
+		metadata["fallback_used"] = true
+	}
 	return metadata
 }
 
@@ -147,7 +161,7 @@ func (telemetry *ExecutionTelemetry) Snapshot() TelemetrySnapshot {
 	if total == 0 && (telemetry.prompt > 0 || telemetry.completion > 0) {
 		total = telemetry.prompt + telemetry.completion
 	}
-	return TelemetrySnapshot{ElapsedMS: time.Since(telemetry.startedAt).Milliseconds(), Models: append([]string(nil), telemetry.models...), Prompt: telemetry.prompt, Completion: telemetry.completion, Total: total}
+	return TelemetrySnapshot{ElapsedMS: time.Since(telemetry.startedAt).Milliseconds(), Models: append([]string(nil), telemetry.models...), Prompt: telemetry.prompt, Completion: telemetry.completion, Total: total, CostUSD: telemetry.costUSD}
 }
 
 func positiveInt(value int) int {
@@ -180,12 +194,20 @@ type Adapters struct {
 	Execution     ExecutionContext
 	Dispatcher    ExecutionDispatcher
 	Cache         Cache
+	Workflows     WorkflowResolver
 	Progress      ProgressObserver
 	Logs          ExecutionLogWriter
 	// Cancellation is queried at card boundaries. Publication intentionally
 	// begins atomically in the ledger and is never cancelled once begun.
-	Cancellation func(context.Context) (bool, error)
-	Telemetry    *ExecutionTelemetry
+	Cancellation  func(context.Context) (bool, error)
+	Telemetry     *ExecutionTelemetry
+	workflowStack []int64
+	variableState *variableState
+}
+
+type WorkflowResolver interface {
+	Load(context.Context, int64) (Definition, error)
+	VersionStatus(context.Context, int64) (string, error)
 }
 
 // ExecutionLogWriter persists safe, operator-facing lifecycle records. Entries
@@ -260,7 +282,7 @@ func SafeExecutionLogFacts(metadata map[string]any) map[string]any {
 	if len(metadata) == 0 {
 		return nil
 	}
-	allowed := map[string]bool{"attempt_count": true, "retry_limit": true, "retry_delay_ms": true, "completed_iterations": true, "failed_iterations": true, "max_iterations": true, "concurrency": true, "model": true, "validation_error": true, "error_code": true, "error_policy": true, "error_action": true, "error_scope": true}
+	allowed := map[string]bool{"attempt_count": true, "retry_limit": true, "retry_delay_ms": true, "completed_iterations": true, "failed_iterations": true, "max_iterations": true, "concurrency": true, "model": true, "validation_error": true, "error_code": true, "error_policy": true, "error_action": true, "error_scope": true, "cost_usd": true, "fallback_used": true, "workflow_version_id": true, "child_runs": true, "merge_mode": true, "received_inputs": true, "timed_out": true}
 	result := map[string]any{}
 	for key := range allowed {
 		value, ok := metadata[key]
@@ -389,6 +411,9 @@ func RunFromTriggerWithAdapters(ctx context.Context, definition Definition, cata
 	if adapters.Telemetry == nil {
 		adapters.Telemetry = NewExecutionTelemetry(time.Now())
 	}
+	if len(adapters.workflowStack) == 0 && adapters.Execution.VersionID > 0 {
+		adapters.workflowStack = []int64{adapters.Execution.VersionID}
+	}
 	runner := newScopedRunner(definition, catalog, input, adapters, active)
 	ready := make([]nodeScope, 0)
 	for _, node := range definition.Nodes {
@@ -396,11 +421,36 @@ func RunFromTriggerWithAdapters(ctx context.Context, definition Definition, cata
 			continue
 		}
 		card, _ := catalog.Get(node.Type)
-		if len(card.Inputs) == 0 || (node.Type == "cache" && node.Config["mode"] != "write") {
+		optionalOnly := len(card.Inputs) > 0
+		for _, inputPort := range card.Inputs {
+			optionalOnly = optionalOnly && !inputPort.Required
+		}
+		incoming := 0
+		for _, count := range runner.incoming[node.Key] {
+			incoming += count
+		}
+		if len(card.Inputs) == 0 || optionalOnly && incoming == 0 || (node.Type == "cache" && node.Config["mode"] != "write") {
 			ready = append(ready, nodeScope{NodeKey: node.Key, ScopeKey: rootScope})
 		}
 	}
-	for len(ready) > 0 {
+	for {
+		if len(ready) == 0 {
+			pending, wait := runner.pendingTimedMerges()
+			if len(pending) == 0 {
+				break
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return RunReport{Status: "cancelled", Runs: runner.report.Runs}, ctx.Err()
+			case <-timer.C:
+			}
+			for _, current := range pending {
+				runner.timedOut[current] = true
+				ready = append(ready, current)
+			}
+		}
 		if err := ctx.Err(); err != nil {
 			return RunReport{Status: "cancelled", Runs: runner.report.Runs}, err
 		}
@@ -415,10 +465,63 @@ func RunFromTriggerWithAdapters(ctx context.Context, definition Definition, cata
 	}
 	for _, node := range definition.Nodes {
 		if active[node.Key] && !runner.scopeOnly[node.Key] && !runner.ran(nodeScope{NodeKey: node.Key, ScopeKey: rootScope}) {
-			return RunReport{Status: "blocked", Runs: runner.report.Runs}, fmt.Errorf("workflow has blocked nodes")
+			tokenCount, incomingCount := 0, 0
+			for _, tokens := range runner.inbox(nodeScope{NodeKey: node.Key, ScopeKey: rootScope}) {
+				tokenCount += len(tokens)
+			}
+			for _, count := range runner.incoming[node.Key] {
+				incomingCount += count
+			}
+			if tokenCount > 0 || incomingCount == 0 {
+				return RunReport{Status: "blocked", Runs: runner.report.Runs}, fmt.Errorf("workflow has blocked nodes")
+			}
 		}
 	}
 	return runner.report, nil
+}
+
+func (r *scopedRunner) pendingTimedMerges() ([]nodeScope, time.Duration) {
+	type candidate struct {
+		current   nodeScope
+		remaining time.Duration
+	}
+	candidates := []candidate{}
+	wait := time.Duration(-1)
+	now := time.Now()
+	for key, node := range r.nodes {
+		if node.Type != "merge" {
+			continue
+		}
+		settings, err := mergeSettingsFor(node)
+		if err != nil || settings.TimeoutMS == 0 {
+			continue
+		}
+		for scopeKey, scopedInboxes := range r.inboxes {
+			current := nodeScope{NodeKey: key, ScopeKey: scopeKey}
+			inbox := scopedInboxes[key]
+			if r.ran(current) || len(inbox["inputs"]) == 0 {
+				continue
+			}
+			remaining := time.Duration(settings.TimeoutMS)*time.Millisecond - now.Sub(r.mergeArrived[current])
+			if remaining < 0 {
+				remaining = 0
+			}
+			if wait < 0 || remaining < wait {
+				wait = remaining
+			}
+			candidates = append(candidates, candidate{current: current, remaining: remaining})
+		}
+	}
+	pending := []nodeScope{}
+	for _, item := range candidates {
+		if item.remaining == wait {
+			pending = append(pending, item.current)
+		}
+	}
+	if wait < 0 {
+		wait = 0
+	}
+	return pending, wait
 }
 
 func reachableNodes(definition Definition, start string) map[string]bool {
@@ -447,19 +550,27 @@ type nodeScope struct {
 }
 
 type scopedRunner struct {
-	nodes     map[string]Node
-	inboxes   map[string]map[string]map[string][]Token
-	incoming  map[string]map[string]int
-	edges     map[string][]Edge
-	run       map[nodeScope]bool
-	scopeOnly map[string]bool
-	catalog   Catalog
-	input     map[string]any
-	adapters  Adapters
-	report    RunReport
-	results   map[string][]any
-	active    map[string]bool
-	limits    *executionLimits
+	nodes        map[string]Node
+	inboxes      map[string]map[string]map[string][]Token
+	incoming     map[string]map[string]int
+	edges        map[string][]Edge
+	run          map[nodeScope]bool
+	scopeOnly    map[string]bool
+	catalog      Catalog
+	input        map[string]any
+	adapters     Adapters
+	report       RunReport
+	results      map[string][]any
+	active       map[string]bool
+	limits       *executionLimits
+	variables    *variableState
+	timedOut     map[nodeScope]bool
+	mergeArrived map[nodeScope]time.Time
+}
+
+type variableState struct {
+	mu     sync.RWMutex
+	values map[string]any
 }
 
 type executionLimits struct {
@@ -468,20 +579,28 @@ type executionLimits struct {
 }
 
 func newScopedRunner(definition Definition, catalog Catalog, input map[string]any, adapters Adapters, active map[string]bool) *scopedRunner {
+	variables := adapters.variableState
+	if variables == nil {
+		variables = &variableState{values: map[string]any{}}
+		adapters.variableState = variables
+	}
 	runner := &scopedRunner{
-		nodes:     make(map[string]Node, len(definition.Nodes)),
-		inboxes:   map[string]map[string]map[string][]Token{},
-		incoming:  map[string]map[string]int{},
-		edges:     map[string][]Edge{},
-		run:       map[nodeScope]bool{},
-		scopeOnly: loopScopedNodes(definition),
-		catalog:   catalog,
-		input:     input,
-		adapters:  adapters,
-		report:    RunReport{Status: "completed"},
-		results:   map[string][]any{},
-		active:    active,
-		limits:    &executionLimits{global: make(chan struct{}, 8)},
+		nodes:        make(map[string]Node, len(definition.Nodes)),
+		inboxes:      map[string]map[string]map[string][]Token{},
+		incoming:     map[string]map[string]int{},
+		edges:        map[string][]Edge{},
+		run:          map[nodeScope]bool{},
+		scopeOnly:    loopScopedNodes(definition),
+		catalog:      catalog,
+		input:        input,
+		adapters:     adapters,
+		report:       RunReport{Status: "completed"},
+		results:      map[string][]any{},
+		active:       active,
+		limits:       &executionLimits{global: make(chan struct{}, 8)},
+		variables:    variables,
+		timedOut:     map[nodeScope]bool{},
+		mergeArrived: map[nodeScope]time.Time{},
 	}
 	for _, node := range definition.Nodes {
 		runner.nodes[node.Key] = node
@@ -500,7 +619,7 @@ func newScopedRunner(definition Definition, catalog Catalog, input map[string]an
 }
 
 func (r *scopedRunner) child() *scopedRunner {
-	return &scopedRunner{nodes: r.nodes, inboxes: map[string]map[string]map[string][]Token{}, incoming: r.incoming, edges: r.edges, run: map[nodeScope]bool{}, scopeOnly: r.scopeOnly, catalog: r.catalog, input: r.input, adapters: r.adapters, report: RunReport{Status: "completed"}, results: map[string][]any{}, active: r.active, limits: r.limits}
+	return &scopedRunner{nodes: r.nodes, inboxes: map[string]map[string]map[string][]Token{}, incoming: r.incoming, edges: r.edges, run: map[nodeScope]bool{}, scopeOnly: r.scopeOnly, catalog: r.catalog, input: r.input, adapters: r.adapters, report: RunReport{Status: "completed"}, results: map[string][]any{}, active: r.active, limits: r.limits, variables: r.variables, timedOut: map[nodeScope]bool{}, mergeArrived: map[nodeScope]time.Time{}}
 }
 
 func loopScopedNodes(definition Definition) map[string]bool {
@@ -565,7 +684,17 @@ func (r *scopedRunner) route(token Token, edge Edge, scopeKey string, ready *[]n
 	target := nodeScope{NodeKey: edge.ToNode, ScopeKey: scopeKey}
 	inbox := r.inbox(target)
 	inbox[edge.ToPort] = append(inbox[edge.ToPort], token)
+	if r.nodes[target.NodeKey].Type == "merge" && r.mergeArrived[target].IsZero() {
+		r.mergeArrived[target] = time.Now()
+	}
 	if !r.ran(target) && inputsReady(r.nodes[target.NodeKey], inbox, r.incoming[target.NodeKey], r.catalog) {
+		if r.nodes[target.NodeKey].Type == "merge" {
+			settings, _ := mergeSettingsFor(r.nodes[target.NodeKey])
+			if settings.Mode == "any" || settings.Mode == "quorum" {
+				*ready = append([]nodeScope{target}, *ready...)
+				return
+			}
+		}
 		*ready = append(*ready, target)
 	}
 }
@@ -573,7 +702,7 @@ func (r *scopedRunner) route(token Token, edge Edge, scopeKey string, ready *[]n
 func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]nodeScope) error {
 	node := r.nodes[current.NodeKey]
 	inbox := r.inbox(current)
-	if r.ran(current) || !inputsReady(node, inbox, r.incoming[node.Key], r.catalog) {
+	if r.ran(current) || (!r.timedOut[current] && !inputsReady(node, inbox, r.incoming[node.Key], r.catalog)) {
 		return nil
 	}
 	r.run[current] = true
@@ -610,8 +739,19 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 		}
 	} else if node.Type == "validate" {
 		outputs, nodeRun.Metadata, err = r.runValidate(ctx, node, current, inbox, inputs)
+	} else if node.Type == "variable" {
+		outputs, err = r.runVariable(node, current, inputs)
+	} else if node.Type == "workflow" {
+		outputs, nodeRun.Metadata, err = r.runWorkflow(ctx, node, current, inputs)
 	} else {
 		outputs, err = execute(ctx, node, inputs, r.input, r.adapters, current.ScopeKey)
+		if node.Type == "merge" && err == nil {
+			settings, _ := mergeSettingsFor(node)
+			nodeRun.Metadata = map[string]any{"merge_mode": settings.Mode, "received_inputs": len(inputs["inputs"])}
+			if r.timedOut[current] {
+				nodeRun.Metadata["timed_out"] = true
+			}
+		}
 		if node.Type == "model" && err == nil {
 			nodeRun.Metadata = map[string]any{"attempt_count": 1, "provider_calls": []any{map[string]any{"attempt": 1, "status": "completed"}}}
 			for key, value := range r.adapters.Telemetry.LastCallMetadata() {
@@ -654,6 +794,162 @@ func (r *scopedRunner) runNode(ctx context.Context, current nodeScope, ready *[]
 	}
 	r.report.Runs = append(r.report.Runs, nodeRun)
 	return r.observe(ctx, nodeRun)
+}
+
+func (r *scopedRunner) runVariable(node Node, current nodeScope, inputs map[string][]any) (map[string]any, error) {
+	if len(node.Config) == 0 {
+		return map[string]any{"value": firstForPort(inputs, "value")}, nil
+	}
+	if err := validateVariableConfig(node); err != nil {
+		return nil, err
+	}
+	action, _ := node.Config["action"].(string)
+	if action == "" {
+		action = "set"
+	}
+	namespace, _ := node.Config["namespace"].(string)
+	if namespace == "" {
+		namespace = "execution"
+	}
+	name := node.Config["name"].(string)
+	key := namespace + ":"
+	if namespace == "loop" {
+		key += current.ScopeKey + ":"
+	} else if namespace == "card" {
+		key += current.ScopeKey + ":" + node.Key + ":"
+	}
+	key += name
+	if action == "set" {
+		value := firstForPort(inputs, "value")
+		if value == nil {
+			value = node.Config["value"]
+		}
+		r.variables.mu.Lock()
+		r.variables.values[key] = value
+		r.variables.mu.Unlock()
+		return map[string]any{"value": value}, nil
+	}
+	r.variables.mu.RLock()
+	value, found := r.variables.values[key]
+	r.variables.mu.RUnlock()
+	if !found {
+		if fallback, exists := node.Config["default"]; exists {
+			return map[string]any{"value": fallback}, nil
+		}
+		return nil, fmt.Errorf("variable card %q could not find %s.%s", node.Key, namespace, name)
+	}
+	return map[string]any{"value": value}, nil
+}
+
+func (r *scopedRunner) runWorkflow(ctx context.Context, node Node, current nodeScope, inputs map[string][]any) (map[string]any, map[string]any, error) {
+	if r.adapters.Workflows == nil {
+		return nil, nil, fmt.Errorf("workflow card %q requires an injected workflow resolver", node.Key)
+	}
+	version, _ := integer(node.Config["workflow_version_id"])
+	for _, active := range r.adapters.workflowStack {
+		if active == int64(version) {
+			return nil, nil, fmt.Errorf("workflow card %q creates a subpipeline cycle", node.Key)
+		}
+	}
+	if len(r.adapters.workflowStack) >= 8 {
+		return nil, nil, fmt.Errorf("workflow card %q exceeds maximum subpipeline depth", node.Key)
+	}
+	status, err := r.adapters.Workflows.VersionStatus(ctx, int64(version))
+	if err != nil || (status != VersionStatusPublished && status != VersionStatusArchived) {
+		return nil, nil, fmt.Errorf("workflow card %q requires a published workflow version", node.Key)
+	}
+	definition, err := r.adapters.Workflows.Load(ctx, int64(version))
+	if err != nil {
+		return nil, nil, fmt.Errorf("workflow card %q could not load version %d", node.Key, version)
+	}
+	if definition.Interface == nil || len(definition.Interface.Outputs) == 0 {
+		return nil, nil, fmt.Errorf("workflow card %q target has no published interface", node.Key)
+	}
+	childInput := map[string]any{}
+	if value := firstForPort(inputs, "input"); value != nil {
+		if object, ok := value.(map[string]any); ok {
+			for key, item := range object {
+				childInput[key] = item
+			}
+		} else if len(definition.Interface.Inputs) == 1 {
+			childInput[definition.Interface.Inputs[0].Key] = value
+		} else {
+			return nil, nil, fmt.Errorf("workflow card %q requires an object input", node.Key)
+		}
+	}
+	for _, field := range definition.Interface.Inputs {
+		value, exists := childInput[field.Key]
+		if field.Required && !exists {
+			return nil, nil, fmt.Errorf("workflow card %q requires interface input %q", node.Key, field.Key)
+		}
+		if exists && !matchesInterfaceContract(value, field.Contract) {
+			return nil, nil, fmt.Errorf("workflow card %q input %q violates contract %q", node.Key, field.Key, field.Contract)
+		}
+	}
+	childAdapters := r.adapters
+	childAdapters.Progress = nil
+	childAdapters.Execution.VersionID = int64(version)
+	childAdapters.workflowStack = append(append([]int64{}, r.adapters.workflowStack...), int64(version))
+	childAdapters.variableState = r.variables
+	report, err := RunFromTriggerWithAdapters(ctx, definition, r.catalog, definition.Interface.TriggerNodeKey, childInput, childAdapters)
+	if err != nil {
+		return nil, map[string]any{"workflow_version_id": version}, fmt.Errorf("workflow card %q child execution failed: %w", node.Key, err)
+	}
+	result := map[string]any{}
+	for _, field := range definition.Interface.Outputs {
+		found := false
+		for _, run := range report.Runs {
+			if run.NodeKey != field.NodeKey || run.ScopeKey != rootScope {
+				continue
+			}
+			for _, token := range run.Outputs {
+				if token.PortKey == field.PortKey {
+					result[field.Key] = token.Value
+					found = true
+				}
+			}
+		}
+		if !found && field.Required {
+			return nil, nil, fmt.Errorf("workflow card %q child did not produce required output %q", node.Key, field.Key)
+		}
+	}
+	var output any = result
+	if len(definition.Interface.Outputs) == 1 {
+		output = result[definition.Interface.Outputs[0].Key]
+	}
+	return map[string]any{"output": output}, map[string]any{"workflow_version_id": version, "child_runs": len(report.Runs), "scope": current.ScopeKey}, nil
+}
+
+func matchesInterfaceContract(value any, contract string) bool {
+	if value == nil {
+		return contract == "any"
+	}
+	switch contract {
+	case "any":
+		return true
+	case "string", "prompt":
+		_, ok := value.(string)
+		return ok
+	case "number":
+		_, ok := decimal(value)
+		return ok
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "object", "event":
+		_, ok := value.(map[string]any)
+		return ok
+	case "list", "files", "groups":
+		switch reflect.TypeOf(value).Kind() {
+		case reflect.Array, reflect.Slice:
+			return true
+		}
+		return false
+	default:
+		// Domain contracts are already checked through typed child ports. Their
+		// concrete Go representation is intentionally owned by the executor.
+		return true
+	}
 }
 
 func (r *scopedRunner) acquire(ctx context.Context, cardType string) error {
@@ -742,12 +1038,22 @@ const (
 	maxModelRetryDelay    = 60000
 	defaultModelMaxTokens = 2000
 	maxModelMaxTokens     = 128000
+	defaultModelTimeout   = 120
+	maxModelTimeout       = 3600
 )
 
 type modelSettings struct {
-	RetryLimit   int
-	RetryDelayMS int
-	MaxTokens    int
+	RetryLimit      int
+	RetryDelayMS    int
+	MaxTokens       int
+	Temperature     *float64
+	TopP            *float64
+	Timeout         int
+	KeepAlive       string
+	FallbackProfile string
+	MaxCostUSD      float64
+	InputCostPerM   float64
+	OutputCostPerM  float64
 }
 
 const maxCacheTTLSeconds = 86400
@@ -779,7 +1085,7 @@ func cacheSettingsFor(node Node) (cacheSettings, error) {
 }
 
 func modelSettingsFor(node Node) (modelSettings, error) {
-	settings := modelSettings{MaxTokens: defaultModelMaxTokens}
+	settings := modelSettings{MaxTokens: defaultModelMaxTokens, Timeout: defaultModelTimeout}
 	if value, exists := node.Config["max_tokens"]; exists {
 		limit, ok := integer(value)
 		if !ok || limit < 1 || limit > maxModelMaxTokens {
@@ -801,7 +1107,106 @@ func modelSettingsFor(node Node) (modelSettings, error) {
 		}
 		settings.RetryDelayMS = delay
 	}
+	if value, exists := node.Config["temperature"]; exists {
+		temperature, ok := decimal(value)
+		if !ok || temperature < 0 || temperature > 2 {
+			return modelSettings{}, fmt.Errorf("model card %q config.temperature must be between 0 and 2", node.Key)
+		}
+		settings.Temperature = &temperature
+	}
+	if value, exists := node.Config["top_p"]; exists {
+		topP, ok := decimal(value)
+		if !ok || topP <= 0 || topP > 1 {
+			return modelSettings{}, fmt.Errorf("model card %q config.top_p must be greater than 0 and at most 1", node.Key)
+		}
+		settings.TopP = &topP
+	}
+	if value, exists := node.Config["timeout_seconds"]; exists {
+		timeout, ok := integer(value)
+		if !ok || timeout < 1 || timeout > maxModelTimeout {
+			return modelSettings{}, fmt.Errorf("model card %q config.timeout_seconds must be between 1 and %d", node.Key, maxModelTimeout)
+		}
+		settings.Timeout = timeout
+	}
+	if value, exists := node.Config["keep_alive"]; exists {
+		keepAlive, ok := value.(string)
+		if !ok || !validKeepAlive(keepAlive) {
+			return modelSettings{}, fmt.Errorf("model card %q config.keep_alive must be 0 or a duration up to 24h", node.Key)
+		}
+		settings.KeepAlive = keepAlive
+	}
+	if value, exists := node.Config["fallback_model_profile"]; exists {
+		profile, ok := value.(string)
+		if !ok || strings.TrimSpace(profile) == "" || len(profile) > 128 {
+			return modelSettings{}, fmt.Errorf("model card %q config.fallback_model_profile must be a profile key", node.Key)
+		}
+		if primary, _ := node.Config["model_profile"].(string); profile == primary {
+			return modelSettings{}, fmt.Errorf("model card %q fallback profile must differ from primary", node.Key)
+		}
+		settings.FallbackProfile = profile
+	}
+	for key, target := range map[string]*float64{
+		"max_cost_usd":                &settings.MaxCostUSD,
+		"input_cost_per_million_usd":  &settings.InputCostPerM,
+		"output_cost_per_million_usd": &settings.OutputCostPerM,
+	} {
+		if value, exists := node.Config[key]; exists {
+			number, ok := decimal(value)
+			if !ok || number < 0 {
+				return modelSettings{}, fmt.Errorf("model card %q config.%s must be a non-negative number", node.Key, key)
+			}
+			*target = number
+		}
+	}
+	if settings.MaxCostUSD > 0 && settings.InputCostPerM == 0 && settings.OutputCostPerM == 0 {
+		return modelSettings{}, fmt.Errorf("model card %q cost limit requires input or output pricing", node.Key)
+	}
 	return settings, nil
+}
+
+func decimal(value any) (float64, bool) {
+	var number float64
+	var ok bool
+	switch typed := value.(type) {
+	case float64:
+		number, ok = typed, true
+	case float32:
+		number, ok = float64(typed), true
+	case int:
+		number, ok = float64(typed), true
+	case int64:
+		number, ok = float64(typed), true
+	case json.Number:
+		var err error
+		number, err = typed.Float64()
+		ok = err == nil
+	default:
+		return 0, false
+	}
+	return number, ok && !math.IsNaN(number) && !math.IsInf(number, 0)
+}
+
+func validKeepAlive(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "0" {
+		return true
+	}
+	units := []struct {
+		suffix string
+		scale  time.Duration
+	}{{"ms", time.Millisecond}, {"h", time.Hour}, {"m", time.Minute}, {"s", time.Second}}
+	for _, unit := range units {
+		if !strings.HasSuffix(value, unit.suffix) {
+			continue
+		}
+		number, err := strconv.ParseFloat(strings.TrimSuffix(value, unit.suffix), 64)
+		if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+			return false
+		}
+		duration := time.Duration(number * float64(unit.scale))
+		return number > 0 && duration <= 24*time.Hour
+	}
+	return false
 }
 
 // runValidate performs bounded corrective calls only for the direct model ->
@@ -1096,6 +1501,19 @@ func inputsReady(node Node, inbox map[string][]Token, incoming map[string]int, c
 		return false
 	}
 	card, _ := catalog.Get(node.Type)
+	if node.Type == "merge" {
+		settings, err := mergeSettingsFor(node)
+		if err != nil {
+			return false
+		}
+		count := len(inbox["inputs"])
+		switch settings.Mode {
+		case "any":
+			return count >= 1
+		case "quorum":
+			return count >= settings.Quorum
+		}
+	}
 	for _, port := range card.Inputs {
 		if port.Required && len(inbox[port.Key]) == 0 {
 			return false
@@ -1135,10 +1553,14 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 			return map[string]any{"event": value}, nil
 		}
 		return map[string]any{"event": input}, nil
-	case "transform", "log":
+	case "transform":
+		output, err := applyTransform(node, first())
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"output": output}, nil
+	case "log":
 		return map[string]any{"output": first()}, nil
-	case "variable":
-		return map[string]any{"value": first()}, nil
 	case "cache":
 		return executeCache(ctx, node, inputs, adapters)
 	case "filter":
@@ -1164,6 +1586,9 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		}
 		return map[string]any{"prompt": prompt}, nil
 	case "condition":
+		if _, configured := node.Config["branches"]; configured {
+			return map[string]any{conditionOutput(node, first()): first()}, nil
+		}
 		expected, configured := node.Config["equals"]
 		if configured && fmt.Sprint(first()) == fmt.Sprint(expected) {
 			return map[string]any{"true": first()}, nil
@@ -1173,6 +1598,13 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 		}
 		return map[string]any{"false": first()}, nil
 	case "merge":
+		settings, err := mergeSettingsFor(node)
+		if err != nil {
+			return nil, err
+		}
+		if settings.Mode == "any" {
+			return map[string]any{"output": firstForPort(inputs, "inputs")}, nil
+		}
 		return map[string]any{"output": inputs["inputs"]}, nil
 	case "loop":
 		return nil, fmt.Errorf("loop card %q must be executed by the scoped runner", node.Key)
@@ -1239,6 +1671,9 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 			return nil, fmt.Errorf("fetch card %q: %w", node.Key, err)
 		}
 		pullRequest.Target = request
+		if len(pullRequest.Files) > 0 && reviewableFileCount(pullRequest.Files) == 0 {
+			return nil, fmt.Errorf("fetch card %q received %d changed file(s) without reviewable patch content", node.Key, len(pullRequest.Files))
+		}
 		return map[string]any{"pull_request": pullRequest, "files": pullRequest.Files}, nil
 	case "model":
 		prompt, ok := firstForPort(inputs, "prompt").(string)
@@ -1334,7 +1769,32 @@ func executeCache(ctx context.Context, node Node, inputs map[string][]any, adapt
 }
 
 func modelResponse(ctx context.Context, node Node, prompt string, adapters Adapters) (integration.ChatResult, error) {
-	item, err := configuredModelIntegration(ctx, node, adapters)
+	settings, err := modelSettingsFor(node)
+	if err != nil {
+		return integration.ChatResult{}, err
+	}
+	estimatedPromptTokens := (len([]rune(prompt)) + 3) / 4
+	reservedCost := (float64(estimatedPromptTokens)*settings.InputCostPerM + float64(settings.MaxTokens)*settings.OutputCostPerM) / 1_000_000
+	if settings.MaxCostUSD > 0 && reservedCost > settings.MaxCostUSD {
+		return integration.ChatResult{}, fmt.Errorf("model card %q worst-case cost %.6f exceeds config.max_cost_usd %.6f", node.Key, reservedCost, settings.MaxCostUSD)
+	}
+	response, err := callConfiguredModel(ctx, node, prompt, adapters, settings, "")
+	if err != nil && settings.FallbackProfile != "" && ctx.Err() == nil {
+		response, err = callConfiguredModel(ctx, node, prompt, adapters, settings, settings.FallbackProfile)
+		if err == nil {
+			response.FallbackUsed = true
+		}
+	}
+	if err != nil {
+		return integration.ChatResult{}, fmt.Errorf("model card %q: %w", node.Key, err)
+	}
+	response.CostUSD = (float64(response.Usage.Prompt)*settings.InputCostPerM + float64(response.Usage.Completion)*settings.OutputCostPerM) / 1_000_000
+	adapters.Telemetry.Record(response)
+	return response, nil
+}
+
+func callConfiguredModel(ctx context.Context, node Node, prompt string, adapters Adapters, settings modelSettings, profileOverride string) (integration.ChatResult, error) {
+	item, err := configuredModelIntegrationForProfile(ctx, node, adapters, profileOverride)
 	if err != nil {
 		return integration.ChatResult{}, err
 	}
@@ -1345,16 +1805,12 @@ func modelResponse(ctx context.Context, node Node, prompt string, adapters Adapt
 	case integration.TypeOllama:
 		client = adapters.Ollama
 	default:
-		return integration.ChatResult{}, fmt.Errorf("model card %q integration %q must be type %q or %q", node.Key, item.Key, integration.TypeOpenAI, integration.TypeOllama)
+		return integration.ChatResult{}, fmt.Errorf("integration %q must be type %q or %q", item.Key, integration.TypeOpenAI, integration.TypeOllama)
 	}
 	if client == nil {
-		return integration.ChatResult{}, fmt.Errorf("model card %q requires an injected %s adapter", node.Key, item.Type)
+		return integration.ChatResult{}, fmt.Errorf("requires an injected %s adapter", item.Type)
 	}
 	secret, err := resolveSecret(item, adapters, "model", node.Key)
-	if err != nil {
-		return integration.ChatResult{}, err
-	}
-	settings, err := modelSettingsFor(node)
 	if err != nil {
 		return integration.ChatResult{}, err
 	}
@@ -1363,20 +1819,37 @@ func modelResponse(ctx context.Context, node Node, prompt string, adapters Adapt
 		return integration.ChatResult{}, err
 	}
 	config["max_tokens"] = strconv.Itoa(settings.MaxTokens)
+	if settings.Temperature != nil {
+		config["temperature"] = strconv.FormatFloat(*settings.Temperature, 'f', -1, 64)
+	}
+	if settings.TopP != nil {
+		config["top_p"] = strconv.FormatFloat(*settings.TopP, 'f', -1, 64)
+	}
+	if settings.KeepAlive != "" {
+		config["keep_alive"] = settings.KeepAlive
+	}
 	item.Config, err = json.Marshal(config)
 	if err != nil {
 		return integration.ChatResult{}, err
 	}
-	response, err := client.Chat(ctx, item, secret, prompt)
+	callContext, cancel := context.WithTimeout(ctx, time.Duration(settings.Timeout)*time.Second)
+	defer cancel()
+	response, err := client.Chat(callContext, item, secret, prompt)
 	if err != nil {
-		return integration.ChatResult{}, fmt.Errorf("model card %q: %w", node.Key, err)
+		return integration.ChatResult{}, err
 	}
-	adapters.Telemetry.Record(response)
 	return response, nil
 }
 
 func configuredModelIntegration(ctx context.Context, node Node, adapters Adapters) (integration.Integration, error) {
+	return configuredModelIntegrationForProfile(ctx, node, adapters, "")
+}
+
+func configuredModelIntegrationForProfile(ctx context.Context, node Node, adapters Adapters, profileOverride string) (integration.Integration, error) {
 	profileKey, _ := node.Config["model_profile"].(string)
+	if profileOverride != "" {
+		profileKey = profileOverride
+	}
 	if profileKey == "" {
 		return configuredIntegration(ctx, node, adapters, "model")
 	}
@@ -1494,6 +1967,9 @@ func formattedReviewBody(review FormattedReview, event string, telemetry Telemet
 		} else {
 			lines = append(lines, fmt.Sprintf("> tokens: %d", telemetry.Total))
 		}
+	}
+	if telemetry.CostUSD > 0 {
+		lines = append(lines, fmt.Sprintf("> custo estimado: USD %.6f", telemetry.CostUSD))
 	}
 	lines = append(lines, "")
 	switch review.Summary.Total {

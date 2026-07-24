@@ -16,6 +16,26 @@ import (
 
 type memoryIntegrations map[string]integration.Integration
 type memoryModelProfiles map[string]integration.ModelProfile
+type memoryWorkflows struct {
+	definitions map[int64]Definition
+	statuses    map[int64]string
+}
+
+func (items memoryWorkflows) Load(_ context.Context, id int64) (Definition, error) {
+	item, ok := items.definitions[id]
+	if !ok {
+		return Definition{}, errors.New("not found")
+	}
+	return item, nil
+}
+
+func (items memoryWorkflows) VersionStatus(_ context.Context, id int64) (string, error) {
+	status, ok := items.statuses[id]
+	if !ok {
+		return "", errors.New("not found")
+	}
+	return status, nil
+}
 
 type memoryCache struct {
 	values  map[string][]byte
@@ -186,6 +206,157 @@ func TestRunRoutesConditionToSelectedPort(t *testing.T) {
 	}
 	if len(report.Runs) != 3 || report.Runs[2].NodeKey != "log" {
 		t.Fatalf("true branch did not run: %#v", report.Runs)
+	}
+}
+
+func TestDeclarativeTransformAndNamespacedVariableExecution(t *testing.T) {
+	transform := Node{Key: "transform", Type: "transform", Config: map[string]any{"operations": []any{
+		map[string]any{"op": "rename", "path": "pull.owner", "to": "repository.owner"},
+		map[string]any{"op": "set", "path": "policy.severity", "value": "high"},
+		map[string]any{"op": "remove", "path": "secret"},
+	}}}
+	outputs, err := execute(context.Background(), transform, map[string][]any{"input": {map[string]any{"pull": map[string]any{"owner": "acme"}, "secret": "remove"}}}, nil, Adapters{}, rootScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := outputs["output"].(map[string]any)
+	if value["repository"].(map[string]any)["owner"] != "acme" || value["policy"].(map[string]any)["severity"] != "high" {
+		t.Fatalf("transformed value = %#v", value)
+	}
+	if _, exists := value["secret"]; exists {
+		t.Fatalf("remove operation kept secret: %#v", value)
+	}
+
+	definition := Definition{Key: "variables", Name: "Variables", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start"},
+		{Key: "set", Type: "variable", Name: "Set", Config: map[string]any{"action": "set", "namespace": "execution", "name": "decision"}},
+		{Key: "get", Type: "variable", Name: "Get", Config: map[string]any{"action": "get", "namespace": "execution", "name": "decision"}},
+	}, Edges: []Edge{
+		{Key: "set-value", FromNode: "start", FromPort: "event", ToNode: "set", ToPort: "value"},
+		{Key: "get-after-set", FromNode: "set", FromPort: "value", ToNode: "get", ToPort: "value"},
+	}}
+	report, err := Run(context.Background(), definition, DefaultCatalog(), map[string]any{"result": "safe"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := outputFor(t, report, "get", "value").(map[string]any)["result"]; got != "safe" {
+		t.Fatalf("namespaced variable = %#v", got)
+	}
+}
+
+func TestConditionMultipleBranchesAndMergePolicies(t *testing.T) {
+	t.Run("multiple branch skips non-selected route", func(t *testing.T) {
+		definition := Definition{Key: "branches", Name: "Branches", Nodes: []Node{
+			{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": map[string]any{"language": "go"}}},
+			{Key: "condition", Type: "condition", Name: "Condition", Config: map[string]any{"branches": []any{
+				map[string]any{"port": "match_1", "path": "language", "operator": "equals", "value": "go"},
+				map[string]any{"port": "match_2", "path": "language", "operator": "equals", "value": "typescript"},
+			}}},
+			{Key: "go", Type: "transform", Name: "Go"},
+			{Key: "typescript", Type: "transform", Name: "TypeScript"},
+		}, Edges: []Edge{
+			{Key: "input", FromNode: "start", FromPort: "event", ToNode: "condition", ToPort: "input"},
+			{Key: "go", FromNode: "condition", FromPort: "match_1", ToNode: "go", ToPort: "input"},
+			{Key: "ts", FromNode: "condition", FromPort: "match_2", ToNode: "typescript", ToPort: "input"},
+		}}
+		report, err := Run(context.Background(), definition, DefaultCatalog(), nil)
+		if err != nil || len(nodeScopes(report, "go")) != 1 || len(nodeScopes(report, "typescript")) != 0 {
+			t.Fatalf("branch report = %#v, %v", report, err)
+		}
+	})
+
+	t.Run("any returns first arrival", func(t *testing.T) {
+		definition := mergePolicyDefinition("any", 0, 0)
+		report, err := Run(context.Background(), definition, DefaultCatalog(), map[string]any{"value": 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := outputFor(t, report, "merge", "output").(map[string]any); !ok {
+			t.Fatalf("any output = %#v", outputFor(t, report, "merge", "output"))
+		}
+	})
+
+	t.Run("quorum runs at threshold", func(t *testing.T) {
+		definition := mergePolicyDefinition("quorum", 2, 0)
+		report, err := Run(context.Background(), definition, DefaultCatalog(), map[string]any{"value": 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		values := outputFor(t, report, "merge", "output").([]any)
+		if len(values) != 2 {
+			t.Fatalf("quorum output = %#v", values)
+		}
+	})
+
+	t.Run("timeout releases partial all join", func(t *testing.T) {
+		definition := Definition{Key: "timeout", Name: "Timeout", Nodes: []Node{
+			{Key: "start", Type: "trigger", Name: "Start", Config: map[string]any{"event": "go"}},
+			{Key: "condition", Type: "condition", Name: "Condition", Config: map[string]any{"branches": []any{map[string]any{"port": "match_1", "operator": "equals", "value": "go"}}}},
+			{Key: "merge", Type: "merge", Name: "Merge", Config: map[string]any{"mode": "all", "timeout_ms": 1}},
+		}, Edges: []Edge{
+			{Key: "input", FromNode: "start", FromPort: "event", ToNode: "condition", ToPort: "input"},
+			{Key: "one", FromNode: "condition", FromPort: "match_1", ToNode: "merge", ToPort: "inputs"},
+			{Key: "two", FromNode: "condition", FromPort: "match_2", ToNode: "merge", ToPort: "inputs"},
+		}}
+		report, err := Run(context.Background(), definition, DefaultCatalog(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run := nodeRunFor(t, report, "merge", rootScope)
+		if run.Metadata["timed_out"] != true || len(run.Outputs[0].Value.([]any)) != 1 {
+			t.Fatalf("timeout merge = %#v", run)
+		}
+	})
+}
+
+func mergePolicyDefinition(mode string, quorum, timeout int) Definition {
+	config := map[string]any{"mode": mode}
+	if quorum > 0 {
+		config["quorum"] = quorum
+	}
+	if timeout > 0 {
+		config["timeout_ms"] = timeout
+	}
+	return Definition{Key: mode, Name: mode, Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start"},
+		{Key: "one", Type: "transform", Name: "One"},
+		{Key: "two", Type: "transform", Name: "Two"},
+		{Key: "three", Type: "transform", Name: "Three"},
+		{Key: "merge", Type: "merge", Name: "Merge", Config: config},
+	}, Edges: []Edge{
+		{Key: "one-in", FromNode: "start", FromPort: "event", ToNode: "one", ToPort: "input"},
+		{Key: "two-in", FromNode: "start", FromPort: "event", ToNode: "two", ToPort: "input"},
+		{Key: "three-in", FromNode: "start", FromPort: "event", ToNode: "three", ToPort: "input"},
+		{Key: "one-out", FromNode: "one", FromPort: "output", ToNode: "merge", ToPort: "inputs"},
+		{Key: "two-out", FromNode: "two", FromPort: "output", ToNode: "merge", ToPort: "inputs"},
+		{Key: "three-out", FromNode: "three", FromPort: "output", ToNode: "merge", ToPort: "inputs"},
+	}}
+}
+
+func TestPublishedSubpipelineRunsByPinnedInterface(t *testing.T) {
+	child := Definition{Key: "child", Name: "Child", Interface: &WorkflowInterface{
+		Inputs:  []InterfaceField{{Key: "payload", Contract: "any", Required: true}},
+		Outputs: []InterfaceField{{Key: "result", Contract: "any", Required: true, NodeKey: "transform", PortKey: "output"}},
+	}, Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start"},
+		{Key: "transform", Type: "transform", Name: "Transform"},
+	}, Edges: []Edge{{Key: "input", FromNode: "start", FromPort: "event", ToNode: "transform", ToPort: "input"}}}
+	parent := Definition{Key: "parent", Name: "Parent", Nodes: []Node{
+		{Key: "start", Type: "trigger", Name: "Start"},
+		{Key: "child", Type: "workflow", Name: "Child", Config: map[string]any{"workflow_key": "child", "workflow_version_id": 2}},
+	}, Edges: []Edge{{Key: "input", FromNode: "start", FromPort: "event", ToNode: "child", ToPort: "input"}}}
+	resolver := memoryWorkflows{definitions: map[int64]Definition{2: child}, statuses: map[int64]string{2: VersionStatusPublished}}
+	report, err := RunWithAdapters(context.Background(), parent, DefaultCatalog(), map[string]any{"payload": "ok"}, Adapters{Workflows: resolver, Execution: ExecutionContext{VersionID: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := outputFor(t, report, "child", "output").(map[string]any)
+	if result["payload"] != "ok" {
+		t.Fatalf("subpipeline output = %#v", result)
+	}
+	parent.Nodes[1].Config["workflow_version_id"] = 1
+	if _, err = RunWithAdapters(context.Background(), parent, DefaultCatalog(), nil, Adapters{Workflows: resolver, Execution: ExecutionContext{VersionID: 1}}); err == nil {
+		t.Fatal("expected recursive subpipeline to be rejected")
 	}
 }
 
@@ -360,6 +531,117 @@ type trackingModel struct {
 	block       time.Duration
 }
 
+type deadlineModel struct {
+	deadline time.Time
+	config   map[string]string
+}
+
+type profileFallbackModel struct {
+	calls []string
+}
+
+func (model *profileFallbackModel) Chat(_ context.Context, item integration.Integration, _ string, _ string) (integration.ChatResult, error) {
+	config, _ := item.ConfigValues()
+	model.calls = append(model.calls, config["model"])
+	if config["model"] == "primary" {
+		return integration.ChatResult{}, errors.New("provider unavailable")
+	}
+	return integration.ChatResult{Content: "fallback response", Model: config["model"], Usage: integration.TokenUsage{Prompt: 10, Completion: 5, Total: 15}}, nil
+}
+
+func (m *deadlineModel) Chat(ctx context.Context, item integration.Integration, _ string, _ string) (integration.ChatResult, error) {
+	m.deadline, _ = ctx.Deadline()
+	m.config, _ = item.ConfigValues()
+	return integration.ChatResult{Content: "ok"}, nil
+}
+
+func TestModelSettingsValidateSamplingTimeoutAndKeepAlive(t *testing.T) {
+	valid := Node{Key: "model", Config: map[string]any{
+		"temperature":     0.3,
+		"top_p":           0.8,
+		"timeout_seconds": 45,
+		"keep_alive":      "10m",
+	}}
+	settings, err := modelSettingsFor(valid)
+	if err != nil || *settings.Temperature != 0.3 || *settings.TopP != 0.8 || settings.Timeout != 45 || settings.KeepAlive != "10m" {
+		t.Fatalf("settings = %#v, %v", settings, err)
+	}
+	for key, value := range map[string]any{
+		"temperature":     2.1,
+		"top_p":           0,
+		"timeout_seconds": 3601,
+		"keep_alive":      "25h",
+	} {
+		node := Node{Key: "model", Config: map[string]any{key: value}}
+		if _, err := modelSettingsFor(node); err == nil {
+			t.Fatalf("expected %s=%v to be rejected", key, value)
+		}
+	}
+}
+
+func TestModelResponseAppliesRequestSettingsAndDeadline(t *testing.T) {
+	config, _ := json.Marshal(map[string]string{"base_url": "https://model.example", "model": "reviewer"})
+	client := &deadlineModel{}
+	node := Node{Key: "model", Type: "model", Config: map[string]any{
+		"integration":     "model",
+		"temperature":     0.4,
+		"top_p":           0.7,
+		"timeout_seconds": 2,
+		"keep_alive":      "5m",
+	}}
+	_, err := modelResponse(context.Background(), node, "review", Adapters{
+		Integrations: memoryIntegrations{"model": encryptedIntegration(t, integration.Integration{Key: "model", Name: "Model", Type: integration.TypeOllama, Config: config, Status: integration.StatusActive}, "secret")},
+		Secrets:      testSecrets(t),
+		Ollama:       client,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining := time.Until(client.deadline)
+	if remaining <= 0 || remaining > 2*time.Second {
+		t.Fatalf("deadline remaining = %s", remaining)
+	}
+	for key, want := range map[string]string{"temperature": "0.4", "top_p": "0.7", "keep_alive": "5m", "max_tokens": "2000"} {
+		if client.config[key] != want {
+			t.Fatalf("config[%s] = %q, want %q", key, client.config[key], want)
+		}
+	}
+}
+
+func TestModelFallbackAndCostBudget(t *testing.T) {
+	config, _ := json.Marshal(map[string]string{"base_url": "https://model.example"})
+	client := &profileFallbackModel{}
+	telemetry := NewExecutionTelemetry(time.Now())
+	node := Node{Key: "model", Type: "model", Config: map[string]any{
+		"model_profile":               "primary",
+		"fallback_model_profile":      "fallback",
+		"max_tokens":                  100,
+		"input_cost_per_million_usd":  1.0,
+		"output_cost_per_million_usd": 2.0,
+		"max_cost_usd":                0.001,
+	}}
+	result, err := modelResponse(context.Background(), node, "review", Adapters{
+		Integrations: memoryIntegrations{"provider": encryptedIntegration(t, integration.Integration{Key: "provider", Name: "Provider", Type: integration.TypeOpenAI, Config: config, Status: integration.StatusActive}, "secret")},
+		ModelProfiles: memoryModelProfiles{
+			"primary":  {Key: "primary", Name: "Primary", IntegrationKey: "provider", Model: "primary", Status: integration.StatusActive},
+			"fallback": {Key: "fallback", Name: "Fallback", IntegrationKey: "provider", Model: "fallback", Status: integration.StatusActive},
+		},
+		Secrets: testSecrets(t), OpenAI: client, Telemetry: telemetry,
+	})
+	if err != nil || result.Content != "fallback response" || !result.FallbackUsed || len(client.calls) != 2 {
+		t.Fatalf("fallback result = %#v, calls = %#v, err = %v", result, client.calls, err)
+	}
+	if result.CostUSD < 0.0000199 || result.CostUSD > 0.0000201 || telemetry.LastCallMetadata()["fallback_used"] != true {
+		t.Fatalf("cost telemetry = %#v, result = %#v", telemetry.LastCallMetadata(), result)
+	}
+
+	node.Config["max_cost_usd"] = 0.000001
+	client.calls = nil
+	if _, err = modelResponse(context.Background(), node, "review", Adapters{}); err == nil || len(client.calls) != 0 {
+		t.Fatalf("expected pre-call budget rejection, calls = %#v, err = %v", client.calls, err)
+	}
+}
+
 func (m *trackingModel) Chat(ctx context.Context, _ integration.Integration, _ string, _ string) (integration.ChatResult, error) {
 	m.mu.Lock()
 	m.inFlight++
@@ -463,7 +745,7 @@ func TestRunWithAdaptersExecutesFetchAndModelCards(t *testing.T) {
 			case "/api/v1/repos/acme/api/pulls/12/files":
 				_, _ = writer.Write([]byte(`[{"filename":"api.go"}]`))
 			case "/api/v1/repos/acme/api/pulls/12.diff":
-				_, _ = writer.Write([]byte("diff --git a/api.go b/api.go"))
+				_, _ = writer.Write([]byte("diff --git a/api.go b/api.go\n--- a/api.go\n+++ b/api.go\n@@ -1 +1,2 @@\n package api\n+func Added() {}"))
 			default:
 				http.NotFound(writer, request)
 			}
@@ -485,7 +767,7 @@ func TestRunWithAdaptersExecutesFetchAndModelCards(t *testing.T) {
 				result = output.Value.(integration.PullRequest)
 			}
 		}
-		if result.Diff == "" || result.Files[0]["filename"] != "api.go" {
+		if result.Diff == "" || result.Files[0]["filename"] != "api.go" || !strings.Contains(result.Files[0]["patch"].(string), "+func Added() {}") {
 			t.Fatalf("unexpected fetch result: %#v", result)
 		}
 	})

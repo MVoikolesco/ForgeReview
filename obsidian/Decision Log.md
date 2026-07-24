@@ -1,5 +1,16 @@
 # Decision Log
 
+## 2026-07-24: Complete catalog contracts remain bounded and version-pinned
+
+Model cards own bounded sampling, timeout, one fallback profile, per-card
+pricing, and a pre-call worst-case cost reservation. Transformations use a
+fixed operation set instead of scripts. Variables use controlled namespaces.
+Joins use explicit all/any/quorum policies and bounded partial timeout.
+Subpipelines reference immutable versions that were published, expose named
+interfaces, and reject cycles and excessive depth. Frontend validation remains
+advisory and backend publication/runtime remain authoritative. See
+[[Architecture]] and `docs/card-catalog-stage-5.md`.
+
 ## 2026-07-23: Version-scoped workflow deletion preserves retained evidence
 
 Deletion is admin-only and targets exactly one draft or archived workflow
