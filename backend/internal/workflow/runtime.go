@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1287,16 +1288,23 @@ func (r *scopedRunner) runCandidateValidator(ctx context.Context, node Node, sco
 		return nil, nil, err
 	}
 	allowedChecks := map[string]bool{}
+	minimumContexts := map[string]string{}
 	checklistConfigured := false
 	if contractConfigured(contract) {
 		checklistConfigured = true
 		for _, item := range contract.Checklist.Items {
 			allowedChecks[item.CheckID] = true
+			minimumContexts[item.CheckID] = item.MinimumContext
 		}
 	} else {
-		allowedChecks, checklistConfigured, err = checklistCheckIDs(node.Config)
+		var checklist ReviewChecklistSnapshot
+		checklist, checklistConfigured, err = reviewChecklistFromConfig(node.Config)
 		if err != nil {
 			return nil, nil, err
+		}
+		for _, item := range checklist.Items {
+			allowedChecks[item.CheckID] = true
+			minimumContexts[item.CheckID] = item.MinimumContext
 		}
 	}
 	filesByPath := map[string]map[string]any{}
@@ -1314,6 +1322,11 @@ func (r *scopedRunner) runCandidateValidator(ctx context.Context, node Node, sco
 	seenFingerprints := map[string]int{}
 	for index := range candidates {
 		candidate := &candidates[index]
+		if checklistConfigured && !allowedChecks[candidate.CheckID] {
+			candidate.Status = CandidateNotApplicable
+			candidate.DecisionReason = "check_id is not part of the configured checklist version"
+			continue
+		}
 		file := filesByPath[candidate.Path]
 		if file == nil {
 			candidate.Status = CandidateNotObservable
@@ -1326,9 +1339,14 @@ func (r *scopedRunner) runCandidateValidator(ctx context.Context, node Node, sco
 			continue
 		}
 		candidate.Fingerprint = candidateFingerprint(*candidate, file)
-		if checklistConfigured && !allowedChecks[candidate.CheckID] {
-			candidate.Status = CandidateNotApplicable
-			candidate.DecisionReason = "check_id is not part of the configured checklist version"
+		if missing, observable := missingSemanticContexts(file, []string{minimumContexts[candidate.CheckID]}); observable && len(missing) > 0 {
+			candidate.Status = CandidateNotObservable
+			candidate.DecisionReason = "the semantic unit does not provide the checklist minimum context: " + strings.Join(missing, ", ")
+			continue
+		}
+		if missing, observable := missingSemanticContexts(file, candidate.RequiredContext); observable && len(missing) > 0 {
+			candidate.Status = CandidateNeedsContext
+			candidate.DecisionReason = "the candidate requires context outside the semantic unit: " + strings.Join(missing, ", ")
 			continue
 		}
 		if first, duplicate := seenFingerprints[candidate.Fingerprint]; duplicate {
@@ -1373,12 +1391,47 @@ func (r *scopedRunner) runCandidateValidator(ctx context.Context, node Node, sco
 	}
 	if r.adapters.Coverage != nil && r.adapters.Execution.ID > 0 && contractConfigured(contract) {
 		records := completedCoverage(r.adapters.Execution.ID, node.Key, scopeKey, contract, candidates, time.Since(started).Milliseconds())
+		if unit, ok := semanticUnitFromValues(inputs["files"]); ok {
+			records = coverageForUnit(records, unit.UnitID)
+			records = coverageWithSemanticObservability(records, unit)
+		}
 		if err = r.adapters.Coverage.RecordCoverage(ctx, records); err != nil {
 			return nil, metadata, fmt.Errorf("candidate validator card %q persist coverage: %w", node.Key, err)
 		}
 		metadata["coverage_checks"] = len(contract.Checklist.Items)
 	}
 	return map[string]any{"confirmed": confirmed, "decisions": candidates}, metadata, nil
+}
+
+func missingSemanticContexts(file map[string]any, required []string) ([]string, bool) {
+	raw, exists := file["_forgereview_available_context"]
+	if !exists {
+		return nil, false
+	}
+	available := map[string]bool{}
+	switch items := raw.(type) {
+	case []string:
+		for _, item := range items {
+			available[item] = true
+		}
+	case []any:
+		for _, item := range items {
+			if value, ok := item.(string); ok {
+				available[value] = true
+			}
+		}
+	}
+	missing := make([]string, 0)
+	seen := map[string]bool{}
+	for _, item := range required {
+		item = strings.TrimSpace(item)
+		if item != "" && !available[item] && !seen[item] {
+			missing = append(missing, item)
+			seen[item] = true
+		}
+	}
+	sort.Strings(missing)
+	return missing, true
 }
 
 func metricCount(metadata map[string]any, key string) int {
@@ -1705,6 +1758,12 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 			return nil, fmt.Errorf("group card %q: %w", node.Key, err)
 		}
 		return map[string]any{"groups": groups}, nil
+	case "semantic_units":
+		units, err := buildSemanticUnits(inputs["files"], node)
+		if err != nil {
+			return nil, fmt.Errorf("semantic_units card %q: %w", node.Key, err)
+		}
+		return map[string]any{"units": units}, nil
 	case "template":
 		template, _ := node.Config["template"].(string)
 		if template == "" {
@@ -1733,7 +1792,11 @@ func execute(ctx context.Context, node Node, inputs map[string][]any, input map[
 			return nil, fmt.Errorf("template card %q review contract: %w", node.Key, err)
 		}
 		if adapters.Coverage != nil && adapters.Execution.ID > 0 {
-			if err = adapters.Coverage.RecordCoverage(ctx, plannedCoverage(adapters.Execution.ID, node.Key, scopeKey, contract)); err != nil {
+			records := plannedCoverage(adapters.Execution.ID, node.Key, scopeKey, contract)
+			if unit, ok := semanticUnitFromValues(inputs["context"]); ok {
+				records = coverageForUnit(records, unit.UnitID)
+			}
+			if err = adapters.Coverage.RecordCoverage(ctx, records); err != nil {
 				return nil, fmt.Errorf("template card %q persist planned coverage: %w", node.Key, err)
 			}
 		}
@@ -1908,7 +1971,7 @@ func renderTemplatePrompt(template string, contextValues []any) (string, error) 
 	} else {
 		template += "\n\n" + contextBlock
 	}
-	if containsFileGroup(contextValues) {
+	if containsReviewContext(contextValues) {
 		if strings.Contains(strings.ToLower(template), "candidatefinding") || strings.Contains(strings.ToLower(template), "candidato") {
 			template += "\n\nContrato obrigatório: responda somente JSON puro, sem markdown. Cada candidato deve conter check_id, claim, scenario, impact, evidence (lista não vazia), confidence entre 0 e 1, required_context, symbol, issue_type, affected_entity, path, line, comment e severity (low|medium|high|critical). Use symbol=\"<file>\" para problemas de escopo de arquivo. issue_type e affected_entity devem ser identificadores semânticos estáveis, independentes da redação do comentário. Não inclua status nem fingerprint: ambos pertencem ao sistema. Analise somente comportamentos concretos introduzidos pelo diff e sustentados pelo código mostrado. O campo line deve apontar para uma linha '+' do arquivo novo. Não invente evidência, caminho ou linha. Se não houver candidato concreto e acionável, responda []."
 		} else {
@@ -1918,9 +1981,12 @@ func renderTemplatePrompt(template string, contextValues []any) (string, error) 
 	return template, nil
 }
 
-func containsFileGroup(values []any) bool {
+func containsReviewContext(values []any) bool {
 	for _, value := range values {
 		if _, ok := value.(FileGroup); ok {
+			return true
+		}
+		if _, ok := value.(SemanticUnit); ok {
 			return true
 		}
 	}

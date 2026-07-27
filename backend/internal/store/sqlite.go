@@ -103,6 +103,10 @@ func Open(path string) (*SQLite, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = store.ensureCoverageUnitColumn(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err = store.seedReviewContracts(context.Background()); err != nil {
 		db.Close()
 		return nil, err
@@ -193,11 +197,11 @@ func (s *SQLite) RecordCoverage(ctx context.Context, records []workflow.Coverage
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO review_coverage(
-			execution_id,scope_key,node_key,contract_key,contract_version,check_id,category,minimum_context,planned,status,
+			execution_id,scope_key,unit_id,node_key,contract_key,contract_version,check_id,category,minimum_context,planned,status,
 			candidates_generated,candidates_validated,confirmed,rejected,needs_context,not_observable,not_applicable,attempts,duration_ms,completed_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?='PLANNED' THEN NULL ELSE CURRENT_TIMESTAMP END)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?='PLANNED' THEN NULL ELSE CURRENT_TIMESTAMP END)
 			ON CONFLICT(execution_id,scope_key,contract_key,contract_version,check_id) DO UPDATE SET
-			node_key=excluded.node_key,category=excluded.category,minimum_context=excluded.minimum_context,
+			unit_id=excluded.unit_id,node_key=excluded.node_key,category=excluded.category,minimum_context=excluded.minimum_context,
 			planned=MAX(review_coverage.planned,excluded.planned),
 			status=CASE WHEN excluded.status='PLANNED' AND review_coverage.status<>'PLANNED' THEN review_coverage.status ELSE excluded.status END,
 			candidates_generated=CASE WHEN excluded.status='PLANNED' THEN review_coverage.candidates_generated ELSE excluded.candidates_generated END,
@@ -210,7 +214,7 @@ func (s *SQLite) RecordCoverage(ctx context.Context, records []workflow.Coverage
 			attempts=CASE WHEN excluded.status='PLANNED' THEN review_coverage.attempts ELSE excluded.attempts END,
 			duration_ms=CASE WHEN excluded.status='PLANNED' THEN review_coverage.duration_ms ELSE excluded.duration_ms END,
 			completed_at=CASE WHEN excluded.status='PLANNED' THEN review_coverage.completed_at ELSE CURRENT_TIMESTAMP END`,
-			record.ExecutionID, record.ScopeKey, record.NodeKey, record.ContractKey, record.ContractVersion,
+			record.ExecutionID, record.ScopeKey, record.UnitID, record.NodeKey, record.ContractKey, record.ContractVersion,
 			record.CheckID, record.Category, record.MinimumContext, record.Planned, record.Status,
 			record.CandidatesGenerated, record.CandidatesValidated, record.Confirmed, record.Rejected,
 			record.NeedsContext, record.NotObservable, record.NotApplicable, record.Attempts, record.DurationMS, record.Status)
@@ -228,7 +232,7 @@ func (s *SQLite) CoverageComplete(ctx context.Context, executionID int64) (bool,
 }
 
 func (s *SQLite) Coverage(ctx context.Context, executionID int64) (workflow.CoverageSummary, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT execution_id,scope_key,node_key,contract_key,contract_version,check_id,category,minimum_context,planned,status,
+	rows, err := s.db.QueryContext(ctx, `SELECT execution_id,scope_key,unit_id,node_key,contract_key,contract_version,check_id,category,minimum_context,planned,status,
 		candidates_generated,candidates_validated,confirmed,rejected,needs_context,not_observable,not_applicable,attempts,duration_ms
 		FROM review_coverage WHERE execution_id=? ORDER BY scope_key,planned DESC,check_id`, executionID)
 	if err != nil {
@@ -238,7 +242,7 @@ func (s *SQLite) Coverage(ctx context.Context, executionID int64) (workflow.Cove
 	summary := workflow.CoverageSummary{Items: []workflow.CoverageRecord{}}
 	for rows.Next() {
 		var item workflow.CoverageRecord
-		if err = rows.Scan(&item.ExecutionID, &item.ScopeKey, &item.NodeKey, &item.ContractKey, &item.ContractVersion,
+		if err = rows.Scan(&item.ExecutionID, &item.ScopeKey, &item.UnitID, &item.NodeKey, &item.ContractKey, &item.ContractVersion,
 			&item.CheckID, &item.Category, &item.MinimumContext, &item.Planned, &item.Status,
 			&item.CandidatesGenerated, &item.CandidatesValidated, &item.Confirmed, &item.Rejected,
 			&item.NeedsContext, &item.NotObservable, &item.NotApplicable, &item.Attempts, &item.DurationMS); err != nil {
@@ -679,16 +683,33 @@ func (s *SQLite) EnsureOfficialReviewWorkflow(ctx context.Context, catalog workf
 	err = tx.QueryRowContext(ctx, `SELECT id,version,status,created_at,definition_json FROM workflow_versions WHERE workflow_key=? AND status=?`, definition.Key, workflow.VersionStatusPublished).Scan(&existing.ID, &existing.Version, &existing.Status, &existing.CreatedAt, &existingPayload)
 	if err == nil {
 		var stored workflow.Definition
-		legacyJSON, _ := json.Marshal(workflow.PreviousOfficialReviewDefinition())
-		previousJSON, _ := json.Marshal(workflow.PreviousVerifiableReviewDefinition())
-		previousCandidateJSON, _ := json.Marshal(workflow.PreviousCandidateReviewDefinition())
-		previousChecklistJSON, _ := json.Marshal(workflow.PreviousChecklistReviewDefinition())
 		storedJSON := []byte(existingPayload)
 		if json.Unmarshal(storedJSON, &stored) != nil {
 			return workflow.VersionSummary{}, false, fmt.Errorf("decode existing official workflow")
 		}
-		normalized, _ := json.Marshal(stored)
-		if string(normalized) != string(legacyJSON) && string(normalized) != string(previousJSON) && string(normalized) != string(previousCandidateJSON) && string(normalized) != string(previousChecklistJSON) {
+		normalized, normalizeErr := normalizedWorkflowDefinitionJSON(stored)
+		if normalizeErr != nil {
+			return workflow.VersionSummary{}, false, fmt.Errorf("normalize existing official workflow: %w", normalizeErr)
+		}
+		matchesPreviousSeed := false
+		for _, previous := range []workflow.Definition{
+			workflow.PreviousOfficialReviewDefinition(),
+			workflow.PreviousVerifiableReviewDefinition(),
+			workflow.PreviousCandidateReviewDefinition(),
+			workflow.PreviousChecklistReviewDefinition(),
+			workflow.PreviousContractReviewDefinition(),
+			workflow.PreviousSemanticReviewDefinition(),
+		} {
+			previousJSON, previousErr := normalizedWorkflowDefinitionJSON(previous)
+			if previousErr != nil {
+				return workflow.VersionSummary{}, false, fmt.Errorf("normalize previous official workflow: %w", previousErr)
+			}
+			if normalized == previousJSON {
+				matchesPreviousSeed = true
+				break
+			}
+		}
+		if !matchesPreviousSeed {
 			if err = tx.Commit(); err != nil {
 				return workflow.VersionSummary{}, false, err
 			}
@@ -726,6 +747,19 @@ func (s *SQLite) EnsureOfficialReviewWorkflow(ctx context.Context, catalog workf
 		return workflow.VersionSummary{}, false, err
 	}
 	return existing, true, nil
+}
+
+func normalizedWorkflowDefinitionJSON(definition workflow.Definition) (string, error) {
+	payload, err := json.Marshal(definition)
+	if err != nil {
+		return "", err
+	}
+	var normalized workflow.Definition
+	if err = json.Unmarshal(payload, &normalized); err != nil {
+		return "", err
+	}
+	payload, err = json.Marshal(normalized)
+	return string(payload), err
 }
 
 func (s *SQLite) Load(ctx context.Context, id int64) (workflow.Definition, error) {
@@ -1257,8 +1291,8 @@ func (s *SQLite) PublishedVersion(ctx context.Context, workflowKey string) (int6
 }
 
 // DeleteWorkflowVersion removes one non-published immutable version only when
-// retained execution, publication, webhook, and audit evidence does not refer
-// to it. Historical evidence is never deleted.
+// retained execution, publication, and webhook evidence does not depend on it.
+// Audit entries use a textual target and intentionally survive the deletion.
 func (s *SQLite) DeleteWorkflowVersion(ctx context.Context, id, actorID int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1294,12 +1328,6 @@ func (s *SQLite) DeleteWorkflowVersion(ctx context.Context, id, actorID int64) e
 	}
 	if count > 0 {
 		reasons = append(reasons, "webhook registrations")
-	}
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_log WHERE target=?`, fmt.Sprintf("workflow_version:%d", id)).Scan(&count); err != nil {
-		return err
-	}
-	if count > 0 {
-		reasons = append(reasons, "audit history")
 	}
 	if len(reasons) > 0 {
 		return fmt.Errorf("%w: %s", ErrWorkflowVersionDeletionBlocked, strings.Join(reasons, ", "))
@@ -1908,6 +1936,7 @@ CREATE TABLE IF NOT EXISTS workflow_execution_sensitive (
 CREATE TABLE IF NOT EXISTS review_coverage (
  execution_id INTEGER NOT NULL REFERENCES workflow_executions(id) ON DELETE CASCADE,
  scope_key TEXT NOT NULL,
+ unit_id TEXT NOT NULL DEFAULT '',
  node_key TEXT NOT NULL,
  contract_key TEXT NOT NULL,
  contract_version INTEGER NOT NULL,
@@ -2076,6 +2105,29 @@ func (s *SQLite) ensureExecutionRetryColumns(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *SQLite) ensureCoverageUnitColumn(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(review_coverage)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		found = found || name == "unit_id"
+	}
+	if err = rows.Err(); err != nil || found {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE review_coverage ADD COLUMN unit_id TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 func (s *SQLite) ensureUserActiveColumn(ctx context.Context) error {

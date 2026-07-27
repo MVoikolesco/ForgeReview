@@ -7,7 +7,8 @@ import (
 
 func TestResponseContractsAreStableAndCompile(t *testing.T) {
 	contracts := ResponseContracts()
-	if len(contracts) != 5 || contracts[0].Key != "review.findings.v1" || contracts[1].Key != "review.candidate-findings.v1" || contracts[0].Editable {
+	if len(contracts) != 6 || contracts[0].Key != "review.findings.v1" || contracts[1].Key != "review.candidate-findings.v1" ||
+		contracts[2].Key != "review.candidate-findings.v2" || contracts[2].Version != 2 || contracts[0].Editable {
 		t.Fatalf("unexpected contracts: %#v", contracts)
 	}
 	for _, contract := range contracts {

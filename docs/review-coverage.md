@@ -1,7 +1,7 @@
 # Ledger de cobertura
 
-O ledger registra cobertura por execução, unidade (`scope_key` do loop), versão
-de contrato e `check_id`.
+O ledger registra cobertura por execução, unidade (`unit_id` e `scope_key` do
+loop), versão de contrato e `check_id`.
 
 ## Ciclo
 

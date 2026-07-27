@@ -15,7 +15,7 @@ func TestOpenSeedsImmutableReviewContractVersions(t *testing.T) {
 	defer database.Close()
 
 	items, err := database.ReviewContracts(context.Background())
-	if err != nil || len(items) != 7 {
+	if err != nil || len(items) != 14 {
 		t.Fatalf("review contracts = %#v, %v", items, err)
 	}
 	item, err := database.ReviewContract(context.Background(), workflow.OfficialPullRequestContractKey, 1)

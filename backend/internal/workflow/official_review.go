@@ -12,6 +12,134 @@ const (
 // model-profile records before creating an executable derivative. PR identity
 // always flows through the typed event and pull_request ports.
 func OfficialReviewDefinition() Definition {
+	definition := Definition{
+		Key:         OfficialReviewWorkflowKey,
+		Name:        "Official Gitea PR Review",
+		Description: "Pipeline semântica com reviewers especializados, contratos versionados, validação independente, cobertura e publicação nativa no Gitea.",
+		Nodes: []Node{
+			{Key: "trigger", Type: "trigger", Name: "Webhook Gitea", Position: Position{X: 40, Y: 650}, Config: map[string]any{"mode": "webhook"}},
+			{Key: "fetch", Type: "fetch", Name: "Buscar dados do PR", Position: Position{X: 315, Y: 650}, Config: map[string]any{"integration": ""}},
+			{Key: "filter", Type: "filter", Name: "Filtrar arquivos", Position: Position{X: 610, Y: 650}, Config: map[string]any{"include_extensions": []string{".go", ".ts", ".tsx", ".php"}, "ignore_generated": true}},
+			{Key: "semantic-units", Type: "semantic_units", Name: "Criar unidades semânticas", Position: Position{X: 900, Y: 650}, Config: map[string]any{"max_units": 200, "max_characters": 50000, "context_lines": 4}},
+			{Key: "loop", Type: "loop", Name: "Revisar cada unidade", Position: Position{X: 1190, Y: 650}, Config: map[string]any{"max_iterations": 200, "concurrency": 1, "on_error": "fail"}},
+		},
+		Edges: []Edge{
+			{Key: "trigger-fetch", FromNode: "trigger", FromPort: "event", ToNode: "fetch", ToPort: "event"},
+			{Key: "fetch-filter", FromNode: "fetch", FromPort: "files", ToNode: "filter", ToPort: "files"},
+			{Key: "filter-semantic-units", FromNode: "filter", FromPort: "files", ToNode: "semantic-units", ToPort: "files"},
+			{Key: "semantic-units-loop", FromNode: "semantic-units", FromPort: "units", ToNode: "loop", ToPort: "items"},
+		},
+	}
+	for index, reviewer := range officialReviewerSpecs() {
+		y := float64(40 + index*220)
+		templateKey := "template-" + reviewer.Key
+		modelKey := "model-" + reviewer.Key
+		validateKey := "validate-" + reviewer.Key
+		validatorKey := "candidate-validator-" + reviewer.Key
+		filterKey := "response-filter-" + reviewer.Key
+		definition.Nodes = append(definition.Nodes,
+			Node{
+				Key: templateKey, Type: "template", Name: "Tarefa: " + reviewer.Name,
+				Position: Position{X: 1480, Y: y},
+				Config: map[string]any{
+					"template":                reviewer.Prompt,
+					"review_contract_key":     "review." + reviewer.Key,
+					"review_contract_version": 2,
+				},
+			},
+			Node{
+				Key: modelKey, Type: "model", Name: "Reviewer: " + reviewer.Name,
+				Position: Position{X: 1775, Y: y},
+				Config:   map[string]any{"model_profile": "", "max_tokens": 2000, "retry_limit": 0, "retry_delay_ms": 0},
+			},
+			Node{
+				Key: validateKey, Type: "validate", Name: "Validar contrato: " + reviewer.Name,
+				Position: Position{X: 2070, Y: y},
+				Config:   map[string]any{"validate_paths": true},
+			},
+			Node{
+				Key: validatorKey, Type: "candidate_validator", Name: "Confirmar: " + reviewer.Name,
+				Position: Position{X: 2365, Y: y},
+				Config:   map[string]any{"model_profile": "", "max_tokens": 300, "temperature": 0.0, "timeout_seconds": 120},
+			},
+			Node{
+				Key: filterKey, Type: "response_filter", Name: "Filtrar: " + reviewer.Name,
+				Position: Position{X: 2660, Y: y},
+				Config:   map[string]any{"minimum_severity": "medium"},
+			},
+		)
+		definition.Edges = append(definition.Edges,
+			Edge{Key: "loop-" + templateKey, FromNode: "loop", FromPort: "item", ToNode: templateKey, ToPort: "context"},
+			Edge{Key: templateKey + "-" + modelKey, FromNode: templateKey, FromPort: "prompt", ToNode: modelKey, ToPort: "prompt"},
+			Edge{Key: modelKey + "-" + validateKey, FromNode: modelKey, FromPort: "response", ToNode: validateKey, ToPort: "response"},
+			Edge{Key: "loop-" + validateKey, FromNode: "loop", FromPort: "item", ToNode: validateKey, ToPort: "files"},
+			Edge{Key: validateKey + "-" + validatorKey, FromNode: validateKey, FromPort: "valid", ToNode: validatorKey, ToPort: "candidates"},
+			Edge{Key: "loop-" + validatorKey, FromNode: "loop", FromPort: "item", ToNode: validatorKey, ToPort: "files"},
+			Edge{Key: validatorKey + "-" + filterKey, FromNode: validatorKey, FromPort: "confirmed", ToNode: filterKey, ToPort: "response"},
+		)
+	}
+	definition.Nodes = append(definition.Nodes,
+		Node{Key: "consolidate", Type: "consolidate", Name: "Consolidar reviewers", Position: Position{X: 2955, Y: 650}},
+		Node{Key: "format", Type: "format", Name: "Formatar review", Position: Position{X: 3250, Y: 650}},
+		Node{Key: "publish", Type: "publish", Name: "Publicar no Gitea", Position: Position{X: 3545, Y: 650}, Config: map[string]any{"integration": "", "medium_severity_event": "COMMENT", "allow_autonomous_rejection": false}},
+	)
+	definition.Edges = append(definition.Edges,
+		Edge{Key: "loop-consolidate", FromNode: "loop", FromPort: "results", ToNode: "consolidate", ToPort: "comments"},
+		Edge{Key: "consolidate-format", FromNode: "consolidate", FromPort: "review", ToNode: "format", ToPort: "review"},
+		Edge{Key: "format-publish", FromNode: "format", FromPort: "formatted", ToNode: "publish", ToPort: "formatted_review"},
+		Edge{Key: "fetch-publish-target", FromNode: "fetch", FromPort: "pull_request", ToNode: "publish", ToPort: "pull_request"},
+	)
+	return definition
+}
+
+type officialReviewerSpec struct {
+	Key    string
+	Name   string
+	Prompt string
+}
+
+func officialReviewerSpecs() []officialReviewerSpec {
+	return []officialReviewerSpec{
+		{Key: "security", Name: "Segurança", Prompt: "Atue somente como reviewer de segurança desta unidade semântica. Procure bypass concreto de autenticação, autorização ou isolamento de dados introduzido pela alteração. Produza apenas CandidateFinding sustentados por evidência observável; quando faltar contexto, declare required_context. Não confirme nem publique achados. Responda somente uma lista JSON."},
+		{Key: "correctness", Name: "Corretude", Prompt: "Atue somente como reviewer de corretude desta unidade semântica. Procure comportamento incorreto reproduzível, limites quebrados e tratamento de erro defeituoso introduzidos pela alteração. Produza apenas CandidateFinding sustentados por evidência observável; quando faltar contexto, declare required_context. Não confirme nem publique achados. Responda somente uma lista JSON."},
+		{Key: "contracts", Name: "Contratos", Prompt: "Atue somente como reviewer de contratos desta unidade semântica. Procure quebra concreta de API, formato persistido, schema ou integração introduzida pela alteração. Não trate contrato ausente no diff como inexistente; quando não for observável, declare required_context. Não confirme nem publique achados. Responda somente uma lista JSON."},
+		{Key: "performance", Name: "Performance", Prompt: "Atue somente como reviewer de performance desta unidade semântica. Procure regressão material em caminho frequente, trabalho repetido evitável ou crescimento não limitado introduzido pela alteração. Produza apenas CandidateFinding sustentados por evidência observável; quando faltar contexto, declare required_context. Não confirme nem publique achados. Responda somente uma lista JSON."},
+		{Key: "architecture", Name: "Arquitetura", Prompt: "Atue somente como reviewer de arquitetura desta unidade semântica. Procure violação funcional de fronteira, dependência indevida ou efeito externo introduzido no lugar errado. Produza apenas CandidateFinding sustentados por evidência observável; quando faltar contexto, declare required_context. Não confirme nem publique achados. Responda somente uma lista JSON."},
+		{Key: "observability", Name: "Observabilidade", Prompt: "Atue somente como reviewer de observabilidade desta unidade semântica. Procure falha operacional nova que fique silenciosa ou perca logs, métricas ou contexto indispensável ao diagnóstico. Produza apenas CandidateFinding sustentados por evidência observável; quando faltar contexto, declare required_context. Não confirme nem publique achados. Responda somente uma lista JSON."},
+	}
+}
+
+// PreviousSemanticReviewDefinition recognizes the single-reviewer semantic
+// seed so startup can append the specialized graph without overwriting user
+// customizations.
+func PreviousSemanticReviewDefinition() Definition {
+	definition := PreviousContractReviewDefinition()
+	definition.Description = "Seeded semantic pull-request review pipeline with versioned contracts, coverage, and one native Gitea review publication."
+	for index := range definition.Nodes {
+		switch definition.Nodes[index].Key {
+		case "group":
+			definition.Nodes[index].Type = "semantic_units"
+			definition.Nodes[index].Name = "Criar unidades semânticas"
+			definition.Nodes[index].Config = map[string]any{"max_units": 200, "max_characters": 50000, "context_lines": 4}
+		case "loop":
+			definition.Nodes[index].Name = "Revisar cada unidade"
+			definition.Nodes[index].Config["max_iterations"] = 200
+		case "template":
+			definition.Nodes[index].Config["template"] = "Analise somente esta unidade semântica e proponha CandidateFinding sustentados por evidência concreta em suas linhas alteradas e contexto disponível. Declare required_context quando a unidade não permitir confirmar a alegação. Não confirme nem publique achados. Responda somente uma lista JSON de candidatos."
+			definition.Nodes[index].Config["review_contract_version"] = 2
+		}
+	}
+	for index := range definition.Edges {
+		if definition.Edges[index].Key == "group-loop" {
+			definition.Edges[index].FromPort = "units"
+		}
+	}
+	return definition
+}
+
+// PreviousContractReviewDefinition recognizes the contract-backed seed that
+// still grouped files only by size and extension.
+func PreviousContractReviewDefinition() Definition {
 	definition := officialReviewDefinitionV1()
 	definition.Description = "Seeded dynamic pull-request review pipeline whose Template selects an immutable backend contract."
 	for index := range definition.Nodes {
@@ -110,7 +238,7 @@ func PreviousCandidateReviewDefinition() Definition {
 // PreviousChecklistReviewDefinition recognizes the last seed where schema and
 // checklist snapshots were duplicated across downstream cards.
 func PreviousChecklistReviewDefinition() Definition {
-	definition := OfficialReviewDefinition()
+	definition := PreviousContractReviewDefinition()
 	checklist := officialReviewChecklistSnapshot()
 	for index := range definition.Nodes {
 		switch definition.Nodes[index].Key {

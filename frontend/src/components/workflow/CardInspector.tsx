@@ -807,6 +807,25 @@ export function CardInspector({
               />
             </>
           )}
+          {selected.type === "semantic_units" && (
+            <>
+              {numberField("max_units", "Máximo de unidades", 200)}
+              {numberField(
+                "max_characters",
+                "Máximo de caracteres por unidade",
+                50000,
+              )}
+              {numberField(
+                "context_lines",
+                "Linhas de contexto resumidas",
+                4,
+              )}
+              <small>
+                Cada hunk vira uma unidade. Símbolo, imports, testes e contratos
+                relacionados são extraídos apenas do contexto observável.
+              </small>
+            </>
+          )}
           {selected.type === "loop" && (
             <>
               {numberField("max_iterations", "Máximo de iterações", 20)}

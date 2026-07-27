@@ -78,6 +78,10 @@ func TestCandidateValidatorClosesCoverageForAnEmptyContractResponse(t *testing.T
 		Key: "validator", Type: "candidate_validator",
 	}, "loop:000001", map[string][]any{
 		"candidates": {ValidatedReviewResponse{Value: []CandidateFinding{}, Contract: contract}},
+		"files": {SemanticUnit{
+			UnitID: "unit-12", AvailableContext: []string{ContextDiff, ContextFile},
+			file: map[string]any{"filename": "app.go", "patch": "@@ -1 +1 @@\n+ok", "_forgereview_available_context": []string{ContextDiff, ContextFile}},
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +89,24 @@ func TestCandidateValidatorClosesCoverageForAnEmptyContractResponse(t *testing.T
 	if len(outputs["confirmed"].([]Finding)) != 0 || metadata["coverage_checks"] != 1 {
 		t.Fatalf("empty validator output = %#v, %#v", outputs, metadata)
 	}
-	if len(ledger.records) != 1 || ledger.records[0].Status != CoverageCompleted {
+	if len(ledger.records) != 1 || ledger.records[0].Status != CoverageCompleted || ledger.records[0].UnitID != "unit-12" {
 		t.Fatalf("recorded coverage = %#v", ledger.records)
+	}
+}
+
+func TestSemanticCoverageMarksUnavailableMinimumContext(t *testing.T) {
+	var contract ReviewContractVersion
+	for _, item := range BuiltInReviewContracts() {
+		if item.Key == "review.performance" {
+			contract = item
+			break
+		}
+	}
+	records := completedCoverage(9, "validator", "loop:000001", contract, nil, 1)
+	records = coverageWithSemanticObservability(records, SemanticUnit{
+		AvailableContext: []string{ContextDiff, ContextFile},
+	})
+	if len(records) != 1 || records[0].Status != CoverageNotObservable || records[0].NotObservable != 1 {
+		t.Fatalf("semantic observability coverage = %#v", records)
 	}
 }

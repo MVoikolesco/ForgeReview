@@ -191,7 +191,9 @@ docs/      Arquitetura, auditoria e este roadmap
   independente, sem snapshots duplicados nos cards downstream.
 - **Entregue:** ledger de cobertura por execução, unidade e check, com
   publicação bloqueada enquanto houver cobertura planejada incompleta.
-- Próximo incremento: unidades semânticas, conforme
+- **Entregue:** card de unidades semânticas por hunk/símbolo, integrado à
+  pipeline oficial, validação de linhas e ledger de cobertura.
+- Próximo incremento: Context Requests persistentes, conforme
   `docs/roadmap-v3/linha-de-evolucao.md`.
 
 ### 1. Concluir gerenciamento visual

@@ -55,6 +55,30 @@ func TestCandidateDecisionContractIsClosed(t *testing.T) {
 	}
 }
 
+func TestCandidateValidatorRequestsMissingSemanticContextWithoutProviderCall(t *testing.T) {
+	model := &sequentialModel{}
+	runner := &scopedRunner{adapters: Adapters{OpenAI: model}}
+	candidate := candidateFixture("security.auth", "app.go", 2)
+	candidate.RequiredContext = []string{ContextRepository}
+	unit := SemanticUnit{
+		UnitID: "unit", AvailableContext: []string{ContextDiff, ContextFile},
+		file: map[string]any{
+			"filename": "app.go", "patch": "@@ -1 +1,2 @@\n package app\n+unsafe()",
+			"_forgereview_available_context": []string{ContextDiff, ContextFile},
+		},
+	}
+	outputs, metadata, err := runner.runCandidateValidator(context.Background(), Node{
+		Key: "validator", Type: "candidate_validator",
+	}, "loop:000001", map[string][]any{"candidates": {[]CandidateFinding{candidate}}, "files": {unit}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decisions := outputs["decisions"].([]CandidateFinding)
+	if len(decisions) != 1 || decisions[0].Status != CandidateNeedsContext || model.calls != 0 || metadata["needs_context_count"] != 1 {
+		t.Fatalf("semantic context decision = %#v, calls=%d metadata=%#v", decisions, model.calls, metadata)
+	}
+}
+
 func candidateFixture(checkID, path string, line int) CandidateFinding {
 	return CandidateFinding{
 		CheckID: checkID, Claim: "claim", Scenario: "scenario", Impact: "impact",

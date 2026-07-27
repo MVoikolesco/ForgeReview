@@ -220,6 +220,11 @@ func Validate(definition Definition, catalog Catalog) error {
 				return err
 			}
 		}
+		if node.Type == "semantic_units" {
+			if _, err := semanticUnitSettingsFor(node); err != nil {
+				return err
+			}
+		}
 		if node.Type == "trigger" {
 			if _, err := TriggerMode(node); err != nil {
 				return err

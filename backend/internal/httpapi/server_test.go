@@ -523,11 +523,15 @@ func TestWorkflowVersionDeletionIsAdminOnlyAndPreservesRetainedHistory(t *testin
 	blockedRequest.AddCookie(&http.Cookie{Name: auth.CookieName, Value: adminToken})
 	blocked := httptest.NewRecorder()
 	router.ServeHTTP(blocked, blockedRequest)
-	if blocked.Code != http.StatusConflict || !strings.Contains(blocked.Body.String(), "audit history") {
+	if blocked.Code != http.StatusNoContent {
 		t.Fatalf("retained audit deletion = %d: %s", blocked.Code, blocked.Body.String())
 	}
-	if _, err = database.Load(context.Background(), retained); err != nil {
-		t.Fatalf("blocked deletion removed version: %v", err)
+	if _, err = database.Load(context.Background(), retained); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("audit-only version was not deleted: %v", err)
+	}
+	audit, err = database.AuditEntries(context.Background(), 2)
+	if err != nil || len(audit) != 2 || audit[0].Action != "workflow_version.deleted" || audit[0].Target != "workflow_version:"+strconv.FormatInt(retained, 10) || audit[1].Action != "workflow.published" || audit[1].Target != audit[0].Target {
+		t.Fatalf("retained audit history after deletion = %#v, %v", audit, err)
 	}
 	published, err := database.Save(context.Background(), workflow.Definition{Key: "published", Name: "Published", Nodes: []workflow.Node{{Key: "start", Type: "trigger", Name: "Start"}}})
 	if err != nil {

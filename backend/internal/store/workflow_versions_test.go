@@ -250,10 +250,14 @@ func TestEnsureOfficialReviewWorkflowAppendOnlyMovesContractToTemplate(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	var templateConfig map[string]any
+	templateContracts := map[string]bool{}
 	for _, node := range definition.Nodes {
 		if node.Type == "template" {
-			templateConfig = node.Config
+			key, _ := node.Config["review_contract_key"].(string)
+			if node.Config["review_contract_version"] != float64(2) {
+				t.Fatalf("template contract version = %#v", node.Config)
+			}
+			templateContracts[key] = true
 		}
 		if (node.Type == "model" || node.Type == "candidate_validator") && node.Config["review_checklist"] != nil {
 			t.Fatalf("downstream checklist duplicate remains in %#v", node)
@@ -262,8 +266,72 @@ func TestEnsureOfficialReviewWorkflowAppendOnlyMovesContractToTemplate(t *testin
 			t.Fatalf("validate schema duplicate remains in %#v", node)
 		}
 	}
-	if templateConfig["review_contract_key"] != workflow.OfficialPullRequestContractKey || templateConfig["review_contract_version"] != float64(1) {
-		t.Fatalf("template contract reference = %#v", templateConfig)
+	for _, category := range []string{"security", "correctness", "contracts", "performance", "architecture", "observability"} {
+		if !templateContracts["review."+category] {
+			t.Fatalf("specialized template contracts = %#v", templateContracts)
+		}
+	}
+}
+
+func TestEnsureOfficialReviewWorkflowAppendOnlyAddsSemanticUnits(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/semantic-upgrade.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	previousID, err := database.Save(context.Background(), workflow.PreviousContractReviewDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Publish(context.Background(), previousID, workflow.DefaultCatalog()); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, seeded, err := database.EnsureOfficialReviewWorkflow(context.Background(), workflow.DefaultCatalog())
+	if err != nil || !seeded || upgraded.Version != 2 {
+		t.Fatalf("semantic upgrade = %#v, %t, %v", upgraded, seeded, err)
+	}
+	definition, err := database.Load(context.Background(), upgraded.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, node := range definition.Nodes {
+		found = found || node.Type == "semantic_units"
+	}
+	if !found {
+		t.Fatalf("semantic unit card missing from %#v", definition)
+	}
+}
+
+func TestEnsureOfficialReviewWorkflowAppendOnlyExpandsSemanticSeedIntoSpecializedReviewers(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/specialized-upgrade.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	previousID, err := database.Save(context.Background(), workflow.PreviousSemanticReviewDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Publish(context.Background(), previousID, workflow.DefaultCatalog()); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, seeded, err := database.EnsureOfficialReviewWorkflow(context.Background(), workflow.DefaultCatalog())
+	if err != nil || !seeded || upgraded.Version != 2 || upgraded.Status != workflow.VersionStatusPublished {
+		t.Fatalf("specialized upgrade = %#v, %t, %v", upgraded, seeded, err)
+	}
+	definition, err := database.Load(context.Background(), upgraded.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	templates := 0
+	for _, node := range definition.Nodes {
+		if node.Type == "template" {
+			templates++
+		}
+	}
+	if templates != 6 {
+		t.Fatalf("specialized template count = %d", templates)
 	}
 }
 
@@ -307,7 +375,7 @@ func TestDeleteWorkflowVersionBlocksEveryRetainedDependency(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = database.DeleteWorkflowVersion(context.Background(), versionID, admin.ID)
-	if !errors.Is(err, ErrWorkflowVersionDeletionBlocked) || !strings.Contains(err.Error(), "execution history") || !strings.Contains(err.Error(), "publication attempts") || !strings.Contains(err.Error(), "webhook registrations") || !strings.Contains(err.Error(), "audit history") {
+	if !errors.Is(err, ErrWorkflowVersionDeletionBlocked) || !strings.Contains(err.Error(), "execution history") || !strings.Contains(err.Error(), "publication attempts") || !strings.Contains(err.Error(), "webhook registrations") || strings.Contains(err.Error(), "audit history") {
 		t.Fatalf("delete dependency error = %v", err)
 	}
 	if _, err = database.Load(context.Background(), versionID); err != nil {
@@ -334,6 +402,9 @@ func TestDeleteWorkflowVersionOnlyRemovesEligibleVersionAndAuditsIt(t *testing.T
 	}
 	draft, err := database.Save(context.Background(), versionedDefinition("Draft"))
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err = database.Audit(context.Background(), admin.ID, "workflow_version.created", "workflow_version:"+strconv.FormatInt(draft, 10), nil); err != nil {
 		t.Fatal(err)
 	}
 	if err = database.DeleteWorkflowVersion(context.Background(), published, admin.ID); !errors.Is(err, ErrWorkflowVersionNotDeletable) {

@@ -35,6 +35,7 @@ func DefaultCatalog() Catalog {
 		card("fetch", "Buscar dados", "Dados", "Coleta dados do pull request por uma integração selecionada.", []Port{in("event", "Evento", "event", true)}, []Port{out("pull_request", "Dados do PR", "pull_request"), out("files", "Arquivos", "files")}),
 		card("filter", "Filtro", "Transformação", "Inclui ou exclui arquivos por regras configuradas.", []Port{in("files", "Arquivos", "files", true)}, []Port{out("files", "Arquivos filtrados", "files")}),
 		card("group", "Agrupar", "Transformação", "Cria grupos de arquivos para processamento.", []Port{in("files", "Arquivos", "files", true)}, []Port{out("groups", "Grupos", "groups")}),
+		card("semantic_units", "Unidades semânticas", "Transformação", "Cria unidades determinísticas por hunk e símbolo com contexto observável.", []Port{in("files", "Arquivos", "files", true)}, []Port{out("units", "Unidades semânticas", "semantic_units")}),
 		card("transform", "Transformar", "Transformação", "Normaliza, limita ou reorganiza dados tipados.", []Port{in("input", "Entrada", "any", true)}, []Port{out("output", "Saída", "any")}),
 		card("template", "Template", "Transformação", "Monta um prompt e seleciona o contrato versionado da tarefa.", []Port{in("context", "Contexto", "any", true)}, []Port{out("prompt", "Tarefa de review", "review_task")}),
 		card("variable", "Variáveis", "Transformação", "Declara ou atualiza variáveis do escopo da execução.", []Port{in("value", "Valor", "any", false)}, []Port{out("value", "Valor", "any")}),

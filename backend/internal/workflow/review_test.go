@@ -139,7 +139,8 @@ func TestRunFetchRejectsFilesWithoutReviewableContent(t *testing.T) {
 		Gitea:        staticPullRequestReader{files: []map[string]any{{"filename": "main.go"}}},
 	}
 	report, err := RunWithAdapters(context.Background(), definition, DefaultCatalog(), map[string]any{"pull_request": map[string]any{"owner": "acme", "repo": "api", "number": 12}}, adapters)
-	if err == nil || !strings.Contains(err.Error(), "without reviewable patch content") || report.Status != "failed" {
+	var failure *ExecutionFailure
+	if err == nil || !errors.As(err, &failure) || !strings.Contains(failure.Cause.Error(), "without reviewable patch content") || report.Status != "failed" {
 		t.Fatalf("run = %#v, %v", report, err)
 	}
 }
@@ -469,7 +470,7 @@ func TestPublishEventUsesSafeSeverityDefaults(t *testing.T) {
 func TestFormattedReviewBodyUsesSafeOptionalTelemetryInPortuguese(t *testing.T) {
 	review := FormattedReview{Summary: ReviewSummary{Total: 2, High: 1, Medium: 1}}
 	body := formattedReviewBody(review, "COMMENT", TelemetrySnapshot{ElapsedMS: 43501, Models: []string{"gpt-review"}, Prompt: 12, Completion: 8, Total: 20}, "adiciona validação de MIME")
-	for _, expected := range []string{"> status: comentado", "> tempo decorrido: 43.501s", "> modelo: gpt-review", "> tokens: 20 (prompt: 12, completion: 8)", "Foram identificados 2 achados relevantes", "Resumo da implementação: adiciona validação de MIME.", "Nenhum problema foi confirmado automaticamente; os 2 pontos destacados servem como apoio e devem ser avaliados pelo revisor."} {
+	for _, expected := range []string{"> status: comentado", "> tempo decorrido: 43.501s", "> modelo: gpt-review", "> tokens: 20 (prompt: 12, completion: 8)", "Foram identificados 2 achados relevantes", "Resumo da implementação: adiciona validação de MIME.", "Os 2 pontos destacados passaram pelas validações configuradas, servem como apoio e devem ser avaliados pelo revisor."} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("body missing %q: %s", expected, body)
 		}

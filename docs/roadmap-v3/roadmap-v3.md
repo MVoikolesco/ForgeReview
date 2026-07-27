@@ -66,5 +66,8 @@ Atualizar também, durante a implementação:
 - Fase 4 implementada: ledger persistente por execução, unidade e check,
   incluindo estados, candidatos, tentativas e duração; publicação condicionada
   à cobertura planejada.
-- Próximo corte recomendado: unidades semânticas.
+- Fase 5 implementada: unidades semânticas determinísticas por hunk/símbolo,
+  com linhas adicionadas, contexto, imports, relações observáveis e identidade
+  integrada ao ledger.
+- Próximo corte recomendado: Context Requests persistentes.
 - A referência operacional dos presets está em `docs/response-contracts.md`.

@@ -158,6 +158,7 @@ export type ExecutionReport = {
 export type CoverageRecord = {
   execution_id: number;
   scope_key: string;
+  unit_id?: string;
   node_key: string;
   contract_key: string;
   contract_version: number;

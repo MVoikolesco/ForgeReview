@@ -25,6 +25,12 @@ Substituir grupos apenas por quantidade de arquivos/caracteres por unidades com:
 
 Essa etapa reduz falsos positivos causados por contexto incompleto.
 
+**Implementado:** o card `semantic_units` cria unidades determinísticas por
+hunk e símbolo observável, preservando linhas adicionadas, diff, contexto,
+imports, relações com testes/contratos alterados e classes de contexto
+disponíveis. O `unit_id` acompanha o ledger. Consulte
+`docs/semantic-units.md`.
+
 ## 2. Checklists fechadas
 
 Criar checklists versionadas por revisor, por exemplo:
@@ -37,6 +43,11 @@ Criar checklists versionadas por revisor, por exemplo:
 - observabilidade.
 
 Cada item deve possuir `check_id`, descrição, categoria e nível mínimo de contexto necessário.
+
+**Implementado:** o backend persiste contratos imutáveis v2 para segurança,
+corretude, contratos, performance, arquitetura e observabilidade. Cada contrato
+carrega somente sua checklist fechada, com `check_id`, categoria e contexto
+mínimo próprios.
 
 ## 3. Reviewer especializado
 
@@ -51,6 +62,12 @@ O modelo não deve receber apenas “revise este diff”. Cada chamada deve rece
 - findings já conhecidos.
 
 A pipeline poderá executar vários reviewers em paralelo ou sequencialmente.
+
+**Implementado:** a pipeline oficial executa seis trilhas explícitas por unidade
+semântica. Cada trilha reutiliza os cards genéricos `Template`, `Model`,
+`Validate`, `Candidate Validator` e `Response Filter`, mas possui prompt,
+contrato e tarefa especializados. Os resultados confirmados convergem apenas
+na consolidação final.
 
 ## 4. Candidate Findings
 

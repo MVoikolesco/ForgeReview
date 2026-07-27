@@ -26,6 +26,7 @@ func TestCoverageLedgerPersistsPlannedAndTerminalStates(t *testing.T) {
 	}
 	planned := workflow.CoverageRecord{
 		ExecutionID: executionID, ScopeKey: "loop:000001", NodeKey: "template",
+		UnitID:      "semantic-unit-1",
 		ContractKey: "review.security", ContractVersion: 1,
 		CheckID: "security.authorization", Category: "security", MinimumContext: "file",
 		Planned: true, Status: workflow.CoveragePlanned,
@@ -49,7 +50,7 @@ func TestCoverageLedgerPersistsPlannedAndTerminalStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	summary, err := database.Coverage(context.Background(), executionID)
-	if err != nil || summary.Planned != 1 || summary.Completed != 1 || summary.Incomplete != 0 || summary.Confirmed != 1 {
+	if err != nil || summary.Planned != 1 || summary.Completed != 1 || summary.Incomplete != 0 || summary.Confirmed != 1 || summary.Items[0].UnitID != "semantic-unit-1" {
 		t.Fatalf("coverage summary = %#v, %v", summary, err)
 	}
 	status, err := database.Execution(context.Background(), executionID)

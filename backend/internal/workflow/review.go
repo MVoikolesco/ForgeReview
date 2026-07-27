@@ -345,13 +345,20 @@ func candidateFingerprint(candidate CandidateFinding, file map[string]any) strin
 		systemFileIdentity(file, "_forgereview_repository", "unknown"),
 		systemFileIdentity(file, "_forgereview_base_commit", "unknown"),
 		strings.TrimSpace(candidate.Path),
-		normalizedIdentityPart(candidate.Symbol),
+		normalizedIdentityPart(semanticFingerprintSymbol(candidate, file)),
 		normalizedIdentityPart(candidate.CheckID),
 		normalizedIdentityPart(candidate.IssueType),
 		normalizedIdentityPart(candidate.AffectedEntity),
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return fmt.Sprintf("sha256:%x", sum[:])
+}
+
+func semanticFingerprintSymbol(candidate CandidateFinding, file map[string]any) string {
+	if symbol, _ := file["_forgereview_unit_symbol"].(string); strings.TrimSpace(symbol) != "" {
+		return strings.TrimSpace(symbol)
+	}
+	return strings.TrimSpace(candidate.Symbol)
 }
 
 func normalizedIdentityPart(value string) string {
@@ -542,6 +549,11 @@ func workflowFiles(values []any) ([]map[string]any, error) {
 			items = typed
 		case FileGroup:
 			items = typed.Files
+		case SemanticUnit:
+			if typed.file == nil {
+				return nil, fmt.Errorf("semantic unit requires observed file context")
+			}
+			items = []map[string]any{typed.file}
 		default:
 			return nil, fmt.Errorf("card requires fetched files input")
 		}

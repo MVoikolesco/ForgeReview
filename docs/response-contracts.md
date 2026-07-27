@@ -15,12 +15,17 @@ existentes não exigem migração.
 
 - `review.findings.v1`: lista de achados de review;
 - `review.candidate-findings.v1`: candidatos que exigem validação independente;
+- `review.candidate-findings.v2`: mesma entidade com `required_context`
+  restrito às classes observáveis usadas pelas unidades semânticas;
 - `generic.object.v1`: objeto JSON genérico;
 - `generic.array.v1`: lista JSON genérica;
 - `review.summary.v1`: resumo com `summary` e `highlights`.
 
 Selecionar um preset copia o schema para a versão do workflow. “Duplicar para
 editar” remove o vínculo visual com o preset e mantém a cópia editável.
+
+Na pipeline oficial atual, o schema não é copiado para `validate`: ele pertence
+ao `ReviewContract` `official.pull-request@2`, selecionado pelo `Template`.
 
 ## Exemplo
 

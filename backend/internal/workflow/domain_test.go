@@ -124,27 +124,43 @@ func TestValidateRequiresExplicitTypedErrorRoute(t *testing.T) {
 
 func TestOfficialReviewDefinitionIsAValidFullGraphWithSafePublicationDefaults(t *testing.T) {
 	definition := OfficialReviewDefinition()
-	if definition.Key != OfficialReviewWorkflowKey || len(definition.Nodes) != 13 || len(definition.Edges) != 15 {
+	if definition.Key != OfficialReviewWorkflowKey || len(definition.Nodes) != 38 || len(definition.Edges) != 50 {
 		t.Fatalf("official definition shape = %#v", definition)
 	}
 	if err := Validate(definition, DefaultCatalog()); err != nil {
 		t.Fatalf("official definition validation = %v", err)
 	}
 	configs := map[string]map[string]any{}
+	hasSemanticUnits := false
+	nodeTypes := map[string]int{}
 	for _, node := range definition.Nodes {
 		configs[node.Key] = node.Config
+		hasSemanticUnits = hasSemanticUnits || node.Type == "semantic_units"
+		nodeTypes[node.Type]++
+	}
+	if !hasSemanticUnits {
+		t.Fatalf("official definition must create semantic units")
 	}
 	if configs["trigger"]["mode"] != "webhook" {
 		t.Fatalf("trigger defaults = %#v", configs["trigger"])
 	}
-	if configs["model"]["model_profile"] != "" || configs["model"]["retry_limit"] != 0 || configs["model"]["retry_delay_ms"] != 0 {
-		t.Fatalf("model defaults = %#v", configs["model"])
+	if nodeTypes["template"] != 6 || nodeTypes["model"] != 6 || nodeTypes["validate"] != 6 || nodeTypes["candidate_validator"] != 6 || nodeTypes["response_filter"] != 6 {
+		t.Fatalf("specialized reviewer node counts = %#v", nodeTypes)
 	}
-	if configs["candidate-validator"]["model_profile"] != "" || configs["template"]["review_contract_key"] != OfficialPullRequestContractKey || configs["template"]["review_contract_version"] != 1 {
-		t.Fatalf("candidate validation defaults = %#v / %#v", configs["candidate-validator"], configs["template"])
-	}
-	if configs["model"]["review_checklist"] != nil || configs["candidate-validator"]["review_checklist"] != nil || configs["validate"]["response_schema"] != nil {
-		t.Fatalf("contract must not be duplicated downstream: %#v", configs)
+	for _, category := range []string{"security", "correctness", "contracts", "performance", "architecture", "observability"} {
+		template := configs["template-"+category]
+		model := configs["model-"+category]
+		validator := configs["candidate-validator-"+category]
+		validate := configs["validate-"+category]
+		if template["review_contract_key"] != "review."+category || template["review_contract_version"] != 2 || template["template"] == "" {
+			t.Fatalf("%s template defaults = %#v", category, template)
+		}
+		if model["model_profile"] != "" || model["retry_limit"] != 0 || model["retry_delay_ms"] != 0 {
+			t.Fatalf("%s model defaults = %#v", category, model)
+		}
+		if validator["model_profile"] != "" || model["review_checklist"] != nil || validator["review_checklist"] != nil || validate["response_schema"] != nil {
+			t.Fatalf("%s contract must not be duplicated downstream: model=%#v validator=%#v validate=%#v", category, model, validator, validate)
+		}
 	}
 	if configs["publish"]["allow_autonomous_rejection"] != false || configs["publish"]["medium_severity_event"] != "COMMENT" {
 		t.Fatalf("publish defaults = %#v", configs["publish"])

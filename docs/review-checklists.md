@@ -7,7 +7,7 @@ no card `template`:
 ```json
 {
   "review_contract_key": "official.pull-request",
-  "review_contract_version": 1
+  "review_contract_version": 2
 }
 ```
 
@@ -67,7 +67,9 @@ somente para compatibilidade com workflows anteriores.
 
 ## Catálogo inicial
 
-`official.pull-request@1` contém seis checks:
+`official.pull-request@1` contém os seis checks originais. A versão
+`official.pull-request@2`, usada pela pipeline semântica, preserva a checklist e
+fecha `required_context` nas classes suportadas:
 
 - autorização e isolamento;
 - corretude comportamental;
@@ -76,11 +78,11 @@ somente para compatibilidade com workflows anteriores.
 - fronteiras arquiteturais;
 - observabilidade de falhas.
 
-O catálogo também oferece contratos especializados `review.security@1`,
-`review.correctness@1`, `review.contracts@1`, `review.performance@1`,
-`review.architecture@1` e `review.observability@1`. Assim, a pipeline pode usar
-várias instâncias explícitas do card genérico `Template`, sem criar tipos de
-card fixos como “Security”.
+O catálogo também oferece versões `@1` e `@2` dos contratos especializados
+`review.security`, `review.correctness`, `review.contracts`,
+`review.performance`, `review.architecture` e `review.observability`. Assim, a
+pipeline pode usar várias instâncias explícitas do card genérico `Template`,
+sem criar tipos de card fixos como “Security”.
 
 Novas versões usam o mesmo identificador com outro número ou uma nova chave.
 Uma versão existente nunca é alterada retroativamente.

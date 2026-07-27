@@ -855,6 +855,26 @@ export function validateStudioWorkflow(
         nodeKey: node.key,
         message: `"${node.name}" requer limites positivos de arquivos e caracteres.`,
       });
+    if (node.type === "semantic_units") {
+      const boundedInteger = (key: string, minimum: number, maximum: number) => {
+        const value = node.config[key];
+        return (
+          value === undefined ||
+          (Number.isInteger(value) &&
+            (value as number) >= minimum &&
+            (value as number) <= maximum)
+        );
+      };
+      if (
+        !boundedInteger("max_units", 1, 1000) ||
+        !boundedInteger("max_characters", 1000, 200000) ||
+        !boundedInteger("context_lines", 0, 20)
+      )
+        issues.push({
+          nodeKey: node.key,
+          message: `"${node.name}" possui limites inválidos para unidades semânticas.`,
+        });
+    }
     if (node.type === "cache") {
       const mode = configText(node.config.mode);
       if (
@@ -1050,7 +1070,7 @@ export function reviewTemplate(
     "trigger",
     "fetch",
     "filter",
-    "group",
+    "semantic_units",
     "loop",
     "template",
     "model",
@@ -1087,21 +1107,21 @@ export function reviewTemplate(
         include_extensions: [".go", ".ts", ".tsx", ".php"],
         ignore_generated: true,
       }),
-      node("group", "group", "Agrupar arquivos", 900, 125, {
-        max_files: 8,
-        max_characters: 12000,
-        group_by_extension: true,
+      node("semantic-units", "semantic_units", "Criar unidades semânticas", 900, 125, {
+        max_units: 200,
+        max_characters: 50000,
+        context_lines: 4,
       }),
-      node("loop", "loop", "Revisar cada grupo", 1190, 125, {
-        max_iterations: 20,
+      node("loop", "loop", "Revisar cada unidade", 1190, 125, {
+        max_iterations: 200,
         concurrency: 1,
         on_error: "fail",
       }),
       node("template", "template", "Prompt de review", 1480, 125, {
         template:
-          "Analise este grupo de arquivos e proponha somente CandidateFinding sustentados por evidência concreta em linhas alteradas. Não confirme nem publique achados. Responda somente uma lista JSON de candidatos.",
+          "Analise somente esta unidade semântica e proponha CandidateFinding sustentados por evidência concreta em suas linhas alteradas e contexto disponível. Declare required_context quando a unidade não permitir confirmar a alegação. Não confirme nem publique achados. Responda somente uma lista JSON de candidatos.",
         review_contract_key: "official.pull-request",
-        review_contract_version: 1,
+        review_contract_version: 2,
       }),
       node("model", "model", "Modelo de review", 1775, 125, {
         model_profile: "",
@@ -1139,8 +1159,8 @@ export function reviewTemplate(
     edges: [
       ["trigger", "out-event", "fetch", "in-event"],
       ["fetch", "out-files", "filter", "in-files"],
-      ["filter", "out-files", "group", "in-files"],
-      ["group", "out-groups", "loop", "in-items"],
+      ["filter", "out-files", "semantic-units", "in-files"],
+      ["semantic-units", "out-units", "loop", "in-items"],
       ["loop", "out-item", "template", "in-context"],
       ["template", "out-prompt", "model", "in-prompt"],
       ["model", "out-response", "validate", "in-response"],

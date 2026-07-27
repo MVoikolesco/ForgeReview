@@ -623,12 +623,12 @@ test("workflow version lifecycle exposes publishable drafts only", () => {
   assert.equal(canPublishVersion("archived"), false);
 });
 
-test("review template scopes group review through loop before one root publication", () => {
+test("review template scopes semantic units through loop before one root publication", () => {
   const keys = [
     "trigger",
     "fetch",
     "filter",
-    "group",
+    "semantic_units",
     "loop",
     "template",
     "model",
@@ -660,8 +660,8 @@ test("review template scopes group review through loop before one root publicati
     [
       ["trigger", "out-event", "fetch", "in-event"],
       ["fetch", "out-files", "filter", "in-files"],
-      ["filter", "out-files", "group", "in-files"],
-      ["group", "out-groups", "loop", "in-items"],
+      ["filter", "out-files", "semantic-units", "in-files"],
+      ["semantic-units", "out-units", "loop", "in-items"],
       ["loop", "out-item", "template", "in-context"],
       ["template", "out-prompt", "model", "in-prompt"],
       ["model", "out-response", "validate", "in-response"],
@@ -677,7 +677,11 @@ test("review template scopes group review through loop before one root publicati
   );
   assert.deepEqual(
     template.nodes.find((node) => node.id === "loop")?.data.config,
-    { max_iterations: 20, concurrency: 1, on_error: "fail" },
+    { max_iterations: 200, concurrency: 1, on_error: "fail" },
+  );
+  assert.deepEqual(
+    template.nodes.find((node) => node.id === "semantic-units")?.data.config,
+    { max_units: 200, max_characters: 50000, context_lines: 4 },
   );
   const modelConfig = template.nodes.find(
     (node) => node.id === "model",
@@ -691,7 +695,7 @@ test("review template scopes group review through loop before one root publicati
     (node) => node.id === "template",
   )?.data.config;
   assert.equal(templateConfig?.review_contract_key, "official.pull-request");
-  assert.equal(templateConfig?.review_contract_version, 1);
+  assert.equal(templateConfig?.review_contract_version, 2);
   assert.equal(
     template.nodes.find((node) => node.id === "validate")?.data.config
       .response_schema,

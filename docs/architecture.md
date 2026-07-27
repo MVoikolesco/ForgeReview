@@ -421,6 +421,21 @@ ledger before opening its idempotent external side effect and is blocked while
 planned coverage remains incomplete. Legacy workflows without a review
 contract retain their former behavior. See `docs/review-coverage.md`.
 
+### Semantic review units
+
+The official graph replaces size/extension batching with the deterministic
+`semantic_units` card. Each unified-diff hunk becomes a typed `SemanticUnit`;
+when a declaration or hunk label is observable, the unit also carries its
+symbol. The value includes stable identity, exact added lines, scoped diff,
+bounded context lines, imports, dependencies, co-changed tests/contracts, and
+an explicit list of available context classes.
+
+The candidate validator receives an internal file view whose patch is limited
+to that unit, so evidence and line anchoring cannot silently escape into another
+hunk. Coverage rows retain `unit_id` in addition to loop scope. Extraction does
+not claim AST or repository-wide knowledge that fetch has not supplied. See
+`docs/semantic-units.md`.
+
 The Studio loads the card catalog from `GET /api/cards`, lets an administrator
 add cards and draw port connections, and saves the current canvas as a new
 workflow version. `Salvar rascunho` creates a draft. `Publicar` first creates a

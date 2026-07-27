@@ -107,6 +107,9 @@ const normalizeCoverage = (
         return [{
           execution_id: itemCount("execution_id"),
           scope_key: typeof item.scope_key === "string" ? item.scope_key : "",
+          ...(typeof item.unit_id === "string" && item.unit_id
+            ? { unit_id: item.unit_id }
+            : {}),
           node_key: typeof item.node_key === "string" ? item.node_key : "",
           contract_key:
             typeof item.contract_key === "string" ? item.contract_key : "",

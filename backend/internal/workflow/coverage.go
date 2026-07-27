@@ -19,6 +19,7 @@ const (
 type CoverageRecord struct {
 	ExecutionID         int64  `json:"execution_id"`
 	ScopeKey            string `json:"scope_key"`
+	UnitID              string `json:"unit_id,omitempty"`
 	NodeKey             string `json:"node_key"`
 	ContractKey         string `json:"contract_key"`
 	ContractVersion     int    `json:"contract_version"`
@@ -159,4 +160,28 @@ func ValidateCoverageRecord(record CoverageRecord) error {
 		return fmt.Errorf("invalid coverage record")
 	}
 	return nil
+}
+
+func coverageForUnit(records []CoverageRecord, unitID string) []CoverageRecord {
+	for index := range records {
+		records[index].UnitID = unitID
+	}
+	return records
+}
+
+func coverageWithSemanticObservability(records []CoverageRecord, unit SemanticUnit) []CoverageRecord {
+	available := map[string]bool{}
+	for _, contextType := range unit.AvailableContext {
+		available[contextType] = true
+	}
+	for index := range records {
+		record := &records[index]
+		if record.Planned && record.MinimumContext != "" && !available[record.MinimumContext] {
+			record.Status = CoverageNotObservable
+			if record.NotObservable == 0 {
+				record.NotObservable = 1
+			}
+		}
+	}
+	return records
 }

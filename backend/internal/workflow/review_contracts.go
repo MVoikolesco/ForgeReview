@@ -51,15 +51,7 @@ type ValidatedReviewResponse struct {
 
 func BuiltInReviewContracts() []ReviewContractVersion {
 	checklist := officialReviewChecklistSnapshot()
-	contracts := []ReviewContractVersion{{
-		Key:            OfficialPullRequestContractKey,
-		Version:        1,
-		Name:           "Review de pull request",
-		Description:    "Contrato oficial de candidatos e checklist fechado para revisão de pull requests.",
-		ResponseSchema: responseContractSchema("review.candidate-findings.v1"),
-		Checklist:      checklist,
-		Official:       true,
-	}}
+	contracts := make([]ReviewContractVersion, 0, 14)
 	names := map[string]string{
 		"security":      "Segurança",
 		"correctness":   "Corretude",
@@ -68,22 +60,34 @@ func BuiltInReviewContracts() []ReviewContractVersion {
 		"architecture":  "Arquitetura",
 		"observability": "Observabilidade",
 	}
-	for _, check := range checklist.Items {
-		name := names[check.Category]
+	for version := 1; version <= 2; version++ {
+		schemaKey := fmt.Sprintf("review.candidate-findings.v%d", version)
 		contracts = append(contracts, ReviewContractVersion{
-			Key:            "review." + check.Category,
-			Version:        1,
-			Name:           "Review de " + name,
-			Description:    check.Description,
-			ResponseSchema: responseContractSchema("review.candidate-findings.v1"),
-			Checklist: ReviewChecklistSnapshot{
-				Key:     "official." + check.Category,
-				Name:    name,
-				Version: 1,
-				Items:   []ReviewCheck{check},
-			},
-			Official: true,
+			Key:            OfficialPullRequestContractKey,
+			Version:        version,
+			Name:           "Review de pull request",
+			Description:    "Contrato oficial de candidatos e checklist fechado para revisão de pull requests.",
+			ResponseSchema: responseContractSchema(schemaKey),
+			Checklist:      checklist,
+			Official:       true,
 		})
+		for _, check := range checklist.Items {
+			name := names[check.Category]
+			contracts = append(contracts, ReviewContractVersion{
+				Key:            "review." + check.Category,
+				Version:        version,
+				Name:           "Review de " + name,
+				Description:    check.Description,
+				ResponseSchema: responseContractSchema(schemaKey),
+				Checklist: ReviewChecklistSnapshot{
+					Key:     "official." + check.Category,
+					Name:    name,
+					Version: 1,
+					Items:   []ReviewCheck{check},
+				},
+				Official: true,
+			})
+		}
 	}
 	return contracts
 }

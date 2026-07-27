@@ -29,6 +29,7 @@ type ResponseContract struct {
 
 var officialResponseContracts = []struct {
 	key, name, description, schema string
+	version                        int
 }{
 	{
 		key: "review.findings.v1", name: "Achados de review",
@@ -39,6 +40,12 @@ var officialResponseContracts = []struct {
 		key: "review.candidate-findings.v1", name: "Candidatos de review",
 		description: "Candidatos estruturados que ainda exigem uma decisão independente antes da publicação.",
 		schema:      `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"array","items":{"type":"object","additionalProperties":false,"required":["check_id","claim","scenario","impact","evidence","confidence","required_context","symbol","issue_type","affected_entity","path","line","comment","severity"],"properties":{"check_id":{"type":"string","minLength":1},"claim":{"type":"string","minLength":1},"scenario":{"type":"string","minLength":1},"impact":{"type":"string","minLength":1},"evidence":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},"confidence":{"type":"number","minimum":0,"maximum":1},"required_context":{"type":"array","items":{"type":"string","minLength":1}},"symbol":{"type":"string","minLength":1},"issue_type":{"type":"string","minLength":1},"affected_entity":{"type":"string","minLength":1},"path":{"type":"string","minLength":1},"line":{"type":"integer","minimum":1},"comment":{"type":"string","minLength":1},"severity":{"type":"string","enum":["low","medium","high","critical"]}}}}`,
+	},
+	{
+		key: "review.candidate-findings.v2", name: "Candidatos de review com contexto tipado",
+		description: "Candidatos estruturados cujos pedidos de contexto usam somente as classes observáveis do ForgeReview.",
+		schema:      `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"array","items":{"type":"object","additionalProperties":false,"required":["check_id","claim","scenario","impact","evidence","confidence","required_context","symbol","issue_type","affected_entity","path","line","comment","severity"],"properties":{"check_id":{"type":"string","minLength":1},"claim":{"type":"string","minLength":1},"scenario":{"type":"string","minLength":1},"impact":{"type":"string","minLength":1},"evidence":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},"confidence":{"type":"number","minimum":0,"maximum":1},"required_context":{"type":"array","uniqueItems":true,"items":{"type":"string","enum":["diff","file","symbol","dependencies","tests","contracts","repository"]}},"symbol":{"type":"string","minLength":1},"issue_type":{"type":"string","minLength":1},"affected_entity":{"type":"string","minLength":1},"path":{"type":"string","minLength":1},"line":{"type":"integer","minimum":1},"comment":{"type":"string","minLength":1},"severity":{"type":"string","enum":["low","medium","high","critical"]}}}}`,
+		version:     2,
 	},
 	{
 		key: "generic.object.v1", name: "Objeto JSON",
@@ -66,7 +73,7 @@ func ResponseContracts() []ResponseContract {
 		}
 		contracts = append(contracts, ResponseContract{
 			Key: item.key, Name: item.name, Description: item.description,
-			Version: 1, Schema: schema, Editable: false,
+			Version: max(item.version, 1), Schema: schema, Editable: false,
 		})
 	}
 	return contracts
