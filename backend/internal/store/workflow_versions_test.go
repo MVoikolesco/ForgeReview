@@ -252,12 +252,16 @@ func TestEnsureOfficialReviewWorkflowAppendOnlyMovesContractToTemplate(t *testin
 	}
 	templateContracts := map[string]bool{}
 	for _, node := range definition.Nodes {
-		if node.Type == "template" {
-			key, _ := node.Config["review_contract_key"].(string)
-			if node.Config["review_contract_version"] != float64(2) {
-				t.Fatalf("template contract version = %#v", node.Config)
+		if node.Key == "review-recipe" {
+			instances, _ := node.Config["instances"].([]any)
+			for _, raw := range instances {
+				instance, _ := raw.(map[string]any)
+				key, _ := instance["review_contract_key"].(string)
+				if instance["review_contract_version"] != float64(2) {
+					t.Fatalf("instance contract version = %#v", instance)
+				}
+				templateContracts[key] = true
 			}
-			templateContracts[key] = true
 		}
 		if (node.Type == "model" || node.Type == "candidate_validator") && node.Config["review_checklist"] != nil {
 			t.Fatalf("downstream checklist duplicate remains in %#v", node)
@@ -325,13 +329,53 @@ func TestEnsureOfficialReviewWorkflowAppendOnlyExpandsSemanticSeedIntoSpecialize
 		t.Fatal(err)
 	}
 	templates := 0
+	instances := 0
 	for _, node := range definition.Nodes {
 		if node.Type == "template" {
 			templates++
 		}
+		if node.Key == "review-recipe" {
+			configured, _ := node.Config["instances"].([]any)
+			instances = len(configured)
+		}
 	}
-	if templates != 6 {
-		t.Fatalf("specialized template count = %d", templates)
+	if templates != 1 || instances != 6 {
+		t.Fatalf("reusable recipe shape = %d templates, %d instances", templates, instances)
+	}
+}
+
+func TestEnsureOfficialReviewWorkflowAppendOnlyCompactsSpecializedReviewerLayout(t *testing.T) {
+	database, err := Open("file:" + t.TempDir() + "/compact-specialized-upgrade.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	previousID, err := database.Save(context.Background(), workflow.PreviousSpecializedReviewDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Publish(context.Background(), previousID, workflow.DefaultCatalog()); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, seeded, err := database.EnsureOfficialReviewWorkflow(context.Background(), workflow.DefaultCatalog())
+	if err != nil || !seeded || upgraded.Version != 2 {
+		t.Fatalf("compact specialized upgrade = %#v, %t, %v", upgraded, seeded, err)
+	}
+	definition, err := database.Load(context.Background(), upgraded.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, node := range definition.Nodes {
+		if node.Key == "review-model" {
+			found = true
+			if node.Position.X != 250 || node.ParentKey != "review-recipe" {
+				t.Fatalf("contained model = %#v parent=%q", node.Position, node.ParentKey)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("reusable recipe model is missing")
 	}
 }
 

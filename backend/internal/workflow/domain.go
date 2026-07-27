@@ -34,16 +34,23 @@ type CardType struct {
 }
 
 type Node struct {
-	Key      string         `json:"key"`
-	Type     string         `json:"type"`
-	Name     string         `json:"name"`
-	Config   map[string]any `json:"config"`
-	Position Position       `json:"position"`
+	Key       string         `json:"key"`
+	Type      string         `json:"type"`
+	Name      string         `json:"name"`
+	Config    map[string]any `json:"config"`
+	Position  Position       `json:"position"`
+	ParentKey string         `json:"parent_key,omitempty"`
+	Size      *NodeSize      `json:"size,omitempty"`
 }
 
 type Position struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`
+}
+
+type NodeSize struct {
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }
 
 type Edge struct {
@@ -281,6 +288,11 @@ func Validate(definition Definition, catalog Catalog) error {
 				return fmt.Errorf("workflow card %q requires positive config.workflow_version_id", node.Key)
 			}
 		}
+		if node.Type == "subpipeline" {
+			if err := validateSubpipelineNode(node); err != nil {
+				return err
+			}
+		}
 		if node.Type == "fetch" {
 			if err := validateNoFixedPullRequestConfig(node); err != nil {
 				return err
@@ -302,6 +314,18 @@ func Validate(definition Definition, catalog Catalog) error {
 		}
 		nodes[node.Key] = node
 	}
+	for _, node := range definition.Nodes {
+		if node.ParentKey == "" {
+			continue
+		}
+		parent, ok := nodes[node.ParentKey]
+		if !ok || parent.Type != "subpipeline" {
+			return fmt.Errorf("node %q references unknown subpipeline parent %q", node.Key, node.ParentKey)
+		}
+		if node.Type == "subpipeline" {
+			return fmt.Errorf("subpipeline %q cannot be nested", node.Key)
+		}
+	}
 	edges := map[string]struct{}{}
 	for _, edge := range definition.Edges {
 		from, fromOK := nodes[edge.FromNode]
@@ -313,19 +337,17 @@ func Validate(definition Definition, catalog Catalog) error {
 			return fmt.Errorf("duplicate workflow edge %q", edge.Key)
 		}
 		edges[edge.Key] = struct{}{}
-		fromType, _ := catalog.Get(from.Type)
-		toType, _ := catalog.Get(to.Type)
-		output, outputOK := port(fromType.Outputs, edge.FromPort)
-		if !outputOK && edge.FromPort == "error" && fromType.ErrorOutput != nil && errorPolicyForNode(from) == "route" {
-			output, outputOK = *fromType.ErrorOutput, true
-		}
-		input, inputOK := port(toType.Inputs, edge.ToPort)
+		output, outputOK := nodeOutputPort(from, edge.FromPort, catalog)
+		input, inputOK := nodeInputPort(to, edge.ToPort, catalog)
 		if !outputOK || !inputOK {
 			return fmt.Errorf("edge %q references an unknown port", edge.Key)
 		}
 		if output.Contract != "any" && input.Contract != "any" && output.Contract != input.Contract {
 			return fmt.Errorf("edge %q connects incompatible contracts", edge.Key)
 		}
+	}
+	if err := validateSubpipelineBoundaries(definition); err != nil {
+		return err
 	}
 	for _, node := range definition.Nodes {
 		if node.Type != "error_control" && errorPolicyForNode(node) == "route" {

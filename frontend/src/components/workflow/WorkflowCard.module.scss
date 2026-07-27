@@ -4,9 +4,27 @@
     font-size: 13px;
 }
 
-.execution { height: 3px; margin: 0 10px; overflow: hidden; border-radius: 99px; background: #252d38; }
-.execution span { display: block; height: 100%; border-radius: inherit; background: #55c78a; transition: width .2s ease; }
-.summary { margin: 7px 10px 5px; color: #728095; font-size: 9px; }
+.execution {
+    height: 3px;
+    margin: 0 10px;
+    overflow: hidden;
+    border-radius: 99px;
+    background: #252d38;
+}
+
+.execution span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: #55c78a;
+    transition: width .2s ease;
+}
+
+.summary {
+    margin: 7px 10px 5px;
+    color: #728095;
+    font-size: 9px;
+}
 
 .actions {
     display: flex;
@@ -83,4 +101,43 @@
     background: var(--accent);
 }
 
-@media (prefers-reduced-motion: reduce) { .execution span { transition: none; } }
+.compactTitle {
+    margin: 7px 6px;
+    font-size: 9px;
+}
+
+.compactExecution {
+    margin: 0 6px;
+}
+
+.compactSummary {
+    margin: 4px 6px 2px;
+    font-size: 6px;
+}
+
+.compactPort {
+    gap: 3px;
+    min-height: 18px;
+    padding: 0 6px;
+    font-size: 7px;
+}
+
+.compactPort small {
+    font-size: 6px;
+}
+
+.compactPort :global(.react-flow__handle) {
+    width: 7px;
+    height: 7px;
+}
+
+.compactActions button {
+    width: 17px;
+    height: 17px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .execution span {
+        transition: none;
+    }
+}

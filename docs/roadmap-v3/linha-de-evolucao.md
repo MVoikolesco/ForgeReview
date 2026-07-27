@@ -69,6 +69,16 @@ semântica. Cada trilha reutiliza os cards genéricos `Template`, `Model`,
 contrato e tarefa especializados. Os resultados confirmados convergem apenas
 na consolidação final.
 
+**Receita parametrizada implementada:** as seis trilhas deixaram de ocupar seis
+containers persistidos. A pipeline oficial exibe uma única subpipeline movível
+e redimensionável com os cinco passos `Template → Model → Validate → Candidate
+Validator → Response Filter`, dispostos de forma compacta. Segurança,
+corretude, contratos, performance, arquitetura e observabilidade são instâncias
+configuráveis do container, cada uma com prompt, contrato versionado, modelos e
+severidade. O backend expande temporariamente a receita para cada instância
+ativa; o canvas, o banco e as versões continuam contendo apenas os cinco cards.
+O progresso das execuções é agregado de volta na receita visível.
+
 ## 4. Candidate Findings
 
 Separar as entidades:

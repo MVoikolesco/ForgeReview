@@ -691,6 +691,16 @@ func (s *SQLite) EnsureOfficialReviewWorkflow(ctx context.Context, catalog workf
 		if normalizeErr != nil {
 			return workflow.VersionSummary{}, false, fmt.Errorf("normalize existing official workflow: %w", normalizeErr)
 		}
+		officialJSON, officialErr := normalizedWorkflowDefinitionJSON(definition)
+		if officialErr != nil {
+			return workflow.VersionSummary{}, false, fmt.Errorf("normalize official workflow: %w", officialErr)
+		}
+		if normalized == officialJSON {
+			if err = tx.Commit(); err != nil {
+				return workflow.VersionSummary{}, false, err
+			}
+			return existing, false, nil
+		}
 		matchesPreviousSeed := false
 		for _, previous := range []workflow.Definition{
 			workflow.PreviousOfficialReviewDefinition(),
@@ -699,6 +709,13 @@ func (s *SQLite) EnsureOfficialReviewWorkflow(ctx context.Context, catalog workf
 			workflow.PreviousChecklistReviewDefinition(),
 			workflow.PreviousContractReviewDefinition(),
 			workflow.PreviousSemanticReviewDefinition(),
+			workflow.PreviousSpecializedReviewDefinition(),
+			workflow.PreviousCompactSpecializedReviewDefinition(),
+			workflow.PreviousEmbeddedReviewerSubpipelinesDefinition(),
+			workflow.PreviousParameterizedReviewRecipeDefinition(),
+			workflow.PreviousDirectedReviewRecipeDefinition(),
+			workflow.PreviousSpacedReviewRecipeDefinition(),
+			workflow.PreviousManualEdgeRoutingDefinition(),
 		} {
 			previousJSON, previousErr := normalizedWorkflowDefinitionJSON(previous)
 			if previousErr != nil {

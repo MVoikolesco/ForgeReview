@@ -124,7 +124,7 @@ func TestValidateRequiresExplicitTypedErrorRoute(t *testing.T) {
 
 func TestOfficialReviewDefinitionIsAValidFullGraphWithSafePublicationDefaults(t *testing.T) {
 	definition := OfficialReviewDefinition()
-	if definition.Key != OfficialReviewWorkflowKey || len(definition.Nodes) != 38 || len(definition.Edges) != 50 {
+	if definition.Key != OfficialReviewWorkflowKey || len(definition.Nodes) != 15 || len(definition.Edges) != 18 {
 		t.Fatalf("official definition shape = %#v", definition)
 	}
 	if err := Validate(definition, DefaultCatalog()); err != nil {
@@ -144,23 +144,28 @@ func TestOfficialReviewDefinitionIsAValidFullGraphWithSafePublicationDefaults(t 
 	if configs["trigger"]["mode"] != "webhook" {
 		t.Fatalf("trigger defaults = %#v", configs["trigger"])
 	}
-	if nodeTypes["template"] != 6 || nodeTypes["model"] != 6 || nodeTypes["validate"] != 6 || nodeTypes["candidate_validator"] != 6 || nodeTypes["response_filter"] != 6 {
-		t.Fatalf("specialized reviewer node counts = %#v", nodeTypes)
+	if nodeTypes["subpipeline"] != 1 || nodeTypes["template"] != 1 || nodeTypes["model"] != 1 || nodeTypes["validate"] != 1 || nodeTypes["candidate_validator"] != 1 || nodeTypes["response_filter"] != 1 {
+		t.Fatalf("reusable reviewer recipe node counts = %#v", nodeTypes)
 	}
-	for _, category := range []string{"security", "correctness", "contracts", "performance", "architecture", "observability"} {
-		template := configs["template-"+category]
-		model := configs["model-"+category]
-		validator := configs["candidate-validator-"+category]
-		validate := configs["validate-"+category]
-		if template["review_contract_key"] != "review."+category || template["review_contract_version"] != 2 || template["template"] == "" {
-			t.Fatalf("%s template defaults = %#v", category, template)
+	groupNode := Node{Key: "review-recipe", Config: configs["review-recipe"]}
+	instances, err := configuredSubpipelineInstances(groupNode)
+	if err != nil || len(instances) != 6 {
+		t.Fatalf("review recipe instances = %#v, %v", instances, err)
+	}
+	for index, category := range []string{"security", "correctness", "contracts", "performance", "architecture", "observability"} {
+		instance := instances[index]
+		if instance.Key != category || !instance.Enabled || instance.ReviewContractKey != "review."+category || instance.ReviewContractVersion != 2 || instance.Template == "" {
+			t.Fatalf("%s instance defaults = %#v", category, instance)
 		}
-		if model["model_profile"] != "" || model["retry_limit"] != 0 || model["retry_delay_ms"] != 0 {
-			t.Fatalf("%s model defaults = %#v", category, model)
-		}
-		if validator["model_profile"] != "" || model["review_checklist"] != nil || validator["review_checklist"] != nil || validate["response_schema"] != nil {
-			t.Fatalf("%s contract must not be duplicated downstream: model=%#v validator=%#v validate=%#v", category, model, validator, validate)
-		}
+	}
+	model := configs["review-model"]
+	validator := configs["review-confirm"]
+	validate := configs["review-validate"]
+	if model["model_profile"] != "" || model["retry_limit"] != 0 || model["retry_delay_ms"] != 0 {
+		t.Fatalf("recipe model defaults = %#v", model)
+	}
+	if validator["model_profile"] != "" || model["review_checklist"] != nil || validator["review_checklist"] != nil || validate["response_schema"] != nil {
+		t.Fatalf("contract must not be duplicated downstream: model=%#v validator=%#v validate=%#v", model, validator, validate)
 	}
 	if configs["publish"]["allow_autonomous_rejection"] != false || configs["publish"]["medium_severity_event"] != "COMMENT" {
 		t.Fatalf("publish defaults = %#v", configs["publish"])

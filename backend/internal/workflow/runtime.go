@@ -391,6 +391,7 @@ func RunFromTriggerWithAdapters(ctx context.Context, definition Definition, cata
 	if err := Validate(definition, catalog); err != nil {
 		return RunReport{}, err
 	}
+	definition = executableDefinition(definition)
 	if triggerNodeKey == "" {
 		for _, node := range definition.Nodes {
 			if node.Type == "trigger" {

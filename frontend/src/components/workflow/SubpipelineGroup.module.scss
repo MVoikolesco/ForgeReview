@@ -1,0 +1,151 @@
+.group {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    border: 2px solid #506c94;
+    border-radius: 12px;
+    background:
+        linear-gradient(180deg, #1b2638f2, #111a28e8),
+        repeating-linear-gradient(90deg, transparent 0 17px, #89aee513 18px);
+    box-shadow: inset 0 1px #ffffff14, 0 10px 30px #0005;
+}
+
+.group header {
+    position: relative;
+    z-index: 5;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 12px;
+    height: 36px;
+    padding: 0 10px 0 14px;
+    border-bottom: 1px solid #34455d;
+    border-radius: 10px 10px 0 0;
+    background: #1b2638f5;
+    color: #dbe7f7;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .035em;
+    cursor: grab;
+}
+
+.group header:active {
+    cursor: grabbing;
+}
+
+.group header>span:first-child,
+.actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.group header small {
+    color: #8da0ba;
+    font-size: 9px;
+    font-weight: 600;
+}
+
+.actions button {
+    display: grid;
+    width: 23px;
+    height: 23px;
+    padding: 0;
+    place-items: center;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: #94a6be;
+    cursor: pointer;
+}
+
+.actions button:hover {
+    border-color: #47658d;
+    background: #26364c;
+    color: #e7eef8;
+}
+
+.boundaryInputs,
+.boundaryOutputs {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.boundaryPort {
+    position: absolute;
+    left: 0;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 7px 0 13px;
+    border: 1px solid #3a526f;
+    border-left: 0;
+    border-radius: 0 6px 6px 0;
+    background: #172235f2;
+    color: #b9c9dd;
+    font-size: 8px;
+    pointer-events: all;
+}
+
+.boundaryPort small {
+    color: #6f849f;
+    font-size: 7px;
+}
+
+.boundaryPort.output {
+    right: 0;
+    left: auto;
+    padding: 0 13px 0 7px;
+    border-right: 0;
+    border-left: 1px solid #3a526f;
+    border-radius: 6px 0 0 6px;
+}
+
+.internalHandle {
+    margin-left: 12px;
+    margin-right: 12px;
+    border-color: #80a8de !important;
+    background: #172235 !important;
+}
+
+.hint {
+    position: absolute;
+    right: 12px;
+    bottom: 6px;
+    margin: 0;
+    color: #60738d;
+    font-size: 7px;
+    pointer-events: none;
+}
+
+.resizeLine {
+    border-color: #79a9f8 !important;
+}
+
+.resizeHandle {
+    width: 9px !important;
+    height: 9px !important;
+    border: 1px solid #d7e7ff !important;
+    border-radius: 3px !important;
+    background: #79a9f8 !important;
+}
+
+.group.running {
+    border-color: #a98545;
+    box-shadow: inset 0 0 24px #d9ad590d, 0 10px 30px #0003;
+}
+
+.group.completed {
+    border-color: #356d55;
+}
+
+.group.failed {
+    border-color: #8e4652;
+}
+
+.group.partial {
+    border-color: #896e3e;
+}

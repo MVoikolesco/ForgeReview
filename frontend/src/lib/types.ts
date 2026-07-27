@@ -74,6 +74,7 @@ export type CardData = {
   errorOutput?: Port;
   config: Record<string, unknown>;
   status: CardStatus;
+  compact?: boolean;
 };
 
 export type WorkflowDefinition = {
@@ -91,6 +92,8 @@ export type WorkflowDefinition = {
     name: string;
     config: Record<string, unknown>;
     position: { x: number; y: number };
+    parent_key?: string;
+    size?: { width: number; height: number };
   }>;
   edges: Array<{
     key: string;

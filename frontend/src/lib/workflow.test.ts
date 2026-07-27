@@ -10,7 +10,10 @@ import {
   hydrateDefinition,
   isManualTrigger,
   localCards,
+  compactReviewerCards,
+  reviewerVisualGroups,
   reviewTemplate,
+  subpipelineInstances,
   resetExecutionStatuses,
   removeSelectedElements,
   selectionHasChanged,
@@ -80,10 +83,33 @@ test("queued and running reports without runs preserve visible card state", () =
     { status: "running", runs: [] },
   ]) {
     assert.equal(
-      applyExecutionReport(running, report).find((node) => node.id === "trigger")?.data.status,
+      applyExecutionReport(running, report).find(
+        (node) => node.id === "trigger",
+      )?.data.status,
       "running",
     );
   }
+});
+
+test("parameterized runtime runs aggregate into the single visible recipe card", () => {
+  const nodes = applyExecutionReport(
+    [
+      {
+        id: "review-template",
+        type: "card",
+        position: { x: 0, y: 0 },
+        data: starterNodes[0].data,
+      },
+    ],
+    {
+      status: "running",
+      runs: [
+        { node_key: "review-template::security", status: "completed" },
+        { node_key: "review-template::correctness", status: "running" },
+      ],
+    },
+  );
+  assert.equal(nodes[0].data.status, "running");
 });
 
 test("saved definitions hydrate canvas cards, edges, and configuration", () => {
@@ -167,6 +193,164 @@ test("saving an opened canvas preserves its workflow identity", () => {
       description: "Retained from the opened version.",
     },
   );
+});
+
+test("embedded subpipelines round-trip parent, size, boundary ports, and cascading deletion", () => {
+  const cards = [
+    {
+      key: "trigger",
+      name: "Trigger",
+      category: "Entrada",
+      description: "",
+      inputs: [],
+      outputs: [
+        { key: "event", label: "Evento", contract: "event", required: false },
+      ],
+    },
+    {
+      key: "subpipeline",
+      name: "Subpipeline",
+      category: "Controle",
+      description: "",
+      inputs: [],
+      outputs: [],
+    },
+    {
+      key: "transform",
+      name: "Transformar",
+      category: "Transformação",
+      description: "",
+      inputs: [
+        { key: "input", label: "Entrada", contract: "any", required: true },
+      ],
+      outputs: [
+        { key: "output", label: "Saída", contract: "any", required: false },
+      ],
+    },
+    {
+      key: "log",
+      name: "Log",
+      category: "Infraestrutura",
+      description: "",
+      inputs: [
+        { key: "input", label: "Entrada", contract: "any", required: false },
+      ],
+      outputs: [
+        { key: "output", label: "Saída", contract: "any", required: false },
+      ],
+    },
+  ];
+  const definition = {
+    key: "embedded",
+    name: "Embedded",
+    description: "",
+    nodes: [
+      {
+        key: "start",
+        type: "trigger",
+        name: "Start",
+        config: {},
+        position: { x: 0, y: 0 },
+      },
+      {
+        key: "box",
+        type: "subpipeline",
+        name: "Box",
+        config: {
+          input_ports: [
+            {
+              key: "input",
+              label: "Entrada",
+              contract: "any",
+              required: true,
+            },
+          ],
+          output_ports: [
+            {
+              key: "output",
+              label: "Saída",
+              contract: "any",
+              required: true,
+            },
+          ],
+        },
+        position: { x: 300, y: 100 },
+        size: { width: 640, height: 240 },
+      },
+      {
+        key: "inside",
+        type: "transform",
+        name: "Inside",
+        config: {},
+        position: { x: 30, y: 60 },
+        parent_key: "box",
+      },
+      {
+        key: "after",
+        type: "log",
+        name: "After",
+        config: {},
+        position: { x: 1000, y: 100 },
+      },
+    ],
+    edges: [
+      {
+        key: "external-in",
+        from_node: "start",
+        from_port: "event",
+        to_node: "box",
+        to_port: "entry:input",
+      },
+      {
+        key: "internal-in",
+        from_node: "box",
+        from_port: "entry:input",
+        to_node: "inside",
+        to_port: "input",
+      },
+      {
+        key: "internal-out",
+        from_node: "inside",
+        from_port: "output",
+        to_node: "box",
+        to_port: "exit:output",
+      },
+      {
+        key: "external-out",
+        from_node: "box",
+        from_port: "exit:output",
+        to_node: "after",
+        to_port: "input",
+      },
+    ],
+  };
+  const hydrated = hydrateDefinition(definition, cards);
+  assert.equal(
+    hydrated.nodes.find((node) => node.id === "inside")?.parentId,
+    "box",
+  );
+  assert.equal(
+    hydrated.nodes.find((node) => node.id === "box")?.initialWidth,
+    640,
+  );
+  const serialized = toDefinition(hydrated.nodes, hydrated.edges, definition);
+  assert.equal(
+    serialized.nodes.find((node) => node.key === "inside")?.parent_key,
+    "box",
+  );
+  assert.deepEqual(
+    serialized.nodes.find((node) => node.key === "box")?.size,
+    { width: 640, height: 240 },
+  );
+  assert.equal(validateStudioWorkflow(serialized, cards).length, 0);
+  const removed = removeSelectedElements(
+    hydrated.nodes,
+    hydrated.edges,
+    ["box"],
+    [],
+  );
+  assert.equal(removed.nodes.some((node) => node.id === "inside"), false);
+  assert.equal(removed.edges.length, 0);
 });
 
 test("catalog availability and bounded model/publish configuration are validated", () => {
@@ -623,18 +807,20 @@ test("workflow version lifecycle exposes publishable drafts only", () => {
   assert.equal(canPublishVersion("archived"), false);
 });
 
-test("review template scopes semantic units through loop before one root publication", () => {
+test("review template persists one parameterized reviewer recipe before one publication", () => {
   const keys = [
     "trigger",
     "fetch",
     "filter",
     "semantic_units",
     "loop",
+    "subpipeline",
     "template",
     "model",
     "validate",
     "candidate_validator",
     "response_filter",
+    "merge",
     "consolidate",
     "format",
     "publish",
@@ -650,30 +836,11 @@ test("review template scopes semantic units through loop before one root publica
     })),
   );
   assert.ok(template);
-  assert.deepEqual(
-    template.edges.map((edge) => [
-      edge.source,
-      edge.sourceHandle,
-      edge.target,
-      edge.targetHandle,
-    ]),
-    [
-      ["trigger", "out-event", "fetch", "in-event"],
-      ["fetch", "out-files", "filter", "in-files"],
-      ["filter", "out-files", "semantic-units", "in-files"],
-      ["semantic-units", "out-units", "loop", "in-items"],
-      ["loop", "out-item", "template", "in-context"],
-      ["template", "out-prompt", "model", "in-prompt"],
-      ["model", "out-response", "validate", "in-response"],
-      ["loop", "out-item", "validate", "in-files"],
-      ["validate", "out-valid", "candidate-validator", "in-candidates"],
-      ["loop", "out-item", "candidate-validator", "in-files"],
-      ["candidate-validator", "out-confirmed", "response-filter", "in-response"],
-      ["loop", "out-results", "consolidate", "in-comments"],
-      ["consolidate", "out-review", "format", "in-review"],
-      ["format", "out-formatted", "publish", "in-formatted_review"],
-      ["fetch", "out-pull_request", "publish", "in-pull_request"],
-    ],
+  assert.equal(template.nodes.length, 15);
+  assert.equal(template.edges.length, 18);
+  assert.equal(
+    template.nodes.filter((node) => node.data.type === "publish").length,
+    1,
   );
   assert.deepEqual(
     template.nodes.find((node) => node.id === "loop")?.data.config,
@@ -683,23 +850,47 @@ test("review template scopes semantic units through loop before one root publica
     template.nodes.find((node) => node.id === "semantic-units")?.data.config,
     { max_units: 200, max_characters: 50000, context_lines: 4 },
   );
-  const modelConfig = template.nodes.find(
-    (node) => node.id === "model",
-  )?.data.config;
-  assert.equal(modelConfig?.model_profile, "");
-  assert.equal(modelConfig?.max_tokens, 2000);
-  assert.equal(modelConfig?.retry_limit, 0);
-  assert.equal(modelConfig?.retry_delay_ms, 0);
-  assert.equal(modelConfig?.review_checklist, undefined);
-  const templateConfig = template.nodes.find(
-    (node) => node.id === "template",
-  )?.data.config;
-  assert.equal(templateConfig?.review_contract_key, "official.pull-request");
-  assert.equal(templateConfig?.review_contract_version, 2);
+  const recipe = template.nodes.find((node) => node.id === "review-recipe");
+  const instances = subpipelineInstances(recipe?.data.config ?? {});
+  assert.equal(instances.length, 6);
+  for (const category of [
+    "security",
+    "correctness",
+    "contracts",
+    "performance",
+    "architecture",
+    "observability",
+  ]) {
+    const instance = instances.find((item) => item.key === category);
+    assert.equal(instance?.review_contract_key, `review.${category}`);
+    assert.equal(instance?.review_contract_version, 2);
+    assert.equal(instance?.model_profile, "");
+    assert.ok(instance?.template);
+  }
+  const visualGroups = reviewerVisualGroups(template.nodes);
+  assert.equal(visualGroups.length, 1);
   assert.equal(
-    template.nodes.find((node) => node.id === "validate")?.data.config
-      .response_schema,
-    undefined,
+    visualGroups.find((group) => group.id === "review-recipe")?.data.config
+      .input_ports instanceof Array,
+    true,
+  );
+  assert.equal(
+    template.nodes.find((node) => node.id === "review-model")?.parentId,
+    "review-recipe",
+  );
+  const definition = toDefinition(template.nodes, template.edges);
+  assert.deepEqual(
+    definition.nodes.find((node) => node.key === "review-recipe")?.size,
+    { width: 670, height: 470 },
+  );
+  assert.equal(
+    definition.nodes.find((node) => node.key === "review-model")?.parent_key,
+    "review-recipe",
+  );
+  assert.equal(
+    compactReviewerCards(template.nodes).filter((node) => node.data.compact)
+      .length,
+    5,
   );
   assert.deepEqual(
     template.nodes.find((node) => node.id === "publish")?.data.config,

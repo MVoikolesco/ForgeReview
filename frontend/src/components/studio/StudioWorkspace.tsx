@@ -361,30 +361,172 @@ export function StudioWorkspace() {
   const addCard = (card: CardType, position?: { x: number; y: number }) => {
     remember();
     const key = `${card.key}-${Date.now().toString(36)}`;
+    const subpipelineConfig = {
+      input_ports: [
+        {
+          key: "input",
+          label: "Entrada",
+          contract: "any",
+          required: true,
+        },
+      ],
+      output_ports: [
+        {
+          key: "output",
+          label: "Saída",
+          contract: "any",
+          required: true,
+        },
+      ],
+    };
+    const targetGroup =
+      card.key === "subpipeline" || !position
+        ? undefined
+        : nodes.find((node) => {
+            if (node.data.type !== "subpipeline") return false;
+            const width = node.measured?.width ?? node.width ?? 900;
+            const height = node.measured?.height ?? node.height ?? 190;
+            return (
+              position.x >= node.position.x &&
+              position.x <= node.position.x + width &&
+              position.y >= node.position.y &&
+              position.y <= node.position.y + height
+            );
+          });
+    const inputs =
+      card.key === "subpipeline"
+        ? [
+            {
+              key: "entry:input",
+              label: "Entrada",
+              contract: "any",
+              required: true,
+            },
+            {
+              key: "exit:output",
+              label: "Saída",
+              contract: "any",
+              required: true,
+            },
+          ]
+        : card.inputs;
     const data: CardData = {
       key,
       type: card.key,
       name: card.name,
       category: card.category,
-      inputs: card.inputs,
-      outputs: card.outputs,
+      inputs,
+      outputs: card.key === "subpipeline" ? [...inputs] : card.outputs,
       errorOutput: card.error_output,
-      config: card.key === "template" ? { template: "Defina o prompt" } : {},
+      config:
+        card.key === "template"
+          ? { template: "Defina o prompt" }
+          : card.key === "subpipeline"
+            ? subpipelineConfig
+            : {},
       status: "idle",
     };
     setNodes((all) => [
       ...all,
       {
         id: key,
-        type: "card",
-        position: position ?? {
-          x: 210 + (all.length % 4) * 280,
-          y: 90 + Math.floor(all.length / 4) * 250,
-        },
+        type: card.key === "subpipeline" ? "subpipeline" : "card",
+        dragHandle:
+          card.key === "subpipeline" ? ".drag-handle" : undefined,
+        position: targetGroup
+          ? {
+              x: Math.max(18, position!.x - targetGroup.position.x),
+              y: Math.max(48, position!.y - targetGroup.position.y),
+            }
+          : (position ?? {
+              x: 210 + (all.length % 4) * 280,
+              y: 90 + Math.floor(all.length / 4) * 250,
+            }),
+        parentId: targetGroup?.id,
+        extent: targetGroup ? ("parent" as const) : undefined,
+        expandParent: false,
+        width: card.key === "subpipeline" ? 720 : undefined,
+        height: card.key === "subpipeline" ? 240 : undefined,
+        initialWidth: card.key === "subpipeline" ? 720 : undefined,
+        initialHeight: card.key === "subpipeline" ? 240 : undefined,
+        style:
+          card.key === "subpipeline"
+            ? { width: 720, height: 240 }
+            : undefined,
         data,
       },
     ]);
     setDirty(true);
+  };
+  const assignNodeToSubpipeline = (
+    nodeID: string,
+    subpipelineID: string,
+  ) => {
+    const crossing = edges.some((edge) => {
+      if (edge.source !== nodeID && edge.target !== nodeID) return false;
+      const otherID = edge.source === nodeID ? edge.target : edge.source;
+      const other = nodes.find((node) => node.id === otherID);
+      return other?.parentId !== subpipelineID && otherID !== subpipelineID;
+    });
+    if (crossing) {
+      setMessage(
+        "Remova primeiro as conexões externas do card; a fronteira deve passar pelas portas da subpipeline.",
+      );
+      return;
+    }
+    remember();
+    setNodes((all) => {
+      const group = all.find((node) => node.id === subpipelineID);
+      if (!group) return all;
+      const updated = all.map((node) =>
+        node.id === nodeID
+          ? {
+              ...node,
+              parentId: subpipelineID,
+              extent: "parent" as const,
+              expandParent: false,
+              position: {
+                x: Math.max(18, node.position.x - group.position.x),
+                y: Math.max(48, node.position.y - group.position.y),
+              },
+            }
+          : node,
+      );
+      return updated.sort(
+        (left, right) =>
+          Number(Boolean(left.parentId)) - Number(Boolean(right.parentId)),
+      );
+    });
+    setDirty(true);
+    setMessage("Card movido para a subpipeline.");
+  };
+  const detachNodeFromSubpipeline = (nodeID: string) => {
+    const current = nodes.find((node) => node.id === nodeID);
+    const group = nodes.find((node) => node.id === current?.parentId);
+    if (!current || !group) return;
+    remember();
+    setNodes((all) =>
+      all.map((node) =>
+        node.id === nodeID
+          ? {
+              ...node,
+              parentId: undefined,
+              extent: undefined,
+              position: {
+                x: group.position.x + node.position.x,
+                y: group.position.y + node.position.y,
+              },
+            }
+          : node,
+      ),
+    );
+    setEdges((all) =>
+      all.filter((edge) => edge.source !== nodeID && edge.target !== nodeID),
+    );
+    setDirty(true);
+    setMessage(
+      "Card removido da subpipeline; suas conexões internas foram removidas para preservar a fronteira.",
+    );
   };
   const loadReviewTemplate = () => {
     const template = reviewTemplate(cards);
@@ -414,14 +556,42 @@ export function StudioWorkspace() {
       const targetPort = target?.data.inputs.find(
         (port) => `in-${port.key}` === connection.targetHandle,
       );
-      if (!canConnect(sourcePort, targetPort)) {
+      const boundaryAllowed = Boolean(
+        source &&
+          target &&
+          (source.data.type !== "subpipeline" &&
+          target.data.type !== "subpipeline"
+            ? source.parentId === target.parentId
+            : source.data.type === "subpipeline" &&
+                target.data.type !== "subpipeline"
+              ? connection.sourceHandle?.startsWith("out-entry:")
+                ? target.parentId === source.id
+                : connection.sourceHandle?.startsWith("out-exit:") &&
+                  !target.parentId
+              : target.data.type === "subpipeline" &&
+                  source.data.type !== "subpipeline"
+                ? connection.targetHandle?.startsWith("in-entry:")
+                  ? !source.parentId
+                  : connection.targetHandle?.startsWith("in-exit:") &&
+                    source.parentId === target.id
+                : false),
+      );
+      if (!canConnect(sourcePort, targetPort) || !boundaryAllowed) {
         setMessage(
           "Conexão bloqueada: as portas precisam aceitar o mesmo contrato.",
         );
         return;
       }
       remember();
-      setEdges((all) => addEdge({ ...connection, animated: false }, all));
+      setEdges((all) =>
+        addEdge(
+          {
+            ...connection,
+            animated: false,
+          },
+          all,
+        ),
+      );
       setDirty(true);
     },
     [nodes, remember, setEdges],
@@ -768,8 +938,10 @@ export function StudioWorkspace() {
     (...args: Parameters<typeof onNodesChange>) => {
       if (!canEdit) return;
       if (
-        args[0].some((change) =>
-          ["add", "remove", "replace", "position"].includes(change.type),
+        args[0].some(
+          (change) =>
+            ["add", "remove", "replace", "position"].includes(change.type) ||
+            (change.type === "dimensions" && change.resizing === true),
         )
       )
         setDirty(true);
@@ -825,10 +997,9 @@ export function StudioWorkspace() {
   const deleteNode = useCallback(
     (nodeID: string) => {
       if (!canEdit) return;
-      setNodes((all) => all.filter((node) => node.id !== nodeID));
-      setEdges((all) =>
-        all.filter((edge) => edge.source !== nodeID && edge.target !== nodeID),
-      );
+      const removed = removeSelectedElements(nodes, edges, [nodeID], []);
+      setNodes(removed.nodes);
+      setEdges(removed.edges);
       setInspectedNodeID((current) =>
         current === nodeID ? undefined : current,
       );
@@ -836,7 +1007,7 @@ export function StudioWorkspace() {
       setDirty(true);
       setMessage("Card e conexões vinculadas removidos.");
     },
-    [canEdit, setEdges, setNodes],
+    [canEdit, edges, nodes, setEdges, setNodes],
   );
   const editNode = useCallback((nodeID: string) => {
     setInspectedNodeID(nodeID);
@@ -1078,6 +1249,8 @@ export function StudioWorkspace() {
             setSelectedNodeIDs([id]);
             setDirty(true);
           }}
+          onAssignNodeToSubpipeline={assignNodeToSubpipeline}
+          onDetachNodeFromSubpipeline={detachNodeFromSubpipeline}
           onDeleteEdge={(edgeID) => {
             if (!canEdit) return;
             setEdges((all) => all.filter((edge) => edge.id !== edgeID));

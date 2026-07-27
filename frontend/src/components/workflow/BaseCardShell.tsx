@@ -6,6 +6,7 @@ type BaseCardShellProps = {
   status: string;
   category: string;
   actions?: ReactNode;
+  compact?: boolean;
   children: ReactNode;
 };
 
@@ -22,11 +23,12 @@ export function BaseCardShell({
   status,
   category,
   actions,
+  compact = false,
   children,
 }: BaseCardShellProps) {
   return (
     <article
-      className={`${styles.card} ${styles[status] ?? ""}`}
+      className={`${styles.card} ${styles[status] ?? ""} ${compact ? styles.compact : ""}`}
       style={{ "--accent": accent } as CSSProperties}
     >
       <header>

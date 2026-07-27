@@ -3,8 +3,8 @@ import { Pencil, Trash2 } from "lucide-react";
 import type { CardData } from "../../lib/types";
 import { cardOutputPorts, categoryAccent } from "../../lib/workflow";
 import { BaseCardShell } from "./BaseCardShell";
-import { useWorkflowCardActions } from "./WorkflowCardActionsContext";
 import styles from "./WorkflowCard.module.scss";
+import { useWorkflowCardActions } from "./WorkflowCardActionsContext";
 
 export function WorkflowCard({ id, data }: NodeProps) {
   const card = data as CardData;
@@ -14,40 +14,75 @@ export function WorkflowCard({ id, data }: NodeProps) {
       accent={categoryAccent(card.category)}
       status={card.status}
       category={card.category}
-      actions={actions && !actions.readOnly && (
-        <span className={`${styles.actions} nodrag nopan`}>
-          <button
-            type="button"
-            aria-label={`Editar ${card.name}`}
-            title="Editar card"
-            onClick={(event) => {
-              event.stopPropagation();
-              actions?.onEdit(id);
-            }}
+      compact={card.compact}
+      actions={
+        actions &&
+        !actions.readOnly && (
+          <span
+            className={`${styles.actions} ${card.compact ? styles.compactActions : ""} nodrag nopan`}
           >
-            <Pencil size={12} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            aria-label={`Excluir ${card.name}`}
-            title="Excluir card"
-            onClick={(event) => {
-              event.stopPropagation();
-              actions?.onDelete(id);
-            }}
-          >
-            <Trash2 size={12} aria-hidden="true" />
-          </button>
-        </span>
-      )}
+            <button
+              type="button"
+              aria-label={`Editar ${card.name}`}
+              title="Editar card"
+              onClick={(event) => {
+                event.stopPropagation();
+                actions?.onEdit(id);
+              }}
+            >
+              <Pencil size={12} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              aria-label={`Excluir ${card.name}`}
+              title="Excluir card"
+              onClick={(event) => {
+                event.stopPropagation();
+                actions?.onDelete(id);
+              }}
+            >
+              <Trash2 size={12} aria-hidden="true" />
+            </button>
+          </span>
+        )
+      }
+    >
+      <h2
+        className={`${styles.title} ${card.compact ? styles.compactTitle : ""}`}
       >
-      <h2 className={styles.title}>{card.name}</h2>
-      <div className={styles.execution} aria-label={`Execução: ${card.status}`}>
-        <span style={{ width: card.status === "completed" ? "100%" : card.status === "partial" ? "70%" : card.status === "failed" ? "100%" : card.status === "running" ? "45%" : "0%" }} />
+        {card.name}
+      </h2>
+      <div
+        className={`${styles.execution} ${card.compact ? styles.compactExecution : ""}`}
+        aria-label={`Execução: ${card.status}`}
+      >
+        <span
+          style={{
+            width:
+              card.status === "completed"
+                ? "100%"
+                : card.status === "partial"
+                  ? "70%"
+                  : card.status === "failed"
+                    ? "100%"
+                    : card.status === "running"
+                      ? "45%"
+                      : "0%",
+          }}
+        />
       </div>
-      <p className={styles.summary}>{card.inputs.length} entrada{card.inputs.length === 1 ? "" : "s"} · {cardOutputPorts(card).length} saída{cardOutputPorts(card).length === 1 ? "" : "s"}</p>
+      <p
+        className={`${styles.summary} ${card.compact ? styles.compactSummary : ""}`}
+      >
+        {card.inputs.length} entrada{card.inputs.length === 1 ? "" : "s"} ·{" "}
+        {cardOutputPorts(card).length} saída
+        {cardOutputPorts(card).length === 1 ? "" : "s"}
+      </p>
       {card.inputs.map((port) => (
-        <div className={styles.port} key={port.key}>
+        <div
+          className={`${styles.port} ${card.compact ? styles.compactPort : ""}`}
+          key={port.key}
+        >
           <Handle
             type="target"
             position={Position.Left}
@@ -58,7 +93,10 @@ export function WorkflowCard({ id, data }: NodeProps) {
         </div>
       ))}
       {cardOutputPorts(card).map((port) => (
-        <div className={`${styles.port} ${styles.output} ${port.key === "error" ? styles.error : ""}`} key={port.key}>
+        <div
+          className={`${styles.port} ${styles.output} ${card.compact ? styles.compactPort : ""} ${port.key === "error" ? styles.error : ""}`}
+          key={port.key}
+        >
           <small>{port.contract}</small>
           <span>{port.label}</span>
           <Handle

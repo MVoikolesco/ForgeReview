@@ -13,18 +13,21 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Crosshair, Expand, Map, Search } from "lucide-react";
+import { Crosshair, Expand, Map as MapIcon, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CardData } from "../../lib/types";
 import {
+  compactReviewerCards,
   edgeIsActivelyPropagating,
+  reviewerVisualGroups,
   type WorkflowValidationIssue,
 } from "../../lib/workflow";
+import { SubpipelineGroup } from "./SubpipelineGroup";
 import styles from "./WorkflowCanvas.module.scss";
 import { WorkflowCard } from "./WorkflowCard";
 import { WorkflowCardActionsProvider } from "./WorkflowCardActionsContext";
 
-const nodeTypes = { card: WorkflowCard };
+const nodeTypes = { card: WorkflowCard, subpipeline: SubpipelineGroup };
 
 type WorkflowCanvasProps = {
   nodes: Node<CardData>[];
@@ -43,6 +46,8 @@ type WorkflowCanvasProps = {
   onSelectValidationIssue: (issue: WorkflowValidationIssue) => void;
   onAddCardAt?: (key: string, position: { x: number; y: number }) => void;
   onDuplicateNode?: (nodeID: string) => void;
+  onAssignNodeToSubpipeline?: (nodeID: string, subpipelineID: string) => void;
+  onDetachNodeFromSubpipeline?: (nodeID: string) => void;
   onDeleteEdge?: (edgeID: string) => void;
   onResetView?: () => void;
   searchQuery?: string;
@@ -68,6 +73,8 @@ export function WorkflowCanvas({
   onSelectValidationIssue,
   onAddCardAt,
   onDuplicateNode,
+  onAssignNodeToSubpipeline,
+  onDetachNodeFromSubpipeline,
   onDeleteEdge,
   onResetView,
   searchQuery = "",
@@ -77,6 +84,7 @@ export function WorkflowCanvas({
 }: WorkflowCanvasProps) {
   const [flow, setFlow] = useState<ReactFlowInstance<Node<CardData>, Edge>>();
   const [showMap, setShowMap] = useState(true);
+  const groupedFitApplied = useRef(false);
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -84,19 +92,42 @@ export function WorkflowCanvas({
     edgeID?: string;
   }>();
   const menuRef = useRef<HTMLDivElement>(null);
+  const reviewerGroups = useMemo(() => reviewerVisualGroups(nodes), [nodes]);
+  const visualNodes = useMemo(() => compactReviewerCards(nodes), [nodes]);
+  const visualNodesRef = useRef(visualNodes);
+  visualNodesRef.current = visualNodes;
+  const reviewerGroupKey = reviewerGroups.map((group) => group.id).join("|");
+  useEffect(() => {
+    if (!reviewerGroups.length) {
+      groupedFitApplied.current = false;
+      return;
+    }
+    if (!flow || groupedFitApplied.current) return;
+    const frame = requestAnimationFrame(() => {
+      groupedFitApplied.current = true;
+      void flow.fitView({
+        nodes: visualNodesRef.current,
+        duration: 220,
+        padding: 0.12,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [flow, reviewerGroupKey, reviewerGroups.length]);
   const visibleEdges = useMemo(
     () =>
       edges.map((edge) => {
-        const animated = edgeIsActivelyPropagating(edge, nodes);
+        const visible = {
+          ...edge,
+          animated: edgeIsActivelyPropagating(edge, nodes),
+        };
         return edge.sourceHandle === "out-error"
           ? {
-              ...edge,
-              animated,
+              ...visible,
               label: "erro",
               style: { stroke: "#e87b91", strokeDasharray: "5 4" },
               labelStyle: { fill: "#e87b91", fontSize: 10 },
             }
-          : { ...edge, animated };
+          : visible;
       }),
     [edges, nodes],
   );
@@ -107,8 +138,28 @@ export function WorkflowCanvas({
     }: {
       nodes: Node[];
       edges: Edge[];
-    }) => onSelectionChange(selectedNodes as Node<CardData>[], selectedEdges),
+    }) =>
+      onSelectionChange(selectedNodes as Node<CardData>[], selectedEdges),
     [onSelectionChange],
+  );
+  const handleNodesChange = useCallback<OnNodesChange<Node<CardData>>>(
+    (changes) => onNodesChange(changes),
+    [onNodesChange],
+  );
+  const focusReviewerGroup = useCallback(
+    (node: Node<CardData>) => {
+      if (!flow || node.type !== "subpipeline") return;
+      flow.fitView({
+        nodes: visualNodes.filter(
+          (candidate) =>
+            candidate.id === node.id || candidate.parentId === node.id,
+        ),
+        duration: 260,
+        padding: 0.16,
+        maxZoom: 1.7,
+      });
+    },
+    [flow, visualNodes],
   );
   const cardActions = useMemo(
     () => ({ readOnly, onEdit: onEditNode, onDelete: onDeleteNode }),
@@ -117,11 +168,18 @@ export function WorkflowCanvas({
   const focusNode = useCallback(
     (nodeID = focusNodeID) => {
       const node = nodes.find((item) => item.id === nodeID);
+      const parent = node?.parentId
+        ? nodes.find((item) => item.id === node.parentId)
+        : undefined;
       if (node && flow)
-        flow.setCenter(node.position.x + 115, node.position.y + 80, {
+        flow.setCenter(
+          node.position.x + (parent?.position.x ?? 0) + 115,
+          node.position.y + (parent?.position.y ?? 0) + 80,
+          {
           zoom: 1.15,
           duration: 220,
-        });
+          },
+        );
     },
     [flow, focusNodeID, nodes],
   );
@@ -185,10 +243,10 @@ export function WorkflowCanvas({
     >
       <WorkflowCardActionsProvider value={cardActions}>
         <ReactFlow
-          nodes={nodes}
+          nodes={visualNodes}
           edges={visibleEdges}
           nodeTypes={nodeTypes}
-          onNodesChange={onNodesChange}
+          onNodesChange={handleNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onPaneClick={() => {
@@ -196,12 +254,33 @@ export function WorkflowCanvas({
             onPaneClick();
           }}
           onInit={setFlow}
-          onNodeContextMenu={(event, node) =>
-            openMenu(event, { nodeID: node.id })
-          }
+          onNodeContextMenu={(event, node) => {
+            if (node.type === "subpipeline") {
+              event.preventDefault();
+              focusReviewerGroup(node as Node<CardData>);
+              return;
+            }
+            openMenu(event, { nodeID: node.id });
+          }}
           onEdgeContextMenu={(event, edge) =>
             openMenu(event, { edgeID: edge.id })
           }
+          onNodeDragStop={(_, node) => {
+            if (
+              node.data.type === "subpipeline" ||
+              node.parentId ||
+              !onAssignNodeToSubpipeline
+            )
+              return;
+            const group = flow
+              ?.getIntersectingNodes(node, true)
+              .find(
+                (candidate) =>
+                  candidate.data.type === "subpipeline" &&
+                  candidate.id !== node.id,
+              );
+            if (group) onAssignNodeToSubpipeline(node.id, group.id);
+          }}
           onPaneContextMenu={(event) => openMenu(event)}
           onDrop={(event) => {
             event.preventDefault();
@@ -221,6 +300,7 @@ export function WorkflowCanvas({
           onSelectionChange={handleSelectionChange}
           nodesDraggable={!readOnly}
           nodesConnectable={!readOnly}
+          zoomOnDoubleClick={false}
           deleteKeyCode={null}
           fitView
         >
@@ -270,7 +350,13 @@ export function WorkflowCanvas({
         </button>
         <button
           type="button"
-          onClick={() => flow?.fitView({ duration: 220, padding: 0.2 })}
+          onClick={() =>
+            flow?.fitView({
+              nodes: visualNodes,
+              duration: 220,
+              padding: 0.12,
+            })
+          }
           title="Enquadrar canvas"
         >
           <Expand size={15} />
@@ -281,7 +367,7 @@ export function WorkflowCanvas({
           aria-pressed={showMap}
           title="Alternar minimapa"
         >
-          <Map size={15} />
+          <MapIcon size={15} />
         </button>
       </div>
       {menu && (
@@ -327,6 +413,19 @@ export function WorkflowCanvas({
               >
                 Duplicar card
               </button>
+              {nodes.find((node) => node.id === menu.nodeID)?.parentId && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={readOnly}
+                  onClick={() => {
+                    onDetachNodeFromSubpipeline?.(menu.nodeID!);
+                    closeMenu();
+                  }}
+                >
+                  Remover da subpipeline
+                </button>
+              )}
               <button
                 type="button"
                 role="menuitem"
@@ -361,7 +460,11 @@ export function WorkflowCanvas({
             type="button"
             role="menuitem"
             onClick={() => {
-              flow?.fitView({ duration: 220, padding: 0.2 });
+              flow?.fitView({
+                nodes: visualNodes,
+                duration: 220,
+                padding: 0.12,
+              });
               closeMenu();
             }}
           >

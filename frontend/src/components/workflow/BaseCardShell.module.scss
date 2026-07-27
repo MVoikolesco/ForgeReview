@@ -9,6 +9,28 @@
     box-shadow: $shadow-panel;
 }
 
+.card.compact {
+    width: 150px;
+    border-radius: 6px;
+    box-shadow: 0 5px 14px #0005;
+}
+
+.card.compact header {
+    gap: 4px;
+    padding: 5px 6px;
+    font-size: 6px;
+}
+
+.card.compact header i {
+    width: 6px;
+    height: 6px;
+}
+
+.card.compact header em {
+    padding: 2px 4px;
+    font-size: 6px;
+}
+
 .card.running {
     border-color: #d9ad59;
     box-shadow: 0 0 0 1px #d9ad5955, 0 0 22px #d9ad5914, $shadow-panel;
@@ -62,16 +84,44 @@
     background: #171c24;
 }
 
-.card.running header em { border-color: #8f713c; color: #f1ce89; background: #2b2417; }
-.card.completed header em { border-color: #386f57; color: #91d8b5; background: #17271f; }
-.card.failed header em { border-color: #87404d; color: #f2a7b3; background: #2d181d; }
-.card.partial header em { border-color: #8f713c; color: #f1ce89; background: #2b2417; }
+.card.running header em {
+    border-color: #8f713c;
+    color: #f1ce89;
+    background: #2b2417;
+}
+
+.card.completed header em {
+    border-color: #386f57;
+    color: #91d8b5;
+    background: #17271f;
+}
+
+.card.failed header em {
+    border-color: #87404d;
+    color: #f2a7b3;
+    background: #2d181d;
+}
+
+.card.partial header em {
+    border-color: #8f713c;
+    color: #f1ce89;
+    background: #2b2417;
+}
 
 @keyframes executionPulse {
-    0%, 100% { box-shadow: 0 0 0 1px #d9ad5944, 0 0 14px #d9ad590d, $shadow-panel; }
-    50% { box-shadow: 0 0 0 1px #d9ad5980, 0 0 26px #d9ad5924, $shadow-panel; }
+
+    0%,
+    100% {
+        box-shadow: 0 0 0 1px #d9ad5944, 0 0 14px #d9ad590d, $shadow-panel;
+    }
+
+    50% {
+        box-shadow: 0 0 0 1px #d9ad5980, 0 0 26px #d9ad5924, $shadow-panel;
+    }
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .card.running { animation: none; }
+    .card.running {
+        animation: none;
+    }
 }

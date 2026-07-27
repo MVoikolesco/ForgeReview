@@ -73,6 +73,7 @@
 .contextMenu button:hover:not(:disabled), .contextMenu button:focus-visible { background: #273140; }
 .contextMenu button:disabled { opacity: .5; cursor: not-allowed; }
 .contextMenu hr { width: 100%; border: 0; border-top: 1px solid #303a48; }
+
 @media (max-width: 600px) { .toolbar { top: 10px; left: 10px; } .toolbar input { width: 110px; } .canvas :global(.react-flow__minimap) { transform: scale(.78); transform-origin: bottom right; } .canvas :global(.react-flow__controls) { bottom: 10px; left: 10px; } }
 
 .validation {

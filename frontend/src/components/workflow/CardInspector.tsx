@@ -15,12 +15,20 @@ import type {
   CardData,
   Integration,
   ModelProfile,
+  Port,
   ResponseContract,
   ReviewContractVersion,
   WebhookRegistration,
   WorkflowSummary,
 } from "../../lib/types";
-import { configList, configNumber, configText } from "../../lib/workflow";
+import {
+  configList,
+  configNumber,
+  configText,
+  subpipelineInstances,
+  subpipelinePorts,
+  type SubpipelineInstance,
+} from "../../lib/workflow";
 import { ToggleSwitch } from "../common/ToggleSwitch";
 import styles from "./CardInspector.module.scss";
 
@@ -181,6 +189,36 @@ export function CardInspector({
     for (const key of remove) delete next[key];
     onChange({ config: next });
   };
+  const updateSubpipelinePorts = (
+    key: "input_ports" | "output_ports",
+    ports: Port[],
+  ) => {
+    if (readOnly) return;
+    const config = { ...selected.config, [key]: ports };
+    const inputs = subpipelinePorts(config, "input_ports").map((port) => ({
+      ...port,
+      key: `entry:${port.key}`,
+    }));
+    const outputs = subpipelinePorts(config, "output_ports").map((port) => ({
+      ...port,
+      key: `exit:${port.key}`,
+    }));
+    onChange({
+      config,
+      inputs: [...inputs, ...outputs],
+      outputs: [...inputs, ...outputs],
+    });
+  };
+  const reviewerInstances = subpipelineInstances(selected.config);
+  const updateSubpipelineInstances = (instances: SubpipelineInstance[]) =>
+    !readOnly &&
+    onChange({
+      config: { ...selected.config, instances },
+      name:
+        selected.type === "subpipeline" && instances.length
+          ? `Receita de revisão · ${instances.filter((item) => item.enabled).length} instâncias`
+          : selected.name,
+    });
   const schemaValidation = schemaText
     ? parseResponseSchemaText(schemaText)
     : undefined;
@@ -395,6 +433,323 @@ export function CardInspector({
         </dl>
         <section className={styles.config}>
           <strong>Parâmetros</strong>
+          {selected.type === "subpipeline" && (
+            <>
+              {reviewerInstances.length > 0 && (
+                <section className={styles.instanceEditor}>
+                  <div className={styles.portEditorTitle}>
+                    <b>Revisões executadas por esta receita</b>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const index = reviewerInstances.length + 1;
+                        updateSubpipelineInstances([
+                          ...reviewerInstances,
+                          {
+                            key: `review_${index}`,
+                            name: `Revisão ${index}`,
+                            enabled: true,
+                            template: "Analise a unidade semântica e retorne somente uma lista JSON de CandidateFinding.",
+                            review_contract_key:
+                              reviewContracts[0]?.key ?? "review.security",
+                            review_contract_version:
+                              reviewContracts[0]?.version ?? 1,
+                            model_profile: "",
+                            validator_model_profile: "",
+                            minimum_severity: "medium",
+                          },
+                        ]);
+                      }}
+                    >
+                      Adicionar revisão
+                    </button>
+                  </div>
+                  <small>
+                    Os cinco cards internos definem a receita. Cada item abaixo
+                    executa essa mesma sequência com seu próprio prompt,
+                    contrato, modelos e severidade.
+                  </small>
+                  {reviewerInstances.map((instance, index) => {
+                    const updateInstance = (
+                      patch: Partial<SubpipelineInstance>,
+                    ) =>
+                      updateSubpipelineInstances(
+                        reviewerInstances.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, ...patch } : item,
+                        ),
+                      );
+                    return (
+                      <details
+                        className={styles.instanceCard}
+                        key={`${instance.key}-${index}`}
+                        open={index === 0}
+                      >
+                        <summary>
+                          <span>
+                            {instance.name}
+                            <small>{instance.key}</small>
+                          </span>
+                          <span
+                            className={
+                              instance.enabled
+                                ? styles.instanceEnabled
+                                : styles.instanceDisabled
+                            }
+                          >
+                            {instance.enabled ? "Ativa" : "Inativa"}
+                          </span>
+                        </summary>
+                        <ToggleSwitch
+                          checked={instance.enabled}
+                          onChange={(enabled) => updateInstance({ enabled })}
+                          label="Executar esta revisão"
+                          description="Desativar preserva a configuração sem materializá-la no runtime."
+                        />
+                        <div className={styles.instanceGrid}>
+                          <label>
+                            Nome
+                            <input
+                              value={instance.name}
+                              onChange={(event) =>
+                                updateInstance({ name: event.target.value })
+                              }
+                            />
+                          </label>
+                          <label>
+                            Chave
+                            <input
+                              value={instance.key}
+                              onChange={(event) =>
+                                updateInstance({
+                                  key: event.target.value
+                                    .trim()
+                                    .replace(/[^a-zA-Z0-9_-]/g, "_"),
+                                })
+                              }
+                            />
+                          </label>
+                        </div>
+                        <label>
+                          Prompt desta revisão
+                          <textarea
+                            value={instance.template}
+                            onChange={(event) =>
+                              updateInstance({ template: event.target.value })
+                            }
+                          />
+                        </label>
+                        <div className={styles.instanceGrid}>
+                          <label>
+                            Contrato versionado
+                            <select
+                              value={`${instance.review_contract_key}@${instance.review_contract_version}`}
+                              onChange={(event) => {
+                                const [key, version] =
+                                  event.target.value.split("@");
+                                updateInstance({
+                                  review_contract_key: key,
+                                  review_contract_version: Number(version),
+                                });
+                              }}
+                            >
+                              {reviewContracts.map((contract) => (
+                                <option
+                                  key={`${contract.key}@${contract.version}`}
+                                  value={`${contract.key}@${contract.version}`}
+                                >
+                                  {contract.name} · v{contract.version}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Severidade mínima
+                            <select
+                              value={instance.minimum_severity}
+                              onChange={(event) =>
+                                updateInstance({
+                                  minimum_severity: event.target.value,
+                                })
+                              }
+                            >
+                              <option value="low">Baixa</option>
+                              <option value="medium">Média</option>
+                              <option value="high">Alta</option>
+                              <option value="critical">Crítica</option>
+                            </select>
+                          </label>
+                          <label>
+                            Modelo do reviewer
+                            <select
+                              value={instance.model_profile}
+                              onChange={(event) =>
+                                updateInstance({
+                                  model_profile: event.target.value,
+                                })
+                              }
+                            >
+                              <option value="">Usar modelo do card</option>
+                              {models.map((model) => (
+                                <option key={model.key} value={model.key}>
+                                  {model.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Modelo de confirmação
+                            <select
+                              value={instance.validator_model_profile}
+                              onChange={(event) =>
+                                updateInstance({
+                                  validator_model_profile: event.target.value,
+                                })
+                              }
+                            >
+                              <option value="">Usar modelo do card</option>
+                              {models.map((model) => (
+                                <option key={model.key} value={model.key}>
+                                  {model.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        <button
+                          type="button"
+                          className={styles.removePort}
+                          disabled={reviewerInstances.length === 1}
+                          onClick={() =>
+                            updateSubpipelineInstances(
+                              reviewerInstances.filter(
+                                (_, itemIndex) => itemIndex !== index,
+                              ),
+                            )
+                          }
+                        >
+                          Remover revisão
+                        </button>
+                      </details>
+                    );
+                  })}
+                </section>
+              )}
+              {(
+                [
+                  ["input_ports", "Entradas da subpipeline"],
+                  ["output_ports", "Saídas da subpipeline"],
+                ] as const
+              ).map(([key, label]) => {
+                const ports = subpipelinePorts(selected.config, key);
+                return (
+                  <section className={styles.portEditor} key={key}>
+                    <div className={styles.portEditorTitle}>
+                      <b>{label}</b>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateSubpipelinePorts(key, [
+                            ...ports,
+                            {
+                              key: `${key === "input_ports" ? "input" : "output"}_${ports.length + 1}`,
+                              label:
+                                key === "input_ports"
+                                  ? "Nova entrada"
+                                  : "Nova saída",
+                              contract: "any",
+                              required: true,
+                            },
+                          ])
+                        }
+                      >
+                        Adicionar
+                      </button>
+                    </div>
+                    {ports.map((port, index) => (
+                      <div
+                        className={styles.portEditorRow}
+                        key={`${port.key}-${index}`}
+                      >
+                        <label>
+                          Chave
+                          <input
+                            value={port.key}
+                            onChange={(event) =>
+                              updateSubpipelinePorts(
+                                key,
+                                ports.map((item, itemIndex) =>
+                                  itemIndex === index
+                                    ? {
+                                        ...item,
+                                        key: event.target.value
+                                          .trim()
+                                          .replace(/[^a-zA-Z0-9_-]/g, "_"),
+                                      }
+                                    : item,
+                                ),
+                              )
+                            }
+                          />
+                        </label>
+                        <label>
+                          Nome
+                          <input
+                            value={port.label}
+                            onChange={(event) =>
+                              updateSubpipelinePorts(
+                                key,
+                                ports.map((item, itemIndex) =>
+                                  itemIndex === index
+                                    ? { ...item, label: event.target.value }
+                                    : item,
+                                ),
+                              )
+                            }
+                          />
+                        </label>
+                        <label>
+                          Contrato
+                          <input
+                            value={port.contract}
+                            onChange={(event) =>
+                              updateSubpipelinePorts(
+                                key,
+                                ports.map((item, itemIndex) =>
+                                  itemIndex === index
+                                    ? { ...item, contract: event.target.value }
+                                    : item,
+                                ),
+                              )
+                            }
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className={styles.removePort}
+                          disabled={ports.length === 1}
+                          onClick={() =>
+                            updateSubpipelinePorts(
+                              key,
+                              ports.filter(
+                                (_, itemIndex) => itemIndex !== index,
+                              ),
+                            )
+                          }
+                        >
+                          Remover
+                        </button>
+                      </div>
+                    ))}
+                  </section>
+                );
+              })}
+              <small>
+                A entrada liga a pipeline principal aos cards internos. A saída
+                recebe o resultado interno e o expõe novamente no fluxo
+                principal.
+              </small>
+            </>
+          )}
           {selected.type === "trigger" && (
             <>
               <label>
@@ -1318,6 +1673,7 @@ export function CardInspector({
             "transform",
             "variable",
             "merge",
+            "subpipeline",
             "workflow",
             "validate",
             "response_filter",
@@ -1326,7 +1682,7 @@ export function CardInspector({
             <p>Este card não possui parâmetros obrigatórios nesta fase.</p>
           )}
         </section>
-        {selected.outputs.length > 0 && (
+        {selected.type !== "subpipeline" && selected.outputs.length > 0 && (
           <section className={styles.config}>
             <strong>Interface publicada</strong>
             <label>
@@ -1367,7 +1723,9 @@ export function CardInspector({
             )}
           </section>
         )}
-        {selected.type !== "error_control" && selected.errorOutput && (
+        {selected.type !== "error_control" &&
+          selected.type !== "subpipeline" &&
+          selected.errorOutput && (
           <section className={styles.errorPolicy}>
             <strong>Política de erro</strong>
             <label>
